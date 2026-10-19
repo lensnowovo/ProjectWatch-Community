@@ -1,0 +1,14 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:18.106317+00:00",
+    "endpoint": "https://news.google.com/rss/search",
+    "company": "宁德时代",
+    "operation": "google_news",
+    "records": 4
+  },
+  "response": {
+    "format": "xml",
+    "body": "<rss version=\"2.0\"><channel><item><title>报道：DeepSeek融资规模超预期冲击800亿人民币，腾讯和宁德时代领投 - 华尔街见闻</title><link>https://news.google.com/rss/articles/CBMiU0FVX3lxTE0wcS01X19JMTdJR1c4cWdvSzJnRWxUU0VEeG5SMEZpNVloaEJPcHZ0cUFNSUQ4MUN2NC1IZXNVbVFPT25JMk03Q2txb1E5aWdKa29J?oc=5</link><pubDate>Tue, 06 Oct 2026 06:26:17 GMT</pubDate><source url=\"https://wallstreetcn.com\">华尔街见闻</source></item><item><title>长安启源Q05 2026款纯电电池深度解析：宁德时代+3C快充，10万级值得买吗？+FAQ - 手机新浪网</title><link>https://news.google.com/rss/articles/CBMiX0FVX3lxTE1SRF9sWG1HZ1VPcWtYODNGMW1xTXpoZzA0dTkwTGZJb0V2NWg4N2I2WmpuNFpGdEMxYTdhVUE5eFItVXd0bnZHVjAzT1hnQkM3Q2dUR3l2T3phbHo5eGdz?oc=5</link><pubDate>Tue, 06 Oct 2026 08:34:11 GMT</pubDate><source url=\"https://www.sina.cn\">手机新浪网</source></item><item><title>宁德不是博世，车企也不是特斯拉 - 汽车之家</title><link>https://news.google.com/rss/articles/CBMiW0FVX3lxTFBINEtnWlUtdHM0bk1kR3FpbWtXbEVFY0VhNU51dE5yNndqRlhSdzJFS2xpOU9OT3JKTFRucFpfNkxNRDlsc0pLemRUMWJVZ1lQM1IxOTFvU2haSXM?oc=5</link><pubDate>Wed, 07 Oct 2026 04:22:10 GMT</pubDate><source url=\"https://chejiahao.autohome.com.cn\">汽车之家</source></item><item><title>DeepSeek接近获得千亿融资，腾讯、宁德时代参与 - 观察者网</title><link>https://news.google.com/rss/articles/CBMiZEFVX3lxTE9UWG5uY0FHU2xydlltT2d3WmpBT1EwNE8xbmk4NGhKTjV5X0VweWpqekxsT1luT2hYMHdhM19kamNMbWRITy1xQjlhYXpOMk52WXV3WFFKQUcxVU5lSWNFdWJ6blg?oc=5</link><pubDate>Wed, 07 Oct 2026 03:45:00 GMT</pubDate><source url=\"https://www.guancha.cn\">观察者网</source></item></channel></rss>"
+  }
+}

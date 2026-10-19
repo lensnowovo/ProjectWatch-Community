@@ -1,0 +1,499 @@
+{
+ "_note": "全部为合成数据，公司名均为虚构。gold 中 periods 列出可接受的期间写法，importance 列出可接受的重要性。",
+ "company": {
+  "legal_name": "光启视界科技有限公司",
+  "short_name": "光启视界",
+  "aliases": [
+   "Lumina Optics"
+  ],
+  "description": "车载激光雷达光学模组（发射模组、接收透镜组）",
+  "industry": "激光雷达",
+  "competitors": [
+   "合成竞品甲",
+   "合成竞品乙"
+  ]
+ },
+ "extraction": [
+  {
+   "id": "table-header-unit",
+   "document": "BP-2025.pptx",
+   "lines": [
+    "主要财务数据（单位：万元）",
+    "表头: 指标 | 2023 | 2024 | 2025E",
+    "营业收入 | 2023: 1200 | 2024: 3200 | 2025E: 6000",
+    "净利润 | 2023: -2100 | 2024: -1500 | 2025E: -300"
+   ],
+   "gold": [
+    {
+     "name": "营业收入",
+     "periods": [
+      "2023"
+     ],
+     "value": 1200,
+     "unit": "万元",
+     "basis": "actual"
+    },
+    {
+     "name": "营业收入",
+     "periods": [
+      "2024"
+     ],
+     "value": 3200,
+     "unit": "万元",
+     "basis": "actual"
+    },
+    {
+     "name": "营业收入",
+     "periods": [
+      "2025"
+     ],
+     "value": 6000,
+     "unit": "万元",
+     "basis": "forecast"
+    },
+    {
+     "name": "净利润",
+     "periods": [
+      "2023"
+     ],
+     "value": -2100,
+     "unit": "万元",
+     "basis": "actual"
+    },
+    {
+     "name": "净利润",
+     "periods": [
+      "2024"
+     ],
+     "value": -1500,
+     "unit": "万元",
+     "basis": "actual"
+    },
+    {
+     "name": "净利润",
+     "periods": [
+      "2025"
+     ],
+     "value": -300,
+     "unit": "万元",
+     "basis": "forecast"
+    }
+   ]
+  },
+  {
+   "id": "yi-and-half-year",
+   "document": "经营简报-2025H1.docx",
+   "lines": [
+    "2025年上半年公司实现营收0.86亿元，同比增长64%。",
+    "截至2025年6月末，公司账上货币资金1.2亿元。",
+    "公司预计2025年全年收入2亿元。"
+   ],
+   "gold": [
+    {
+     "name": "营业收入",
+     "periods": [
+      "2025H1"
+     ],
+     "value": 0.86,
+     "unit": "亿元",
+     "basis": "actual"
+    },
+    {
+     "name": "货币资金",
+     "periods": [
+      "2025M06",
+      "2025H1"
+     ],
+     "value": 1.2,
+     "unit": "亿元",
+     "basis": "actual"
+    },
+    {
+     "name": "营业收入",
+     "periods": [
+      "2025"
+     ],
+     "value": 2,
+     "unit": "亿元",
+     "basis": "forecast"
+    }
+   ]
+  },
+  {
+   "id": "usd-english",
+   "document": "Investor-Update-EN.pdf",
+   "lines": [
+    "FY2024 revenue was US$12.5 million, up from US$7.1 million in FY2023.",
+    "We target revenue of US$30 million for FY2025.",
+    "Gross margin improved to 41% in FY2024."
+   ],
+   "gold": [
+    {
+     "name": "营业收入",
+     "periods": [
+      "2024"
+     ],
+     "value": 12.5,
+     "unit": "百万美元",
+     "basis": "actual"
+    },
+    {
+     "name": "营业收入",
+     "periods": [
+      "2023"
+     ],
+     "value": 7.1,
+     "unit": "百万美元",
+     "basis": "actual"
+    },
+    {
+     "name": "营业收入",
+     "periods": [
+      "2025"
+     ],
+     "value": 30,
+     "unit": "百万美元",
+     "basis": "forecast"
+    },
+    {
+     "name": "毛利率",
+     "periods": [
+      "2024"
+     ],
+     "value": 41,
+     "unit": "%",
+     "basis": "actual"
+    }
+   ]
+  },
+  {
+   "id": "budget-vs-ytd",
+   "document": "月报-2025年9月.xlsx",
+   "lines": [
+    "2025年预算收入8000万元。",
+    "1-9月实际完成收入5100万元（未经审计），完成年度预算的64%。"
+   ],
+   "gold": [
+    {
+     "name": "营业收入",
+     "periods": [
+      "2025"
+     ],
+     "value": 8000,
+     "unit": "万元",
+     "basis": "budget"
+    },
+    {
+     "name": "营业收入",
+     "periods": [
+      "2025-1-9M"
+     ],
+     "value": 5100,
+     "unit": "万元",
+     "basis": "actual"
+    }
+   ]
+  },
+  {
+   "id": "operating",
+   "document": "BP-2025.pptx",
+   "lines": [
+    "截至2025年9月，公司累计签约整车厂客户6家，其中已量产2家。",
+    "公司员工126人，其中研发人员71人。"
+   ],
+   "gold": [
+    {
+     "name": "签约整车厂客户",
+     "aliases": [
+      "客户",
+      "整车厂"
+     ],
+     "periods": [
+      "2025M09",
+      "2025"
+     ],
+     "value": 6,
+     "unit": "家",
+     "basis": "actual"
+    },
+    {
+     "name": "员工人数",
+     "periods": [
+      "2025M09",
+      "2025"
+     ],
+     "value": 126,
+     "unit": "人",
+     "basis": "actual"
+    }
+   ]
+  },
+  {
+   "id": "target-cn",
+   "document": "BP-2025.pptx",
+   "lines": [
+    "公司2026年目标实现收入1.5亿元，力争出货量达到20万套。",
+    "截至2025年底在手订单金额3800万元。"
+   ],
+   "gold": [
+    {
+     "name": "营业收入",
+     "periods": [
+      "2026"
+     ],
+     "value": 1.5,
+     "unit": "亿元",
+     "basis": "forecast"
+    },
+    {
+     "name": "出货量",
+     "aliases": [
+      "出货"
+     ],
+     "periods": [
+      "2026"
+     ],
+     "value": 20,
+     "unit": "万套",
+     "basis": "forecast"
+    },
+    {
+     "name": "在手订单",
+     "aliases": [
+      "订单"
+     ],
+     "periods": [
+      "2025",
+      "2025M12"
+     ],
+     "value": 3800,
+     "unit": "万元",
+     "basis": "actual"
+    }
+   ]
+  }
+ ],
+ "triage": [
+  {
+   "id": "funding",
+   "category": "company",
+   "source": "投资界",
+   "title": "光启视界完成3亿元B轮融资，红杉中国领投",
+   "snippet": "车载激光雷达光学模组企业光启视界科技有限公司宣布完成3亿元B轮融资。",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "major"
+    ]
+   }
+  },
+  {
+   "id": "same-name-shop",
+   "category": "company",
+   "source": "本地宝",
+   "title": "光启视界甜品店盛大开业",
+   "snippet": "位于某商场三楼的光启视界甜品店今日开业，推出秋季新品。",
+   "gold": {
+    "relevant": false
+   }
+  },
+  {
+   "id": "similar-listed",
+   "category": "company",
+   "source": "证券时报",
+   "title": "光启科技发布超材料新品",
+   "snippet": "上市公司光启科技（超材料）发布航空结构件新品。",
+   "gold": {
+    "relevant": false
+   }
+  },
+  {
+   "id": "competitor-price",
+   "category": "competitor",
+   "source": "汽车之心",
+   "title": "合成竞品甲发布一体化激光雷达光学方案，价格下探20%",
+   "snippet": "合成竞品甲新方案集成发射与接收光学，报价较上一代下降20%。",
+   "gold": {
+    "relevant": true,
+    "category": "competitor",
+    "importance": [
+     "major",
+     "notable"
+    ]
+   }
+  },
+  {
+   "id": "industry-stats",
+   "category": "industry",
+   "source": "高工产研",
+   "title": "前三季度国内车载激光雷达装车量同比增长78%",
+   "snippet": "1-9月国内乘用车前装激光雷达装车量同比增长78%。",
+   "gold": {
+    "relevant": true,
+    "category": "industry",
+    "importance": [
+     "notable",
+     "routine"
+    ]
+   }
+  },
+  {
+   "id": "policy",
+   "category": "policy",
+   "source": "工信部",
+   "title": "工信部发布智能网联汽车准入试点第二批名单",
+   "snippet": "第二批试点涉及多家车企的L3级自动驾驶车型。",
+   "gold": {
+    "relevant": true,
+    "category": "policy",
+    "importance": [
+     "notable",
+     "major"
+    ]
+   }
+  },
+  {
+   "id": "cninfo-investment",
+   "category": "company",
+   "source": "巨潮资讯 · 合成科技",
+   "title": "合成科技：关于对外投资光启视界科技有限公司的公告",
+   "snippet": "300999 合成科技 公告：关于对外投资光启视界科技有限公司的公告",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "major"
+    ]
+   },
+   "extra": {
+    "matched": "fulltext"
+   }
+  },
+  {
+   "id": "cninfo-irrelevant",
+   "category": "company",
+   "source": "巨潮资讯 · 合成光电",
+   "title": "合成光电：2025年半年度报告",
+   "snippet": "600000 合成光电 公告：2025年半年度报告（全文提及“光启”一词）",
+   "gold": {
+    "relevant": false
+   },
+   "extra": {
+    "matched": "fulltext"
+   }
+  },
+  {
+   "id": "registry-legal-rep",
+   "category": "company",
+   "source": "工商登记（天眼查）",
+   "title": "光启视界科技有限公司 工商变更：法定代表人变更",
+   "snippet": "变更前：张三；变更后：李四",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "major"
+    ]
+   }
+  },
+  {
+   "id": "registry-address",
+   "category": "company",
+   "source": "工商登记（天眼查）",
+   "title": "光启视界科技有限公司 工商变更：经营范围变更",
+   "snippet": "变更前：光学元件研发；变更后：光学元件研发、销售；汽车零部件销售",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "notable",
+     "routine"
+    ]
+   }
+  },
+  {
+   "id": "founder-interview",
+   "category": "company",
+   "source": "钛媒体",
+   "title": "光启视界创始人谈激光雷达降本：光学模组是关键",
+   "snippet": "创始人在访谈中谈及降本路径与量产节奏。",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "routine",
+     "notable"
+    ]
+   }
+  },
+  {
+   "id": "cninfo-no-excerpt",
+   "category": "company",
+   "source": "巨潮资讯 · 合成电子",
+   "extra": {
+    "matched": "fulltext"
+   },
+   "title": "合成电子：关于使用募集资金向全资子公司增资的公告",
+   "snippet": "300888 合成电子 公告：关于使用募集资金向全资子公司增资的公告",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "routine"
+    ],
+    "_why": "摘录未显示本公司，规则降为一般并提示核实"
+   }
+  },
+  {
+   "id": "cninfo-periodic-mention",
+   "category": "company",
+   "source": "巨潮资讯 · 合成科技",
+   "extra": {
+    "matched": "fulltext"
+   },
+   "title": "合成科技：2025年半年度报告",
+   "snippet": "300999 合成科技 公告：2025年半年度报告 · 全文检索摘录：报告期内公司向参股公司光启视界科技有限公司采购光学模组 1,200 万元",
+   "gold": {
+    "relevant": true,
+    "category": "company",
+    "importance": [
+     "notable",
+     "routine"
+    ]
+   }
+  }
+ ],
+ "same_event": [
+  {
+   "id": "same-funding",
+   "a": "光启视界完成3亿元B轮融资，红杉中国领投（2026-10-05）",
+   "b": "激光雷达光学企业光启视界获3亿元B轮投资（2026-10-06）",
+   "same": true
+  },
+  {
+   "id": "two-rounds",
+   "a": "光启视界完成3亿元B轮融资（2026-10-05）",
+   "b": "光启视界完成1亿元A+轮融资（2026-10-04）",
+   "same": false
+  },
+  {
+   "id": "order-vs-partnership",
+   "a": "光启视界905nm发射模组获某新势力车企定点（2026-10-03）",
+   "b": "光启视界与某Tier1签署战略合作协议（2026-10-03）",
+   "same": false
+  },
+  {
+   "id": "same-policy",
+   "a": "工信部发布智能网联汽车准入试点第二批名单（2026-09-29）",
+   "b": "第二批智能网联汽车准入试点名单公布，L3车型入列（2026-09-29）",
+   "same": true
+  },
+  {
+   "id": "competitor-two-news",
+   "a": "合成竞品甲新方案价格下探20%（2026-10-05）",
+   "b": "合成竞品甲获国家级专精特新小巨人认定（2026-10-05）",
+   "same": false
+  }
+ ]
+}

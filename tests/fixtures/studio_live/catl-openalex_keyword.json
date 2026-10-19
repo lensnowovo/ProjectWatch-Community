@@ -1,0 +1,561 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:20.190568+00:00",
+    "endpoint": "https://api.openalex.org/works",
+    "company": "宁德时代",
+    "operation": "openalex_keyword",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "results": [
+        {
+          "id": "https://openalex.org/W7214801284",
+          "doi": "https://doi.org/10.62051/ijgem.v10n9.10",
+          "display_name": "Research on Global Site Selection and Layout Strategy of New Energy Enterprises: A Case Study of CATL",
+          "publication_date": "2026-09-29",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.62051/ijgem.v10n9.10",
+            "source": {
+              "display_name": "International Journal of Global Economics and Management"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Jiao Chen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Southwest Petroleum University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Department of Department of Management Science and Engineering , School of Economics and Management , SouthWest Petrolemn University , Chengdu , China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Meng Han"
+              },
+              "institutions": [
+                {
+                  "display_name": "Southwest Petroleum University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "School of Economics and Management , SouthWest Petrolemn University , Chengdu , China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Xinyao Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Southwest Petroleum University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "School of Economics and Management , SouthWest Petrolemn University , Chengdu , China"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7214180896",
+          "doi": "https://doi.org/10.21203/rs.3.rs-10692811/v1",
+          "display_name": "AI-driven closed-loop control of lithium plating in batteries",
+          "publication_date": "2026-09-24",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.21203/rs.3.rs-10692811/v1",
+            "source": {
+              "display_name": "Research Square"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Zhong‐Qun Tian"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces,College of Chemistry and Chemical Engineering, IKKEM, Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Hongyuan He"
+              },
+              "institutions": [
+                {
+                  "display_name": "University of Liverpool"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "University of Liverpool"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Si-Yuan Ma"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Innovation Laboratory for Sciences and Technologies of Energy Materials of Fujian Province"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Zheng Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces,College of Chemistry and Chemical Engineering, IKKEM, Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Wei-Wei Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Hong-Yang Yuan"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces,College of Chemistry and Chemical Engineering, IKKEM, Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Wan-Jie Zhang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Innovation Laboratory for Sciences and Technologies of Energy Materials of Fujian Province"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Quan‐Fang Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces,College of Chemistry and Chemical Engineering, IKKEM, Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yu-Fei Chen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces,College of Chemistry and Chemical Engineering, IKKEM, Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yu-Ming Su"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Innovation Laboratory for Sciences and Technologies of Energy Materials of Fujian Province"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Hailong Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Xiamen University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Mengyao Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanxi Research Institute for Clean Energy"
+                },
+                {
+                  "display_name": "Tsinghua University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Shanxi Research Institute for Clean Energy, Tsinghua University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yi‐Hui Wu"
+              },
+              "institutions": [
+                {
+                  "display_name": "Beijing Institute of Technology"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "School of Interdisciplinary Science, Beijing Institute of Technology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Chong Yan"
+              },
+              "institutions": [
+                {
+                  "display_name": "Beijing Institute of Technology"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Beijing Institute of Technology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Qiang Zhang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tsinghua University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Tsinghua University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jing‐Hua Tian"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Innovation Laboratory for Sciences and Technologies of Energy Materials of Fujian Province (IKKEM)"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7213540106",
+          "doi": "https://doi.org/10.55092/phess20260014",
+          "display_name": "Synergistic development of intelligent digital transformation and green governance in China’s lithium battery industry: challenges and strategies",
+          "publication_date": "2026-09-17",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.55092/phess20260014",
+            "source": {
+              "display_name": "Proceeding Humanities Education and Social Sciences"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Jiehui Yuan"
+              },
+              "institutions": [
+                {
+                  "display_name": "Yichun University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Center for Western Jiangxi Regional Economic and Social Development, Yichun University, Yichun, China;Institute of Energy & Resource, Environment and Carbon Neutrality, Yichun University, Yichun, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Wenli Yuan"
+              },
+              "institutions": [
+                {
+                  "display_name": "Yichun University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institute of Energy & Resource, Environment and Carbon Neutrality, Yichun University, Yichun, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Fuying Lan"
+              },
+              "institutions": [
+                {
+                  "display_name": "Yichun University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Center for Western Jiangxi Regional Economic and Social Development, Yichun University, Yichun, China;Institute of Energy & Resource, Environment and Carbon Neutrality, Yichun University, Yichun, China"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7213317954",
+          "doi": "https://doi.org/10.1093/nsr/nwag596",
+          "display_name": "Practical insights into high-temperature storage of lithium-rich layered oxide cathodes",
+          "publication_date": "2026-09-14",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.1093/nsr/nwag596",
+            "source": {
+              "display_name": "National Science Review"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Kang Zhang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Chunpu Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yuan Tian"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Changxu Wu"
+              },
+              "institutions": [
+                {
+                  "display_name": "Contemporary Amperex Technology Co., Limited."
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Materials Innovation Department (MID), Contemporary Amperex Technology Co., Limited (CATL) , Ningde 352100 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yizhen Huang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Li Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yilong Chen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Lianpeng Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Wen Jiao"
+              },
+              "institutions": [
+                {
+                  "display_name": "Contemporary Amperex Technology Co., Limited."
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Materials Innovation Department (MID), Contemporary Amperex Technology Co., Limited (CATL) , Ningde 352100 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Na Liu"
+              },
+              "institutions": [
+                {
+                  "display_name": "Contemporary Amperex Technology Co., Limited."
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Materials Innovation Department (MID), Contemporary Amperex Technology Co., Limited (CATL) , Ningde 352100 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Qingsong Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "University of Bayreuth"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Bavarian Center for Battery Technology, Department of Chemistry, University of Bayreuth , Bayreuth 95447 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Maolin Yang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Chongheng Shen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Contemporary Amperex Technology Co., Limited."
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Materials Innovation Department (MID), Contemporary Amperex Technology Co., Limited (CATL) , Ningde 352100 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yu Qiao"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Shi‐Gang Sun"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xiamen University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Physical Chemistry of Solid Surfaces, Department of Chemistry, College of Chemistry and Chemical Engineering, Xiamen University , Xiamen 361005 ,"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

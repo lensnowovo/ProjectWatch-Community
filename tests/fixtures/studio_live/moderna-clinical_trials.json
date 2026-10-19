@@ -1,0 +1,167 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:30.837158+00:00",
+    "endpoint": "https://clinicaltrials.gov/api/v2/studies",
+    "company": "Moderna",
+    "operation": "clinical_trials",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "studies": [
+        {
+          "protocolSection": {
+            "identificationModule": {
+              "nctId": "NCT07279766",
+              "briefTitle": "Effectiveness of mRNA-1273 Variant-Containing Vaccine Formulation Against Severe Outcomes in Adults Aged 50-64 Years Without Risk Factors for Severe COVID-19"
+            },
+            "statusModule": {
+              "overallStatus": "COMPLETED",
+              "lastUpdatePostDateStruct": {
+                "date": "2026-10-06",
+                "type": "ACTUAL"
+              }
+            },
+            "designModule": {
+              "phases": [
+                "PHASE4"
+              ]
+            },
+            "conditionsModule": {
+              "conditions": [
+                "COVID-19"
+              ]
+            },
+            "sponsorCollaboratorsModule": {
+              "leadSponsor": {
+                "name": "Tor Biering-Sørensen",
+                "class": "OTHER"
+              },
+              "collaborators": [
+                {
+                  "name": "ModernaTX, Inc.",
+                  "class": "INDUSTRY"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "protocolSection": {
+            "identificationModule": {
+              "nctId": "NCT06623422",
+              "briefTitle": "A Study of Pembrolizumab (MK-3475) With or Without Intismeran Autogene (V940) in Participants With Non-small Cell Lung Cancer (V940-009/INTerpath-009)"
+            },
+            "statusModule": {
+              "overallStatus": "RECRUITING",
+              "lastUpdatePostDateStruct": {
+                "date": "2026-10-02",
+                "type": "ACTUAL"
+              }
+            },
+            "designModule": {
+              "phases": [
+                "PHASE3"
+              ]
+            },
+            "conditionsModule": {
+              "conditions": [
+                "Carcinoma, Non-Small-Cell Lung"
+              ]
+            },
+            "sponsorCollaboratorsModule": {
+              "leadSponsor": {
+                "name": "Merck Sharp & Dohme LLC",
+                "class": "INDUSTRY"
+              },
+              "collaborators": [
+                {
+                  "name": "ModernaTX, Inc.",
+                  "class": "INDUSTRY"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "protocolSection": {
+            "identificationModule": {
+              "nctId": "NCT07513376",
+              "briefTitle": "A Clinical Trial of Adjuvant Intismeran (V940) With or Without Pembrolizumab Coformulated With Berahyaluronidase Alfa (MK-3475A) in High-Risk Stage I Non-Small Cell Lung Cancer (V940-014)"
+            },
+            "statusModule": {
+              "overallStatus": "RECRUITING",
+              "lastUpdatePostDateStruct": {
+                "date": "2026-10-01",
+                "type": "ACTUAL"
+              }
+            },
+            "designModule": {
+              "phases": [
+                "PHASE3"
+              ]
+            },
+            "conditionsModule": {
+              "conditions": [
+                "Non-small Cell Lung Cancer"
+              ]
+            },
+            "sponsorCollaboratorsModule": {
+              "leadSponsor": {
+                "name": "Merck Sharp & Dohme LLC",
+                "class": "INDUSTRY"
+              },
+              "collaborators": [
+                {
+                  "name": "ModernaTX, Inc.",
+                  "class": "INDUSTRY"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "protocolSection": {
+            "identificationModule": {
+              "nctId": "NCT06833073",
+              "briefTitle": "A Clinical Study of Intismeran Autogene (V940) and BCG in People With Bladder Cancer (V940-011/INTerpath-011)"
+            },
+            "statusModule": {
+              "overallStatus": "RECRUITING",
+              "lastUpdatePostDateStruct": {
+                "date": "2026-10-01",
+                "type": "ACTUAL"
+              }
+            },
+            "designModule": {
+              "phases": [
+                "PHASE2"
+              ]
+            },
+            "conditionsModule": {
+              "conditions": [
+                "Urinary Bladder Neoplasms",
+                "Non-Muscle Invasive Bladder Neoplasms",
+                "Carcinoma in Situ"
+              ]
+            },
+            "sponsorCollaboratorsModule": {
+              "leadSponsor": {
+                "name": "Merck Sharp & Dohme LLC",
+                "class": "INDUSTRY"
+              },
+              "collaborators": [
+                {
+                  "name": "ModernaTX, Inc.",
+                  "class": "INDUSTRY"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

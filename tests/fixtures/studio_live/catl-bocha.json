@@ -1,0 +1,50 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:23.039369+00:00",
+    "endpoint": "https://api.bochaai.com/v1/web-search",
+    "company": "宁德时代",
+    "operation": "bocha",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "code": 200,
+      "data": {
+        "webPages": {
+          "value": [
+            {
+              "name": "宁德时代 _ 数据中心 _ 东方财富网",
+              "url": "https://data.eastmoney.com/rzrq/detail/300750.html",
+              "siteName": "东方财富网数据中心",
+              "datePublished": "2024-07-17T04:31:37+08:00",
+              "dateLastCrawled": "2024-07-17T04:31:37Z"
+            },
+            {
+              "name": "宁德时代发展历程、10大股东、高管、股权激励计划、营收介绍-三个皮匠报告",
+              "url": "https://www.sgpjbg.com/info/24910.html",
+              "siteName": "三个皮匠报告",
+              "datePublished": "2021-08-13T17:19:53+08:00",
+              "dateLastCrawled": "2021-08-13T17:19:53Z"
+            },
+            {
+              "name": "曾毓群巨资建山顶会所,宁德市区尽收眼底,壕气至坐直升机通勤! - 今日头条",
+              "url": "https://www.toutiao.com/article/7439935346877432370/",
+              "siteName": "今日头条",
+              "datePublished": "2024-11-22T11:17:00+08:00",
+              "dateLastCrawled": "2024-11-22T11:17:00Z"
+            },
+            {
+              "name": "宁德时代起源",
+              "url": "https://www.youfanx.com/baike/683438094598278509.html",
+              "siteName": "游饭天堂",
+              "datePublished": "2024-10-06T06:42:15+08:00",
+              "dateLastCrawled": "2024-10-06T06:42:15Z"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

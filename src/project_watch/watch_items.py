@@ -1,0 +1,6 @@
+"""Compatibility exports for the base followup_records contracts."""
+from project_watch.followup_records import watch_change_input as watch_change_input
+from project_watch.followup_records import watch_change_review_input as watch_change_review_input
+from project_watch.followup_records import watch_item_input as watch_item_input
+from project_watch.followup_records import watch_item_snapshot as watch_item_snapshot
+from project_watch.followup_records import watch_review_input as watch_review_input

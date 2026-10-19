@@ -1,0 +1,14 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:18.891424+00:00",
+    "endpoint": "https://www.bing.com/news/search",
+    "company": "宁德时代",
+    "operation": "bing_news",
+    "records": 4
+  },
+  "response": {
+    "format": "xml",
+    "body": "<rss version=\"2.0\"><channel><item><title>宁德时代：一家做电池的企业，为何要投AI？</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fwww.sohu.com%2Fa%2F1084793329_360352</link><pubDate>Tue, 06 Oct 2026 20:28:00 GMT</pubDate></item><item><title>对手悄悄换了赛道！全球电池格局生变，宁德时代迎生死大考？</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fwww.sohu.com%2Fa%2F1084567833_122543305</link><pubDate>Tue, 06 Oct 2026 16:36:00 GMT</pubDate></item><item><title>宁德时代匈牙利工厂四年试产，是合规常态还是通道关闭？</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fnews.qq.com%2Frain%2Fa%2F20261006A05PWF00</link><pubDate>Tue, 06 Oct 2026 04:57:00 GMT</pubDate></item><item><title>“去宁化”担忧发酵？宁德时代A+H股总市值跌破1.5万亿元</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Ffinance.eastmoney.com%2Fa%2F202609153874777543.html</link><pubDate>Tue, 15 Sep 2026 10:28:00 GMT</pubDate></item></channel></rss>"
+  }
+}

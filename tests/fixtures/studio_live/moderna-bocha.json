@@ -1,0 +1,50 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:31.159556+00:00",
+    "endpoint": "https://api.bochaai.com/v1/web-search",
+    "company": "Moderna",
+    "operation": "bocha",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "code": 200,
+      "data": {
+        "webPages": {
+          "value": [
+            {
+              "name": "AWS Innovator: Moderna  Case Studies, Videos and Customer Stories",
+              "url": "https://aws.amazon.com/it/solutions/case-studies/innovators/moderna/",
+              "siteName": "Amazon Web Services",
+              "datePublished": "2025-01-08T00:00:05+08:00",
+              "dateLastCrawled": "2025-01-08T00:00:05Z"
+            },
+            {
+              "name": "Moderna-Moderna, Inc.-企业详情-InvestGO数据库-ByDrug-医药魔方数据库",
+              "url": "https://bydrug.pharmcube.com/investgo/company/detail/34de30b155b4dab5c5f88201daef7576",
+              "siteName": "ByDrug掰药",
+              "datePublished": "2010-01-01T00:00:00+08:00",
+              "dateLastCrawled": "2010-01-01T00:00:00Z"
+            },
+            {
+              "name": "Moderna公司",
+              "url": "https://baike.sogou.com/v178501312.htm?fromTitle=Moderna",
+              "siteName": "搜狗百科",
+              "datePublished": "2024-02-22T08:00:00+08:00",
+              "dateLastCrawled": "2024-02-22T08:00:00Z"
+            },
+            {
+              "name": "Moderna Provides Pipeline and Full-Year Corporate Update  Business Wire",
+              "url": "http://www.businesswire.com/news/home/20170109006270/en/Moderna-Pipeline-Full-Year-Corporate-Update",
+              "siteName": "www.businesswire.com",
+              "datePublished": "2017-01-09T17:30:00+08:00",
+              "dateLastCrawled": "2017-01-09T17:30:00Z"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

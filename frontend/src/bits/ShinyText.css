@@ -1,0 +1,4 @@
+/* Adapted from React Bits ShinyText: animation is driven by motion in ShinyText.tsx. */
+.shiny-text {
+  display: inline-block;
+}

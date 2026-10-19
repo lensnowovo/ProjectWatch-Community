@@ -1,0 +1,14 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:26.849137+00:00",
+    "endpoint": "https://www.bing.com/news/search",
+    "company": "Moderna",
+    "operation": "bing_news",
+    "records": 4
+  },
+  "response": {
+    "format": "xml",
+    "body": "<rss version=\"2.0\"><channel><item><title>Moderna Is Up 545% in 2026: Take Profits Now, or Keep Buying?</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2F247wallst.com%2Finvesting%2F2026%2F10%2F06%2Fmoderna-is-up-545-in-2026-take-profits-now-or-keep-buying%2F</link><pubDate>Tue, 06 Oct 2026 13:04:00 GMT</pubDate></item><item><title>Moderna Surges 8% as Full Melanoma Readout Nears; BioNTech Ticks Up, Pfizer Slips</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2F247wallst.com%2Finvesting%2F2026%2F10%2F05%2Fmoderna-surges-8-as-full-melanoma-readout-nears-biontech-ticks-up-pfizer-slips%2F</link><pubDate>Mon, 05 Oct 2026 12:47:00 GMT</pubDate></item><item><title>Biotech stocks tumble, with recent winners Moderna, Vaxcyte among the biggest losers</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Fwww.msn.com%2Fen-us%2Fnews%2Fother%2Fbiotech-stocks-tumble-with-recent-winners-moderna-vaxcyte-among-the-biggest-losers%2Far-AA2dGsnE</link><pubDate>Tue, 06 Oct 2026 13:38:00 GMT</pubDate></item><item><title>Moderna Stock Slumps as Citi Says It’s Time to Sell After 500% Rally This Year</title><link>http://www.bing.com/news/apiclick.aspx?url=https%3A%2F%2Ffinance.yahoo.com%2Fmarkets%2Fstocks%2Farticles%2Fmoderna-stock-slumps-citi-says-193139692.html</link><pubDate>Wed, 30 Sep 2026 12:30:00 GMT</pubDate></item></channel></rss>"
+  }
+}

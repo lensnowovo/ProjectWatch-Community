@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "projectwatch-local"
+version = "0.2.0a1"
+description = "Self-hosted, evidence-governed project monitoring for investment teams"
+readme = "README.md"
+requires-python = ">=3.11"
+# Individual attribution: qzqzqz (confirmed 2026-10-18). Public brand: ProjectWatch.
+# Local distribution name; no claim to a public package-index registration.
+license = "LicenseRef-ProjectWatch-Community-1.0"
+license-files = ["LICENSE", "NOTICE", "LICENSES/Apache-2.0.txt"]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "pydantic>=2.9,<3",
+  "uvicorn>=0.32,<1",
+  "python-multipart>=0.0.12,<1",
+  "pypdf[fonts]>=6,<7",
+  # 0.11.10 requires PDFium 5; retain compatibility with the OCR extra's PDFium 4.
+  "pdfplumber>=0.11,<0.11.10",
+  "python-docx>=1.1,<2",
+  "python-pptx>=1,<2",
+  "openpyxl>=3.1,<4",
+  "xlrd>=2.0.2,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0.3,<10", "httpx>=0.28,<1", "reportlab>=4,<5", "packaging>=24,<27", "xlwt>=1.3,<2"]
+ocr = ["rapidocr>=2.1,<3", "onnxruntime>=1.18,<2", "pypdfium2>=4.30,<5"]
+mcp = ["mcp>=2,<3"]
+team = ["argon2-cffi>=25,<26"]
+postgres = ["psycopg[binary,pool]>=3.2,<4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+project_watch = ["static/*.html", "static/*.css", "static/*.js", "static/*.mjs", "static/*.svg", "migrations/*.sql", "web/*.html", "web/assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+# Explicitly retain the source repository's lint contract, rather than inheriting
+# a developer machine's global Ruff settings after the split.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["node_modules", ".venv", "venv", "dist", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint.isort]
+known-first-party = ["project_watch", "scripts"]

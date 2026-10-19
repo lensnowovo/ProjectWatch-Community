@@ -1,0 +1,37 @@
+ProjectWatch
+Copyright (c) 2026 qzqzqz
+Commercial licensing contact: lensnowovo@gmail.com
+
+ProjectWatch-owned code in this version is provided under the
+ProjectWatch Community License 1.0; see LICENSE. This is source-available,
+not an OSI-approved open-source license. This notice is attribution and
+scope information, not an additional license or third-party clearance.
+
+Earlier Apache-2.0 grants remain effective for recipients entitled to them.
+LICENSES/Apache-2.0.txt preserves that license verbatim. Its inclusion does
+not newly license all code or modifications in this version under Apache-2.0.
+
+Third-party material retains its original terms. In particular:
+
+- React Bits adapted components by David Haz: Aurora, BlurText, ColorBends,
+  CountUp, Grainient, ShapeGrid, ShinyText, SpotlightCard and Waves, including
+  their associated CSS and code compiled into the frontend. See
+  frontend/src/bits/LICENSE-react-bits.md in source distributions.
+  They are NOT relicensed under the ProjectWatch Community License.
+  ProjectWatch does not grant standalone component/library/template
+  redistribution rights or override the React Bits restrictions.
+- Noto Serif SC and Newsreader fonts: original SIL OFL 1.1 notices in
+  frontend/src/fonts/NOTICE.md and OFL-*.txt; compiled copies retain them.
+- Frontend runtime dependencies: original notices assembled from the
+  lock-pinned packages; see assets/THIRD-PARTY-LICENSES.txt in the UI.
+  In Python wheels this is project_watch/web/assets/THIRD-PARTY-LICENSES.txt.
+  In source distributions both frontend/public/assets and
+  src/project_watch/web/assets contain the assembled notice.
+- Python and optional dependencies: original license texts in their own
+  distributions/dist-info. These are independently installed dependencies,
+  not code that ProjectWatch purports to relicense.
+
+Third-party APIs, models and data are not licensed or resold by this software
+license. Users need their own accounts and applicable provider permissions.
+Neither this notice nor a commercial ProjectWatch agreement grants rights
+the respective third-party owners have not granted.

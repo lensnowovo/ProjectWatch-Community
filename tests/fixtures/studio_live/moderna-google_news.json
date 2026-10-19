@@ -1,0 +1,14 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:25.982455+00:00",
+    "endpoint": "https://news.google.com/rss/search",
+    "company": "Moderna",
+    "operation": "google_news",
+    "records": 4
+  },
+  "response": {
+    "format": "xml",
+    "body": "<rss version=\"2.0\"><channel><item><title>Novavax, Moderna stocks fall after WHO calls plague risk 'low' - Yahoo Finance</title><link>https://news.google.com/rss/articles/CBMiuwFBVV95cUxNR1RoRTZwYXhNZVFodDRoeDJtRkJ0a1FGcEpJWkMyekYwS3pQeFN4QV9yYXM2SFhtVFB3Yzg2WWt2ZS1vRWRjdktwbnJzYXktYTFVOWFvWEhuMzNtejFjbUhESjRTeERhVklzRTQ3UXFMZWpyNEN4YlNyQXZLU0F4WnJ0MnhILTBmeHFLMkt3ZXgtazZJOTV6NEdESEFORVJjODBzV3hlaHFsU1YtdGxLRnBsaXpZTGM5NC1j?oc=5</link><pubDate>Tue, 06 Oct 2026 16:00:41 GMT</pubDate><source url=\"https://finance.yahoo.com\">Yahoo Finance</source></item><item><title>Stocks making the biggest moves midday: Marvell, Moderna, Lamb Weston, Constellation Energy &amp; more - CNBC</title><link>https://news.google.com/rss/articles/CBMilwFBVV95cUxNZTJ4ekhQczBYNlBKQmN4OV9mY051OHJtaGlxdkNmTXJRMW9WeU5xd19FMXVfcTc5cEFCSzIzeVEtQU4zRTZuS21SQ0xUNGFoQ3ZidHdTV05yUU16QTN3QkNWQ2dQNmk4b1J5cmVzVXZESTJTSkpsVmd5NVJib2tNVGd0VGltdnZCYlRBa1pDVGtxYUFaMFlV?oc=5</link><pubDate>Tue, 06 Oct 2026 17:00:28 GMT</pubDate><source url=\"https://www.cnbc.com\">CNBC</source></item><item><title>Biotechs Sell Off — These Are The Biggest Losers - Investor's Business Daily</title><link>https://news.google.com/rss/articles/CBMipgFBVV95cUxOMVdxY1NsZDhBZ0JQR1h5OC1VRjBidHVJVTdVdW5sOFpRQTg5eTJydlNOQVhpODFjT3gxMnVETWRYcHBIRFdPYmUzXzZvaE9aQzJ5SXJ2bWlaYjR0RU04dkNLalFfSklhVjBJdE96SEY2OE5DU3ZFNnBrSjJjWExtdnhMek9yemZwSkFnM0dKUm1PWnNWbU1pNnE4azJkLUFjZmJkaXpR?oc=5</link><pubDate>Tue, 06 Oct 2026 20:34:00 GMT</pubDate><source url=\"https://www.investors.com\">Investor's Business Daily</source></item><item><title>Why is Moderna stock sliding today? - Investing.com</title><link>https://news.google.com/rss/articles/CBMinAFBVV95cUxNVjlzb2c1WTNFUkRaNF81Nm1oV3Q2M28tbERLMEhnTFRKQW9DM29OdGd3di1qOEJUb0kzTWdVaWtjaXdSOU1QZ0RrYlRNTzYyY3pORUxaSWVVVXRjcGpaVWRPY1BXVGFHOG5zZHNvOUk2LU1URkUyT3d5aFZBQUU5OHlManRHbW5RekpNUGluNUFwRFBSNEZ2aXdDTUo?oc=5</link><pubDate>Tue, 06 Oct 2026 19:01:42 GMT</pubDate><source url=\"https://www.investing.com\">Investing.com</source></item></channel></rss>"
+  }
+}

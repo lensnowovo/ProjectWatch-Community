@@ -1,0 +1,581 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:29.673722+00:00",
+    "endpoint": "https://api.openalex.org/works",
+    "company": "Moderna",
+    "operation": "openalex_affiliation",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "results": [
+        {
+          "id": "https://openalex.org/W7164195259",
+          "doi": "https://doi.org/10.1128/jvi.01221-26",
+          "display_name": "Subtype-specific differences in susceptibility to monoclonal antibodies and vaccines among contemporary RSV-A and RSV-B isolates",
+          "publication_date": "2026-10-05",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.1128/jvi.01221-26",
+            "source": {
+              "display_name": "Journal of Virology"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "P Silva Marinho"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Dibya Ghimire"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "João Vitor Tsai Silva"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jamie Devlin"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "S Kwon"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Gordon C. Adams"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Patricia A. Jorquera"
+              },
+              "institutions": [
+                {
+                  "display_name": "Moderna Therapeutics (United States)"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Moderna TX Inc"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jeremy Luban"
+              },
+              "institutions": [
+                {
+                  "display_name": "University of Massachusetts Chan Medical School"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "University of Massachusetts Chan Medical School"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jacob E. Lemieux"
+              },
+              "institutions": [
+                {
+                  "display_name": "Massachusetts General Hospital"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Massachusetts General Hospital"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7215058074",
+          "doi": "https://doi.org/10.1371/journal.ppat.1014552",
+          "display_name": "Quantitative and qualitative differences in anti-Envelope IgG-secreting cells distinguish subclinical and hospitalized dengue in a Cambodian pediatric cohort",
+          "publication_date": "2026-10-01",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.1371/journal.ppat.1014552",
+            "source": {
+              "display_name": "PLoS Pathogens"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Amandine Trouchet"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Sokchea Lay"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institut Pasteur du Cambodge"
+                },
+                {
+                  "display_name": "Pasteur Network"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur du Cambodge, Pasteur Network"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Matteo Broketa"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                },
+                {
+                  "display_name": "Sorbonne Université"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology",
+                "Sorbonne University"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Pablo Canales-Herrerías"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Angga Perima"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Bruno Iannascoli"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Sotheary Sann"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institut Pasteur du Cambodge"
+                },
+                {
+                  "display_name": "Pasteur Network"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur du Cambodge, Pasteur Network"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Borita Heng"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institut Pasteur du Cambodge"
+                },
+                {
+                  "display_name": "Pasteur Network"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur du Cambodge, Pasteur Network"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Sowath Ly"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institut Pasteur du Cambodge"
+                },
+                {
+                  "display_name": "Pasteur Network"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur du Cambodge, Pasteur Network"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Veasna Duong"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institut Pasteur du Cambodge"
+                },
+                {
+                  "display_name": "Pasteur Network"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur du Cambodge, Pasteur Network"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Gaël A. Millot"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, Bioinformatics and Biostatistics Hub",
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Laura M. Walker"
+              },
+              "institutions": [
+                {
+                  "display_name": "Moderna Therapeutics (United States)"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Moderna, Inc"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Patrick England"
+              },
+              "institutions": [
+                {
+                  "display_name": "Centre National de la Recherche Scientifique"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, CNRS UMR3528, Platform of Molecular Biophysics"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Giovanna Barba Spaeth"
+              },
+              "institutions": [
+                {
+                  "display_name": "Centre National de la Recherche Scientifique"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, CNRS UMR 3569, Structural Virology"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Tineke Cantaert"
+              },
+              "institutions": [
+                {
+                  "display_name": "Centre National de la Recherche Scientifique"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                },
+                {
+                  "display_name": "Institut Pasteur du Cambodge"
+                },
+                {
+                  "display_name": "Pasteur Network"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur du Cambodge, Pasteur Network",
+                "Institut Pasteur, Université Paris Cité, CNRS UMR 2000, Ecology and Emergence of Arthropod-borne Pathogens"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Pierre Bruhns"
+              },
+              "institutions": [
+                {
+                  "display_name": "Inserm"
+                },
+                {
+                  "display_name": "Institut Pasteur"
+                },
+                {
+                  "display_name": "Université Paris Cité"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Institut Pasteur, Université Paris Cité, INSERM UMR1222, Antibodies in Therapy and Pathology"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7215101401",
+          "doi": "https://doi.org/10.3390/v18101083",
+          "display_name": "Global Diversity of Norovirus Genotypes from 2002 to 2025: A Review of Temporal, Age-Specific and Regional Trends",
+          "publication_date": "2026-10-01",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.3390/v18101083",
+            "source": {
+              "display_name": "Viruses"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Jennifer L. Cannon"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "Epidemiologic Research & Methods, LLC, Southport, NC 28641, USA"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Christine Kim"
+              },
+              "institutions": [
+                {
+                  "display_name": "Moderna Therapeutics (United States)"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Moderna, Inc., Cambridge, MA 02142, USA"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Duncan Mahood"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "Epidemiologic Research & Methods, LLC, Southport, NC 28641, USA"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Brooke A Bollman"
+              },
+              "institutions": [
+                {
+                  "display_name": "Moderna Therapeutics (United States)"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Moderna, Inc., Cambridge, MA 02142, USA"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Guha Asthagiri Arunkumar"
+              },
+              "institutions": [
+                {
+                  "display_name": "Moderna Therapeutics (United States)"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Moderna, Inc., Cambridge, MA 02142, USA"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Benjamin Alan Lopman"
+              },
+              "institutions": [
+                {
+                  "display_name": "Emory University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Rollins School of Public Health, Emory University, Atlanta, GA 30322, USA"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Katherine Carlson"
+              },
+              "institutions": [
+                {
+                  "display_name": "Moderna Therapeutics (United States)"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Moderna, Inc., Cambridge, MA 02142, USA"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7214940950",
+          "doi": "https://doi.org/10.5281/zenodo.23051494",
+          "display_name": "Endoscopic Tutoring of a Retracted Ileostomy in a Hostile Abdomen Using a Partially Covered Self-Expandable Metallic Stent (SEMS): A Novel Multimodal Approach",
+          "publication_date": "2026-09-30",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.5281/zenodo.23051494",
+            "source": {
+              "display_name": "Zenodo (CERN European Organization for Nuclear Research)"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Rene M. Gordillo1* and Daniela A. Gordillo2"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "1Department of Surgery & Endoscopy, Novaclinica Moderna, Ecuador 2General Resident, Novaclinica Moderna, Ecuador"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

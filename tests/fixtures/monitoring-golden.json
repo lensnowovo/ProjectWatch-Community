@@ -1,0 +1,29 @@
+{
+  "fixture": "synthetic-watch-two-periods",
+  "description": "Entirely fictitious company and amounts; never a Greenpine or client record.",
+  "project": "示例甲公司",
+  "as_of_date": "2026-09-27",
+  "inputs": {
+    "confirmed_metrics": [
+      {"name": "revenue", "period": "2024", "value": "100", "unit": "万元", "basis": "actual", "scope": "合并", "source": "synthetic-2024"},
+      {"name": "revenue", "period": "2025", "value": "120", "unit": "万元", "basis": "actual", "scope": "合并", "source": "synthetic-2025"},
+      {"name": "accounts_receivable", "period": "2024", "value": "20", "unit": "万元", "basis": "actual", "scope": "合并", "source": "synthetic-2024"},
+      {"name": "accounts_receivable", "period": "2025", "value": "48", "unit": "万元", "basis": "actual", "scope": "合并", "source": "synthetic-2025"},
+      {"name": "revenue", "period": "2026", "value": "200", "unit": "万元", "basis": "forecast", "scope": "合并", "source": "synthetic-budget"}
+    ],
+    "candidate_metric": {"name": "cash", "period": "2025", "value": "99", "unit": "万元", "basis": "actual", "source": "synthetic-unreviewed"},
+    "external_source_runs": [
+      {"source": "company-news", "status": "completed", "item_count": 1, "matched_count": 1},
+      {"source": "regulator", "status": "unreachable", "item_count": 0, "matched_count": 0}
+    ]
+  },
+  "expected": {
+    "domains": ["capital", "financials", "financial_integrity", "operations_products", "external_signals", "competitive_position"],
+    "coverage": {"covered": 2, "total": 6, "missing": ["capital", "operations_products", "competitive_position"]},
+    "revenue_actual_periods": ["2024", "2025"],
+    "revenue_forecast_periods": ["2026"],
+    "candidate_in_confirmed_series": false,
+    "external_source_status": {"company-news": "completed", "regulator": "unreachable"},
+    "financial_integrity_label": "待核验"
+  }
+}

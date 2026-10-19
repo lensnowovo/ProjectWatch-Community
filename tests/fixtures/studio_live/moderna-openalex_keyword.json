@@ -1,0 +1,181 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:28.494805+00:00",
+    "endpoint": "https://api.openalex.org/works",
+    "company": "Moderna",
+    "operation": "openalex_keyword",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "results": [
+        {
+          "id": "https://openalex.org/W7212125921",
+          "doi": "https://doi.org/10.5281/zenodo.22693460",
+          "display_name": "O MOVIMENTO DA MATEMÁTICA MODERNA E SEUS REFLEXOS NA EXPANSÃO DA EDUCAÇÃO MATEMÁTICA",
+          "publication_date": "2026-12-24",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.5281/zenodo.22693460",
+            "source": {
+              "display_name": "Zenodo (CERN European Organization for Nuclear Research)"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Alessandra Alves Zetoles de Morais"
+              },
+              "institutions": [
+                {
+                  "display_name": "Universidade Federal de Rondônia"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Universidade Federal de Rondônia"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "C C S S D BROWN"
+              },
+              "institutions": [
+                {
+                  "display_name": "Universidade Federal de Rondônia"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Universidade Federal de Rondônia"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "SIMONE FAGUNDES DE LIMA"
+              },
+              "institutions": [
+                {
+                  "display_name": "Universidade Federal de Rondônia"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Universidade Federal de Rondônia"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7212127958",
+          "doi": "https://doi.org/10.5281/zenodo.22693459",
+          "display_name": "O MOVIMENTO DA MATEMÁTICA MODERNA E SEUS REFLEXOS NA EXPANSÃO DA EDUCAÇÃO MATEMÁTICA",
+          "publication_date": "2026-12-24",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.5281/zenodo.22693459",
+            "source": {
+              "display_name": "Zenodo (CERN European Organization for Nuclear Research)"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Alessandra Alves Zetoles de Morais"
+              },
+              "institutions": [
+                {
+                  "display_name": "Universidade Federal de Rondônia"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Universidade Federal de Rondônia"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "C C S S D BROWN"
+              },
+              "institutions": [
+                {
+                  "display_name": "Universidade Federal de Rondônia"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Universidade Federal de Rondônia"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "SIMONE FAGUNDES DE LIMA"
+              },
+              "institutions": [
+                {
+                  "display_name": "Universidade Federal de Rondônia"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Universidade Federal de Rondônia"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7151757560",
+          "doi": "https://doi.org/10.5281/zenodo.19464822",
+          "display_name": "Alumni citatorium Año 3 Vol 10",
+          "publication_date": "2026-12-10",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.5281/zenodo.19464822",
+            "source": {
+              "display_name": "Zenodo (CERN European Organization for Nuclear Research)"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Eréndira Baltazar Luna"
+              },
+              "institutions": [
+                {
+                  "display_name": "Benemérita Universidad Autónoma de Puebla"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Benemérita Universidad Autónoma de Puebla"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7151777171",
+          "doi": "https://doi.org/10.5281/zenodo.19464823",
+          "display_name": "Alumni citatorium Año 3 Vol 10",
+          "publication_date": "2026-12-10",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.5281/zenodo.19464823",
+            "source": {
+              "display_name": "Zenodo (CERN European Organization for Nuclear Research)"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Eréndira Baltazar Luna"
+              },
+              "institutions": [
+                {
+                  "display_name": "Benemérita Universidad Autónoma de Puebla"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Benemérita Universidad Autónoma de Puebla"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

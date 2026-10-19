@@ -1,0 +1,2 @@
+:root{--canvas:#f5f4f1;--surface:#fff;--subtle:#ecebe7;--ink:#252522;--muted:#62625b;--line:#d8d7d1;--action:#30312e;--focus:#55564f;--font:"Source Han Sans SC","Noto Sans SC","Microsoft YaHei UI",sans-serif;color:var(--ink);background:var(--canvas);font-family:var(--font);font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--focus);outline-offset:3px}

@@ -1,0 +1,517 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-07T10:13:21.879354+00:00",
+    "endpoint": "https://api.openalex.org/works",
+    "company": "宁德时代",
+    "operation": "openalex_affiliation",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "results": [
+        {
+          "id": "https://openalex.org/W7218507519",
+          "doi": "https://doi.org/10.1016/j.ensm.2026.105574",
+          "display_name": "High-Ductility Metallic Adhesive Additives to Mitigate Inter-Particle Cracks of Silicon Anode in Solid-State Batteries",
+          "publication_date": "2026-10-01",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.1016/j.ensm.2026.105574",
+            "source": {
+              "display_name": "Energy storage materials"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Qingbo Cao"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China",
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jie Wei"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China",
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Huamei Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Haolin Xie"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Shuohan Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yuxiang Tian"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Xinyu Yu"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China",
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Chengyin Yang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China",
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jia Li"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yanting Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jianren Huang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yantao Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Ziyang Ning"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Kai Wu"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Chuying Ouyang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Tan Kah Kee Innovation Laboratory"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Fujian Science & Technology Innovation, Laboratory for Energy Devices (21C-lab), Contemporary Amperex Technology Co., Limited (CATL), Ningde, 352100, Fujian, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yongxing Shen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China",
+                "Global College, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Shou‐Hang Bo"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Jiao Tong University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Future Battery Research Center, Global Institute of Future Technology, Shanghai Jiao Tong University, Shanghai, 200240, China",
+                "State Key Laboratory of Synergistic Chem-Bio Synthesis, School of Chemistry and Chemical Engineering, Shanghai Jiao Tong University, Shanghai, 200240, China"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7214549227",
+          "doi": "https://doi.org/10.1007/978-3-032-38477-5_23",
+          "display_name": "Serialization Algorithm to Reduce the Electric Energy Consumption of Servers and the Execution Time of Transactions Without Executing Meaningless Read Methods",
+          "publication_date": "2026-09-28",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.1007/978-3-032-38477-5_23",
+            "source": {
+              "display_name": "Lecture notes on data engineering and communications technologies"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Tomoya Enokido"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": []
+            },
+            {
+              "author": {
+                "display_name": "Shigenari Nakamura"
+              },
+              "institutions": [
+                {
+                  "display_name": "Seikei University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Seikei University, Tokyo, Japan"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Dilawaer Duolikun"
+              },
+              "institutions": [
+                {
+                  "display_name": "Contemporary Amperex Technology Co., Limited."
+                }
+              ],
+              "raw_affiliation_strings": [
+                "BP&IT, Contemporary Amperex Technology Hungary, Debrecen, Hungary"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Makoto Takizawa"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "Distributed Systems Laboratory, Tokyo, Japan"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7214587868",
+          "doi": "https://doi.org/10.3390/asi9100203",
+          "display_name": "Mechanical Response of a Macro-Fibre Composite-Bonded Cantilever Beam and Its Sandwich Configuration for Low-Intrusion Deformation Suppression",
+          "publication_date": "2026-09-28",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.3390/asi9100203",
+            "source": {
+              "display_name": "Applied System Innovation"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Lizhe Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Maritime University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "College of Information Engineering, Shanghai Maritime University, Shanghai 201306, China",
+                "Contemporary Amperex Future Energy Research Institute (Shanghai) Limited, Shanghai 201108, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Xuanwen Wang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Xi’an Jiaotong-Liverpool University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "School of Advanced Technology, Xi’an Jiaotong–Liverpool University, Suzhou 215123, China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Wenwen Yuan"
+              },
+              "institutions": [
+                {
+                  "display_name": "Shanghai Maritime University"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "College of Information Engineering, Shanghai Maritime University, Shanghai 201306, China"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "https://openalex.org/W7214640943",
+          "doi": "https://doi.org/10.1007/s11663-026-04280-0",
+          "display_name": "Coupled Simulation of Multiphase Flow and Reaction Kinetics in a Copper Side-Blown Bath Smelting Furnace",
+          "publication_date": "2026-09-28",
+          "cited_by_count": 0,
+          "primary_location": {
+            "landing_page_url": "https://doi.org/10.1007/s11663-026-04280-0",
+            "source": {
+              "display_name": "Metallurgical and Materials Transactions B"
+            }
+          },
+          "authorships": [
+            {
+              "author": {
+                "display_name": "Junchi Yang"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institute of Process Engineering"
+                },
+                {
+                  "display_name": "University of Chinese Academy of Sciences"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "School of Chemical Engineering, University of Chinese Academy of Sciences, Beijing, 100049, P.R. China",
+                "State Key Laboratory of Mesoscience and Process Engineering, Institute of Process Engineering, Chinese Academy of Sciences, Beijing, 100190, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yunpeng Jiao"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institute of Process Engineering"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Mesoscience and Process Engineering, Institute of Process Engineering, Chinese Academy of Sciences, Beijing, 100190, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Yaling Nie"
+              },
+              "institutions": [
+                {
+                  "display_name": "Chinese Academy of Sciences"
+                },
+                {
+                  "display_name": "Institute of Process Engineering"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Division of Environmental Technology and Engineering, Institute of Process Engineering, Chinese Academy of Sciences, Beijing, 100190, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Min Zhu"
+              },
+              "institutions": [
+                {
+                  "display_name": "Chinese Academy of Sciences"
+                },
+                {
+                  "display_name": "Institute of Process Engineering"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Division of Environmental Technology and Engineering, Institute of Process Engineering, Chinese Academy of Sciences, Beijing, 100190, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Tao Wei"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "Nanfang Nonferrous Metal Co., Ltd., Nandan, 547200, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Baojun Ma"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "Nanfang Nonferrous Metal Co., Ltd., Nandan, 547200, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Nanfang Zhou"
+              },
+              "institutions": [],
+              "raw_affiliation_strings": [
+                "Nanfang Nonferrous Metal Co., Ltd., Nandan, 547200, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Xin Xiao"
+              },
+              "institutions": [
+                {
+                  "display_name": "Chinese Academy of Sciences"
+                },
+                {
+                  "display_name": "Institute of Process Engineering"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Division of Environmental Technology and Engineering, Institute of Process Engineering, Chinese Academy of Sciences, Beijing, 100190, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Wenhan Chen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institute of Contemporary History"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "Contemporary Amperex Technology Co., Ltd., Ningde, 352100, P.R. China"
+              ]
+            },
+            {
+              "author": {
+                "display_name": "Jianhua Chen"
+              },
+              "institutions": [
+                {
+                  "display_name": "Institute of Process Engineering"
+                }
+              ],
+              "raw_affiliation_strings": [
+                "State Key Laboratory of Mesoscience and Process Engineering, Institute of Process Engineering, Chinese Academy of Sciences, Beijing, 100190, P.R. China"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

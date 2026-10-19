@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4f1">
+  <title>Project Watch · Greenpine</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/styles.css?v=20261002-lifecycle">
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/client.css">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261007-monitor">
+  <link rel="stylesheet" href="/static/page_polish.css?v=20261007-pages">
+  <script type="module" src="/static/app.js?v=20261007-pages"></script>
+</head>
+<body>
+  <a class="skip-link" href="#work-area">跳到主要内容</a>
+  <section id="login-screen" class="login-screen" hidden>
+    <form id="login-form" class="login-panel">
+      <p class="eyebrow">PROJECT WATCH / TEAM</p>
+      <h1>回到项目现场。</h1>
+      <p>登录后只显示你有权限查看的研究项目。</p>
+      <label for="login-username">账号</label>
+      <input id="login-username" name="username" autocomplete="username" required maxlength="80">
+      <label for="login-password">密码</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+      <button class="primary-button" type="submit">登录</button>
+    </form>
+  </section>
+  <div class="app-shell">
+    <aside class="rail" aria-label="项目导航">
+      <button id="close-directory" class="icon-button directory-close" type="button" aria-label="关闭项目导航">×</button>
+      <a class="brand" href="#home" aria-label="Project Watch 首页"><span class="brand-mark">◈</span><span>Project Watch<small>项目监控工作台</small></span></a>
+      <nav class="primary-nav" aria-label="主导航"><a href="#home"><span aria-hidden="true">▦</span>关注的项目</a></nav>
+      <div class="rail-heading"><span>最近项目</span><span id="project-count">0</span></div>
+      <button id="new-project" class="rail-create" type="button">＋ 新建项目</button>
+      <input id="project-directory-search" class="search-input" type="search" placeholder="查找项目" aria-label="查找项目" maxlength="100">
+      <nav id="project-list" class="project-list" aria-label="项目列表"></nav>
+      <button id="project-more" class="project-more" type="button" hidden>加载更多项目 ↓</button>
+      <a class="settings-link" href="#settings">⚙ 设置</a>
+      <div class="rail-foot"><span class="status-dot"></span><span id="environment-label">本机预览 · 未接入机构数据</span><button id="logout-button" class="logout-button" type="button" hidden>退出登录</button></div>
+    </aside>
+
+    <main class="workspace" id="work-area" tabindex="-1">
+      <div class="client-topbar"><button id="toggle-nav" class="icon-button" aria-label="收起导航" aria-expanded="true">☰</button><span id="client-breadcrumb">工作台</span><span class="topbar-local">本机工作空间</span></div>
+      <section id="client-screen" class="client-screen" aria-live="polite"></section>
+      <section id="welcome" class="welcome">
+        <p class="eyebrow">PROJECT WATCH / 研究台</p>
+        <h1>从一个项目名，<br>开始关注变化。</h1>
+        <p class="welcome-copy">本机开发预览仅用合成材料测试；真实项目可先只填名称查看监控入口。</p>
+        <button id="welcome-create" class="primary-button" type="button">建立第一个项目 <span aria-hidden="true">↗</span></button>
+        <div class="welcome-rule"><span>01 / 建立项目</span><span>02 / 收集材料</span><span>03 / 核对事实</span></div>
+      </section>
+
+      <section id="project-screen" class="project-screen" hidden>
+        <header class="project-header">
+          <a class="project-back" href="#home">← 全部项目</a>
+          <div class="project-title-row"><div><h1 id="project-name"></h1><p id="project-number" class="project-subtitle"></p></div><div class="project-header-actions"><button id="identity-status" class="identity-pill" type="button" aria-label="查看项目主体核对"></button><button id="project-members" class="secondary-button" type="button" hidden>项目成员</button></div></div>
+          <p id="project-created" class="project-date"></p>
+          <div class="project-command"><label>切换项目 <select id="project-switch" aria-label="切换项目"></select></label><button id="project-ai" class="secondary-button" type="button">AI 助手</button><button id="project-add-file" class="primary-button" type="button">添加资料</button></div>
+        </header>
+        <nav class="tabs" aria-label="项目工作区">
+          <button type="button" data-view="overview" data-primary aria-current="page">总览</button>
+          <button type="button" data-view="internal" data-primary>内部信息</button>
+          <button type="button" data-view="external" data-primary>外部监控 <span id="monitor-tab-count"></span></button>
+          <button type="button" data-view="materials" data-primary>资料 <span id="material-tab-count"></span></button>
+        </nav>
+        <div class="content-layout">
+          <div class="content-body">
+            <nav id="internal-navigation" class="internal-navigation" aria-label="内部信息章节" hidden>
+              <button type="button" data-view="internal">变化</button>
+              <button type="button" data-view="business">业务</button>
+              <button type="button" data-view="finance">财务</button>
+              <details class="internal-more"><summary>更多</summary><div><button type="button" data-view="review">核对资料 <span id="review-tab-count"></span></button><button type="button" data-view="report">正式简报 ↗</button></div></details>
+            </nav>
+            <section id="view-internal" class="view" hidden>
+              <section id="internal-intake" class="internal-intake" aria-label="添加公司材料">
+                <div><h2>新材料，拖到这里</h2><p id="internal-intake-note">仅接收合成测试资料。</p></div>
+                <button id="internal-upload" type="button" class="secondary-button">选择文件</button>
+              </section>
+              <div id="internal-changes"></div>
+              <div id="company-internal"></div>
+            </section>
+            <section id="view-changes" class="view" hidden><div id="company-changes"></div></section>
+            <section id="view-business" class="view" hidden><div class="section-intro"><h2>业务与经营</h2><p class="muted">产品、经营进展与同行情况。</p></div></section>
+            <section id="view-finance" class="view" hidden><div class="section-intro"><h2>财务情况</h2><p class="muted">按报告期查看已核对的数据，保留每项数字的出处。</p></div></section>
+            <section id="view-overview" class="view">
+              <div class="section-intro"><p class="eyebrow">CURRENT STATE</p><h2>从这里继续</h2><p id="next-action" class="muted"></p><div class="overview-name-path"><span>只有项目名称？可先查看公开动态；发送名称前会请管理员确认。</span><button id="overview-public-monitoring" class="text-button" type="button">查看动态监控 →</button></div></div>
+              <div class="metrics" aria-label="项目当前数量"><div><strong id="source-count">0</strong><span>份材料</span></div><div><strong id="pending-count">0</strong><span>处理中</span></div><div><strong id="candidate-count">0</strong><span>待核对</span></div><div><strong id="confirmed-count">0</strong><span>已确认</span></div></div>
+              <div class="coverage-panel"><div><p class="eyebrow">RESEARCH COVERAGE</p><h3>研究覆盖</h3><p class="muted">只核对已登记的观察与材料范围，不生成项目结论。</p></div><button id="run-coverage" class="secondary-button" type="button">检查覆盖</button></div>
+              <div id="coverage-result" class="coverage-result" aria-live="polite"></div>
+              <div class="overview-lower"><div><p class="eyebrow">RECENT SOURCES</p><h3>最近材料</h3><div id="recent-materials" class="recent-materials"></div></div><div class="upload-note"><span class="upload-symbol" aria-hidden="true">↥</span><h3>材料链路演示</h3><p>此预览仅接收合成测试文件；真实项目资料请等待隔离环境验收。</p><button id="header-upload" type="button" class="text-button">选择合成文件 →</button></div></div>
+            </section>
+            <section id="view-materials" class="view" hidden><div class="section-intro section-intro-row"><div><h2>项目资料</h2><p class="muted">查找文件，阅读正文，对照新旧材料。</p></div><button id="material-upload" class="primary-button" type="button">＋ 添加资料</button></div><div class="material-toolbar"><input id="material-search" class="search-input" type="search" placeholder="搜索文件名或分类" aria-label="搜索项目资料"><select id="material-topic" aria-label="筛选资料分类"><option value="">所有分类</option></select><span id="material-filter-count" class="reading-note" aria-live="polite"></span></div><p id="material-no-results" class="reading-empty" hidden>没有匹配的资料，可调整搜索词或分类。</p><div id="material-list" class="material-list"></div></section>
+            <section id="view-monitoring" class="view" hidden>
+              <div class="section-intro"><p class="eyebrow">PROJECT ACTIVITY</p><h2>动态监控</h2><p class="muted">资料进展与公开线索分开看。新材料到手，不等于企业事实已变化。</p></div>
+              <section class="domain-monitor" aria-labelledby="domain-monitor-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">SIX DOMAINS / 六个观察域</p><h3 id="domain-monitor-title">项目监控范围</h3></div><span id="domain-monitor-status">正在读取</span></div>
+                <div id="monitoring-domains" class="monitoring-domains" aria-live="polite"></div>
+              </section>
+              <section class="competition-monitor" aria-labelledby="competition-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">COMPETITIVE SET / 同行集</p><h3 id="competition-title">竞争位置</h3></div><span id="competition-status">正在读取</span></div>
+                <p class="activity-note">可先登记名称，日后用同名关联项目并重新核对。只有期间、单位、范围及实际/预测口径一致的已确认数字才并列；证据不足时不排名。</p>
+                <form id="competition-form" class="competition-form">
+                  <label>公司名称<input name="name" maxlength="200" required placeholder="例如：某某科技"></label>
+                  <label>关联已有项目（可选）<select id="competition-link" name="linked_project_id"><option value="">仅登记名称</option></select></label>
+                  <button class="secondary-button" type="submit">加入候选</button>
+                </form>
+                <div id="competition-peers" class="competition-peers" aria-live="polite"></div>
+                <div id="competition-comparison" class="competition-comparison" aria-live="polite"></div>
+              </section>
+              <section class="activity-monitor" aria-labelledby="activity-monitor-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">REVIEWED RECORDS / 已确认记录</p><h3 id="activity-monitor-title">经营、产品与风险</h3></div><span id="activity-status">尚无记录</span></div>
+                <p class="activity-note">按登记时间排列；资料期间不等于事件发生时间。点击记录可核对原件。</p>
+                <div class="operating-metrics" aria-labelledby="operating-metrics-title">
+                  <div class="operating-metrics-head"><h4 id="operating-metrics-title">产能与产量</h4><span id="operating-metrics-status">尚无指标</span></div>
+                  <p class="activity-note">不同产品、期间或单位不相加；利用率只显示原件记录值。</p>
+                  <div id="operating-metrics-list" class="operating-metrics-list" aria-live="polite"></div>
+                </div>
+                <div id="activity-timeline" class="activity-timeline" aria-live="polite"></div>
+                <button id="activity-review" class="text-button" type="button" hidden>查看待核对记录 →</button>
+              </section>
+              <section class="watch-monitor" aria-labelledby="watch-monitor-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">FOLLOW-UP / 持续关注</p><h3 id="watch-monitor-title">风险与待核问题</h3></div><button id="watch-create" class="secondary-button" type="button">＋ 建立关注事项</button></div>
+                <p class="activity-note">关注事项引用已确认观察；提议先待审核，不自动认定风险，也不会替团队分配任务。</p>
+                <div id="watch-status" class="watch-status" aria-live="polite"></div>
+                <div id="watch-items" class="watch-items" aria-live="polite"></div>
+              </section>
+              <section class="local-monitor" aria-labelledby="local-monitor-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">PRIVATE / 自托管来源</p><h3 id="local-monitor-title">资料进展</h3></div><span id="local-material-status">尚无材料</span></div>
+                <div id="local-material-updates" class="local-material-updates"></div>
+                <button id="local-material-all" class="text-button" type="button">查看全部材料 →</button>
+              </section>
+              <section class="metric-monitor" aria-labelledby="metric-monitor-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">EVIDENCE / 已确认记录</p><h3 id="metric-monitor-title">指标记录</h3></div><span id="metric-series-status">尚无指标</span></div>
+                <p class="metric-note">同口径记录并列展示。仅对相邻两年的已确认合并财务实际值计算变动；同期多值、非正基期或资料缺口不推算。</p>
+                <div id="metric-series-list" class="metric-series-list"></div>
+                <p id="metric-unsequenced" class="metric-unsequenced" hidden></p>
+              </section>
+              <section class="financial-monitor" aria-labelledby="financial-screen-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">FINANCIAL / 财务勾稽</p><h3 id="financial-screen-title">财务核验</h3></div><span id="financial-screen-status">等待已确认数据</span></div>
+                <p class="financial-note">只读取已确认、可定位的合并口径年度实际数。异常是复核线索，不是造假结论。</p>
+                <div id="financial-screen-list" class="financial-screen-list" aria-live="polite"></div>
+              </section>
+              <section class="public-monitor" aria-labelledby="public-monitor-title">
+                <div class="monitor-track-head"><div><p class="eyebrow">PUBLIC / 公开来源</p><h3 id="public-monitor-title">公开线索</h3></div><button id="add-monitoring" class="secondary-button" type="button">＋ 添加 RSS 来源</button></div>
+              <div id="public-search-starter" class="public-search-starter"><div><strong>从项目名称开始</strong><p>试查公开新闻，不用先找订阅地址。开启前会确认外部发送范围。</p></div><button id="start-public-search" class="primary-button" type="button">开启公开新闻试查 →</button></div>
+              <div class="monitoring-meta"><span id="monitoring-state">尚未设置来源</span><button id="refresh-monitoring" class="text-button" type="button">刷新状态 ↻</button></div>
+              <div id="monitoring-plans" class="monitoring-plans"></div>
+              <div class="monitoring-timeline-head"><div><p class="eyebrow">FIRST SEEN / 首次发现</p><h3>候选新闻</h3></div><span>按发现时间排列，未经事实核验</span></div>
+              <div id="monitoring-signals" class="monitoring-signals"></div>
+              </section>
+            </section>
+            <section id="view-review" class="view" hidden><div class="section-intro"><p class="eyebrow">EVIDENCE REVIEW</p><h2>事实核对</h2><p class="muted">新材料只提示同主题的旧判断值得回看，不代表内容冲突；候选内容仍需人工核对。</p></div><h3 class="list-heading">新材料涉及的旧判断</h3><div id="impact-list" class="observation-list"></div><div class="review-heading"><h3 class="list-heading">待核对摘录</h3><div id="batch-review-toolbar" class="batch-review-toolbar" hidden><span id="batch-review-count"></span><button id="batch-review-open" type="button" class="text-button">批量核对 →</button></div></div><div id="candidate-list" class="observation-list"></div><h3 class="list-heading">已确认</h3><div id="confirmed-list" class="observation-list"></div><h3 class="list-heading">已驳回</h3><div id="rejected-list" class="observation-list"></div><h3 class="list-heading">复核记录</h3><div id="reviewed-impact-list" class="observation-list"></div></section>
+            <section id="view-report" class="view" hidden>
+              <div class="report-toolbar"><p class="eyebrow">PERIODIC BRIEF / 内部工作底稿</p><div><button id="report-refresh" class="text-button" type="button">刷新快照 ↻</button><button id="report-print" class="secondary-button" type="button">打印 / 保存 PDF</button></div></div>
+              <article id="report-content" class="report-document" aria-live="polite"><p class="muted">打开简报后读取当前已确认记录。</p></article>
+            </section>
+          </div>
+          <aside id="reader" class="reader" aria-label="资料阅读" hidden><div class="reader-header"><div><p id="reader-label" class="reader-label">提取正文 · 非原版排版</p><h2 id="reader-title"></h2></div><button id="close-reader" class="icon-button" type="button" aria-label="关闭资料阅读">×</button></div><details id="reader-source-info" class="reader-source-info"><summary>来源信息</summary><p id="reader-meta" class="reader-meta"></p></details><div id="reader-content" class="reader-content"></div></aside>
+        </div>
+      </section>
+      <div id="drop-overlay" class="drop-overlay" hidden><div><span aria-hidden="true">↥</span><strong>松开以添加材料</strong><small>本机预览仅用合成文件；真实资料暂勿拖入</small></div></div>
+      <input id="file-input" type="file" accept=".txt,.pdf,.docx,.pptx,.xlsx,.xls" multiple hidden>
+      <section id="upload-status" class="upload-status" aria-label="材料上传进度" hidden>
+        <div class="upload-status-top"><span>资料接入</span><button id="upload-status-close" class="upload-status-close" type="button" aria-label="收起上传结果" hidden>×</button></div>
+        <strong id="upload-status-title" aria-live="polite"></strong>
+        <p id="upload-status-detail"></p>
+        <progress id="upload-progress" max="1" value="0" aria-label="本批材料上传进度"></progress>
+        <details id="upload-failures" hidden><summary id="upload-failures-title"></summary><ul id="upload-failures-list"></ul></details>
+      </section>
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    </main>
+  </div>
+
+  <dialog id="create-dialog" class="dialog"><form id="create-form"><div class="dialog-top"><p class="eyebrow">NEW PROJECT</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2>建立项目</h2><p class="muted">先给项目一个名字，身份和正式事实稍后核对。</p><label for="project-input">项目名称</label><input id="project-input" name="name" maxlength="200" required autocomplete="off" placeholder="例如：某某科技"><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">建立项目</button></div></form></dialog>
+  <dialog id="identity-dialog" class="dialog identity-dialog" aria-labelledby="identity-title"><div class="dialog-top"><p class="eyebrow">ENTITY / 人工核对</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="identity-title">项目主体</h2><p id="identity-project-name" class="muted"></p><div id="identity-current" class="identity-current"></div><div id="identity-history" class="identity-history"></div><p id="identity-readonly" class="muted" hidden></p><form id="identity-verify-form" class="identity-form" hidden><h3>核对法律主体</h3><p class="muted">这是一条人工核对记录，不会更改已开启的公开检索或自动外发名称。</p><label for="identity-legal-name">法律主体全称</label><input id="identity-legal-name" required minlength="2" maxlength="200" autocomplete="off" placeholder="以所引资料为准"><label for="identity-registration-code">登记代码（可选）</label><input id="identity-registration-code" maxlength="60" autocomplete="off"><label for="identity-evidence-type">核对依据</label><select id="identity-evidence-type"><option value="url">公开网页引用</option><option value="source">项目原件定位</option></select><div id="identity-url-fields"><label for="identity-evidence-url">公开 HTTPS 链接</label><input id="identity-evidence-url" type="url" maxlength="1000" placeholder="https://example.org/company"></div><div id="identity-source-fields" hidden><label for="identity-source">项目原件</label><select id="identity-source"></select><label for="identity-locator">原件位置</label><select id="identity-locator"></select></div><label for="identity-note">核对说明</label><textarea id="identity-note" required minlength="5" maxlength="500" rows="3" placeholder="说明名称如何对应到该主体"></textarea><button type="submit" class="primary-button">记录核对</button></form><form id="identity-reopen-form" class="identity-form" hidden><h3>重新打开核对</h3><p class="muted">现有记录会保留，项目恢复为未核验。公开来源计划不受影响。</p><label for="identity-reopen-note">原因</label><textarea id="identity-reopen-note" required minlength="5" maxlength="500" rows="3"></textarea><button type="submit" class="secondary-button">恢复为未核验</button></form></dialog>
+  <dialog id="review-dialog" class="dialog"><form id="review-form"><div class="dialog-top"><p class="eyebrow">HUMAN REVIEW</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2>核对这条事实</h2><p id="review-statement" class="review-statement"></p><p id="review-metric" class="review-metric" hidden></p><p id="review-evidence" class="review-evidence"></p><button id="review-open-source" type="button" class="text-button">阅读证据定位 ↗</button><div id="preview-reviewer"><label for="reviewer-input">核对人标识</label><input id="reviewer-input" name="reviewer" required maxlength="100" autocomplete="off" placeholder="姓名或团队标识"><p class="preview-warning">当前是本机开发预览，标识未经过登录认证，请勿作为正式审核使用。</p></div><p id="team-reviewer" class="muted" hidden></p><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button id="review-reject" type="button" class="secondary-button">驳回候选</button><button type="submit" class="primary-button">确认候选事实</button></div></form></dialog>
+  <dialog id="watch-create-dialog" class="dialog" aria-labelledby="watch-create-title"><form id="watch-create-form"><div class="dialog-top"><p class="eyebrow">FOLLOW-UP / CANDIDATE</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="watch-create-title">建立关注事项</h2><p class="muted">从一条已确认观察出发，写清接下来要核对的问题。提交后还需审核。</p><label for="watch-observation">依据的观察</label><select id="watch-observation" required></select><label for="watch-title">事项标题</label><input id="watch-title" maxlength="200" required placeholder="例如：核对主要客户续约"><label for="watch-question">待核问题</label><textarea id="watch-question" maxlength="1000" required rows="3" placeholder="具体需要取得什么、核对什么？"></textarea><label for="watch-owner">负责人（可选）</label><input id="watch-owner" maxlength="128" placeholder="团队成员或工作组"><label for="watch-due">核对日期（可选）</label><input id="watch-due" type="date"><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">提交待审核</button></div></form></dialog>
+  <dialog id="watch-review-dialog" class="dialog" aria-labelledby="watch-review-title"><form id="watch-review-form"><div class="dialog-top"><p class="eyebrow">FOLLOW-UP / HUMAN REVIEW</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="watch-review-title">核对关注事项</h2><p id="watch-review-question" class="review-statement"></p><p id="watch-review-evidence" class="review-evidence"></p><button id="watch-review-source" type="button" class="text-button">阅读依据原件 ↗</button><label for="watch-review-action">审核结果</label><select id="watch-review-action"><option value="watch">持续关注</option><option value="require_action">需要推进</option><option value="reject">驳回候选</option></select><label for="watch-review-note">审核说明（可选）</label><textarea id="watch-review-note" maxlength="500" rows="3"></textarea><div id="watch-preview-reviewer"><label for="watch-reviewer">核对人标识</label><input id="watch-reviewer" maxlength="200" required autocomplete="off"><p class="preview-warning">本机预览标识未认证，不作为正式审核。</p></div><p id="watch-team-reviewer" class="muted" hidden></p><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">保存审核</button></div></form></dialog>
+  <dialog id="watch-change-dialog" class="dialog" aria-labelledby="watch-change-title"><form id="watch-change-form"><div class="dialog-top"><p class="eyebrow">FOLLOW-UP / UPDATE</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="watch-change-title">更新关注事项</h2><p class="muted">更新会先进入待审核；当前简报在审核前保持不变。</p><label for="watch-change-target">处理状态</label><select id="watch-change-target" required><option value="watching">持续关注</option><option value="action_required">需要推进</option><option value="resolved">本轮处理完成</option></select><label for="watch-change-question">待核问题</label><textarea id="watch-change-question" required maxlength="1000" rows="3"></textarea><label for="watch-change-owner">负责人（可选）</label><input id="watch-change-owner" maxlength="128"><label for="watch-change-due">核对日期（可选）</label><input id="watch-change-due" type="date"><label for="watch-change-evidence">新增依据（可选）</label><select id="watch-change-evidence"><option value="">沿用当前依据</option></select><label for="watch-change-reason">变更原因</label><textarea id="watch-change-reason" required minlength="5" maxlength="500" rows="3" placeholder="写明本次变化，不将处理完成视为风险消失"></textarea><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">提交待审核</button></div></form></dialog>
+  <dialog id="watch-change-review-dialog" class="dialog" aria-labelledby="watch-change-review-title"><form id="watch-change-review-form"><div class="dialog-top"><p class="eyebrow">FOLLOW-UP / REVIEW UPDATE</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="watch-change-review-title">核对事项变更</h2><p id="watch-change-review-summary" class="review-statement"></p><p id="watch-change-review-evidence" class="review-evidence"></p><button id="watch-change-review-source" type="button" class="text-button">阅读本次依据 ↗</button><label for="watch-change-review-action">审核结果</label><select id="watch-change-review-action"><option value="accept">接受变更</option><option value="reject">驳回变更</option></select><label for="watch-change-review-note">审核说明（可选）</label><textarea id="watch-change-review-note" maxlength="500" rows="3"></textarea><div id="watch-change-preview-reviewer"><label for="watch-change-reviewer">核对人标识</label><input id="watch-change-reviewer" maxlength="200" required autocomplete="off"><p class="preview-warning">本机预览标识未认证，不作为正式审核。</p></div><p id="watch-change-team-reviewer" class="muted" hidden></p><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">保存审核</button></div></form></dialog>
+  <dialog id="watch-history-dialog" class="dialog" aria-labelledby="watch-history-title"><div class="dialog-top"><p class="eyebrow">FOLLOW-UP / HISTORY</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="watch-history-title">处理记录</h2><div id="watch-history-list" class="watch-history-list"></div><div class="dialog-actions"><button type="button" data-close class="secondary-button">关闭</button></div></dialog>
+  <dialog id="batch-review-dialog" class="dialog batch-review-dialog" aria-labelledby="batch-review-title"><form id="batch-review-form"><div class="dialog-top"><p class="eyebrow">HUMAN REVIEW / BATCH</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><div class="batch-review-body"><h2 id="batch-review-title">批量核对</h2><p class="muted">逐条阅读来源定位并选择确认或驳回。所有决定一次提交；任一条已变化，整批不生效。</p><div id="batch-review-list" class="batch-review-list"></div><div id="batch-preview-reviewer"><label for="batch-reviewer-input">核对人标识</label><input id="batch-reviewer-input" required maxlength="100" autocomplete="off" placeholder="姓名或团队标识"><p class="preview-warning">本机预览标识未认证，不作为正式审核。</p></div><p id="batch-team-reviewer" class="muted" hidden></p></div><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">提交核对</button></div></form></dialog>
+  <dialog id="metric-dialog" class="dialog metric-dialog"><form id="metric-form">
+    <div class="dialog-top"><p class="eyebrow">METRIC / 来源候选</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div>
+    <h2>记录一个指标</h2><p class="muted">先作为候选保存；请核对表头，确认这是实际、预测还是预算数据。</p>
+    <p id="metric-proof" class="review-evidence"></p>
+    <div class="metric-fields">
+      <div><label for="metric-subject">研究方向</label><select id="metric-subject" required><option value="财务表现">财务表现</option><option value="资本与持仓">资本与持仓</option><option value="经营情况">经营情况</option><option value="产品与技术">产品与技术</option><option value="公司与团队">公司与团队</option></select></div>
+      <div><label for="metric-name">指标名称</label><input id="metric-name" maxlength="80" required autocomplete="off" placeholder="例如：营业收入"></div>
+      <div><label for="metric-number">数值</label><input id="metric-number" inputmode="decimal" maxlength="48" required autocomplete="off" placeholder="例如：1200.5"></div>
+      <div><label for="metric-unit">单位</label><input id="metric-unit" maxlength="32" required autocomplete="off" placeholder="例如：万元"></div>
+      <div><label for="metric-period">期间</label><input id="metric-period" maxlength="7" required autocomplete="off" placeholder="2025 / 2025-Q4 / 2025-12"></div>
+      <div><label for="metric-basis">数据口径</label><select id="metric-basis" required><option value="unknown">未判定</option><option value="actual">实际</option><option value="forecast">预测</option><option value="budget">预算</option></select></div>
+      <div><label for="metric-scope">范围（可选）</label><input id="metric-scope" maxlength="100" autocomplete="off" placeholder="例如：合并报表"></div>
+    </div>
+    <p id="capital-metric-hint" class="muted" hidden>资本指标可填“本机构投资金额”“本机构持股比例”“公司融资额”或“投后估值”；范围分别填“本机构”或“项目公司”。公司融资不等于本机构持仓。</p>
+    <div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">保存待核对</button></div>
+  </form></dialog>
+  <dialog id="holding-dialog" class="dialog metric-dialog" aria-labelledby="holding-title"><form id="holding-form">
+    <div class="dialog-top"><p class="eyebrow">POSITION / 来源候选</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div>
+    <h2 id="holding-title">登记基金持仓</h2><p class="muted">只记录这份原件明确写出的本机构持仓。公司融资额不能填在这里；提交后仍需另一人审核。</p>
+    <p id="holding-proof" class="review-evidence"></p>
+    <div class="metric-fields">
+      <div><label for="holding-fund">投资基金</label><input id="holding-fund" required maxlength="200" autocomplete="off" placeholder="以原件中的基金名称为准"></div>
+      <div><label for="holding-date">统计日</label><input id="holding-date" type="date" required></div>
+      <div><label for="holding-cost">累计投资成本（万元）</label><input id="holding-cost" inputmode="decimal" placeholder="原件未写可留空"></div>
+      <div><label for="holding-pct">持股比例（%）</label><input id="holding-pct" inputmode="decimal" placeholder="原件未写可留空"></div>
+      <div><label for="holding-value">当前持仓价值（万元）</label><input id="holding-value" inputmode="decimal" placeholder="原件未写可留空"></div>
+    </div>
+    <p class="muted">数字和单位都必须出现在上方这一处原件片段中；不同基金不自动合计。</p>
+    <div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">提交待审核</button></div>
+  </form></dialog>
+  <dialog id="holding-review-dialog" class="dialog" aria-labelledby="holding-review-title"><form id="holding-review-form">
+    <div class="dialog-top"><p class="eyebrow">POSITION / 人工审核</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div>
+    <h2 id="holding-review-title">核对持仓快照</h2><p id="holding-review-summary" class="review-statement"></p><p id="holding-review-source" class="review-evidence"></p><button id="holding-review-open-source" type="button" class="text-button">阅读依据原件 ↗</button>
+    <div id="holding-preview-reviewer"><label for="holding-reviewer">核对人标识</label><input id="holding-reviewer" maxlength="200" autocomplete="off"><p class="preview-warning">本机预览标识未认证，不作为正式审核。</p></div>
+    <label for="holding-review-note">审核说明（可选）</label><textarea id="holding-review-note" maxlength="500" rows="3"></textarea>
+    <div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button id="holding-review-reject" type="button" class="secondary-button">驳回</button><button type="submit" class="primary-button">确认持仓</button></div>
+  </form></dialog>
+  <dialog id="impact-dialog" class="dialog"><form id="impact-form"><div class="dialog-top"><p class="eyebrow">MATERIAL REVIEW</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><div class="impact-dialog-body"><h2>回看旧判断</h2><p id="impact-statement" class="review-statement"></p><p id="impact-evidence" class="review-evidence"></p><button id="impact-open-source" class="text-button" type="button">阅读新材料 ↗</button><label for="impact-resolution">复核结果</label><select id="impact-resolution" required><option value="unchanged">保留原判断</option><option value="follow_up">继续查证</option></select><label for="impact-note">你的依据或下一步</label><textarea id="impact-note" required maxlength="500" rows="4" placeholder="记录为什么保留，或还需要核实什么"></textarea><div id="impact-preview-reviewer"><label for="impact-reviewer">核对人标识</label><input id="impact-reviewer" maxlength="200" required autocomplete="off" placeholder="姓名或团队标识"><p class="preview-warning">本机预览的标识未经认证。</p></div><p id="impact-team-reviewer" class="muted" hidden></p></div><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">保存复核记录</button></div></form></dialog>
+  <dialog id="monitoring-dialog" class="dialog"><form id="monitoring-form"><div class="dialog-top"><p class="eyebrow">PUBLIC SOURCE</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2>添加公开来源</h2><p class="muted">填写 RSS 或 Atom 的公开 HTTPS 地址。创建后默认关闭定时检查，你可以先手动运行一次。</p><label for="monitoring-url">订阅地址</label><input id="monitoring-url" name="target" type="url" pattern="https://.*" maxlength="2048" required autocomplete="off" placeholder="https://example.org/news.xml"><label for="monitoring-cadence">检查间隔</label><select id="monitoring-cadence" name="cadence"><option value="1440">每天</option><option value="10080">每周</option><option value="60">每小时</option></select><p class="preview-warning">仅适合公开、无需登录的订阅源；当前本机预览没有团队身份认证。</p><div class="dialog-actions"><button type="button" data-close class="secondary-button">取消</button><button type="submit" class="primary-button">添加来源</button></div></form></dialog>
+  <dialog id="public-search-dialog" class="dialog"><form id="public-search-form"><div class="dialog-top"><p class="eyebrow">PUBLIC NEWS / OPT IN</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2>开启公开新闻试查</h2><p class="muted">将发送的项目名称</p><p id="public-search-name" class="public-search-name"></p><label for="public-search-provider">公开来源</label><select id="public-search-provider"><option value="gdelt">GDELT · 免费试查</option><option value="brave">Brave News · API Key / 月度额度</option></select><p id="public-search-disclosure" class="muted"></p><p id="public-search-budget" class="preview-warning"></p><div class="dialog-actions"><button type="button" data-close class="secondary-button">暂不开启</button><button type="submit" class="primary-button">确认发送并开启</button></div></form></dialog>
+  <dialog id="members-dialog" class="dialog members-dialog" aria-labelledby="members-title"><div class="dialog-top"><p class="eyebrow">TEAM / PROJECT ACCESS</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="members-title">项目成员</h2><p id="members-project" class="muted"></p><p class="muted">这里只管理当前项目的权限。机构管理员可进入全部项目，不列在成员名单中。</p><div id="members-list" class="members-list" aria-live="polite"></div><button id="members-more" class="text-button" type="button" hidden>加载更多成员 ↓</button><form id="member-assign-form" class="member-form"><h3>添加已有账号</h3><label for="member-username">账号名</label><input id="member-username" required minlength="3" maxlength="80" autocomplete="off" placeholder="同事的团队账号"><label for="member-role">项目权限</label><select id="member-role"><option value="viewer">查看</option><option value="analyst">分析与提交候选</option><option value="reviewer">审核</option><option value="admin">项目管理</option></select><button class="primary-button" type="submit">加入项目</button></form><details id="member-create-details" class="member-create-details" hidden><summary>建立新团队账号</summary><form id="member-create-form" class="member-form"><p class="muted">仅机构管理员可建立账号。请通过受信任方式交付初始密码；系统不会代发。</p><label for="new-member-username">新账号名</label><input id="new-member-username" required minlength="3" maxlength="80" autocomplete="off" placeholder="name@example.test"><label for="new-member-password">初始密码</label><input id="new-member-password" required type="password" minlength="12" maxlength="128" autocomplete="new-password"><label for="new-member-role">项目权限</label><select id="new-member-role"><option value="viewer">查看</option><option value="analyst">分析与提交候选</option><option value="reviewer">审核</option><option value="admin">项目管理</option></select><button class="secondary-button" type="submit">建立并加入</button></form></details></dialog>
+  <dialog id="member-revoke-dialog" class="dialog" aria-labelledby="member-revoke-title"><div class="dialog-top"><p class="eyebrow">TEAM / REMOVE ACCESS</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div><h2 id="member-revoke-title">移除项目权限</h2><p id="member-revoke-name" class="review-statement"></p><p class="muted">仅移除这个项目的访问权，不删除团队账号。保存后立即生效。</p><div class="dialog-actions"><button data-close class="secondary-button" type="button">取消</button><button id="member-revoke-confirm" class="primary-button" type="button">确认移除</button></div></dialog>
+  <dialog id="ai-extraction-dialog" class="dialog metric-dialog" aria-labelledby="ai-extraction-title">
+    <form id="ai-extraction-form">
+      <div class="dialog-top"><p class="eyebrow">AI / 当前片段</p><button class="icon-button" data-close type="button" aria-label="关闭">×</button></div>
+      <h2 id="ai-extraction-title">提取一条待核对记录</h2>
+      <p id="ai-extraction-destination" class="muted"></p>
+      <p id="ai-extraction-source" class="muted"></p>
+      <p id="ai-extraction-excerpt" class="review-evidence"></p>
+      <p class="muted">仅发送以上原文片段及来源标识，不发送整份文件或其他项目材料。结果进入待核对，不会自动确认。可能消耗模型额度。</p>
+      <label><input id="ai-extraction-consent" type="checkbox" required> 我同意将以上片段发送给该模型服务</label>
+      <p id="ai-extraction-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions"><button type="button" data-close class="secondary-button">关闭</button><button id="ai-extraction-submit" type="submit" class="primary-button">确认发送并提取</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
