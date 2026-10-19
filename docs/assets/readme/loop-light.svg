@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 380" width="1280" height="380" role="img" aria-label="监控循环：收集、阅读、判断、修订，再按新的范围收集。">
+<style>
+  .pulse { opacity: .9; }
+  @media (prefers-reduced-motion: reduce) { .pulse { display: none; } }
+</style>
+<rect width="1280" height="380" rx="18" fill="#fbf9f3"/>
+<rect x=".5" y=".5" width="1279" height="379" rx="17.5" fill="none" stroke="#e1d9c8"/>
+<text x="64" y="44" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="16" fill="#686257">监控循环 · 每一轮都留下来源与版本</text>
+<circle r="5" fill="#9a7838" class="pulse"><animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear" path="M189.0,159.0 L1091.0,159.0 L1091.0,254 C1091.0,318 1031.0,326 640.0,326 S189.0,318 189.0,256"/></circle>
+<rect x="64.0" y="70" width="250" height="178" rx="12" fill="#f4efe4" stroke="#e1d9c8"/>
+<text x="88.0" y="108" font-family="-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="600" letter-spacing="2.4" fill="#9a7838">01 · COLLECT</text>
+<text x="88.0" y="156" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="34" font-weight="600" fill="#15171c">收集</text>
+<text x="88.0" y="194" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">内部材料与公开来源</text>
+<text x="88.0" y="220" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">BP、经营更新、新闻、政策</text>
+<path d="M322.0,159.0 L354.7,159.0" stroke="#686257" stroke-width="1.4"/>
+<path d="M347.7,154.0 L356.7,159.0 L347.7,164.0" fill="none" stroke="#686257" stroke-width="1.4"/>
+<rect x="364.7" y="70" width="250" height="178" rx="12" fill="#f4efe4" stroke="#e1d9c8"/>
+<text x="388.7" y="108" font-family="-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="600" letter-spacing="2.4" fill="#9a7838">02 · READ</text>
+<text x="388.7" y="156" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="34" font-weight="600" fill="#15171c">阅读</text>
+<text x="388.7" y="194" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">解析原文，逐段保留出处</text>
+<text x="388.7" y="220" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">记下期间、版本与口径</text>
+<path d="M622.7,159.0 L655.3,159.0" stroke="#686257" stroke-width="1.4"/>
+<path d="M648.3,154.0 L657.3,159.0 L648.3,164.0" fill="none" stroke="#686257" stroke-width="1.4"/>
+<rect x="665.3" y="70" width="250" height="178" rx="12" fill="#f4efe4" stroke="#e1d9c8"/>
+<text x="689.3" y="108" font-family="-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="600" letter-spacing="2.4" fill="#9a7838">03 · JUDGE</text>
+<text x="689.3" y="156" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="34" font-weight="600" fill="#15171c">判断</text>
+<text x="689.3" y="194" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">按研究问题整理证据</text>
+<text x="689.3" y="220" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">缺失的信息不填造</text>
+<path d="M923.3,159.0 L956.0,159.0" stroke="#686257" stroke-width="1.4"/>
+<path d="M949.0,154.0 L958.0,159.0 L949.0,164.0" fill="none" stroke="#686257" stroke-width="1.4"/>
+<rect x="966.0" y="70" width="250" height="178" rx="12" fill="#f4efe4" stroke="#e1d9c8"/>
+<text x="990.0" y="108" font-family="-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="600" letter-spacing="2.4" fill="#9a7838">04 · REVISE</text>
+<text x="990.0" y="156" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="34" font-weight="600" fill="#15171c">修订</text>
+<text x="990.0" y="194" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">依新证据调整监控范围</text>
+<text x="990.0" y="220" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15.5" fill="#47484c">暂停、恢复都由你决定</text>
+<path id="ret" d="M1091.0,254 C1091.0,318 1031.0,326 640.0,326 S189.0,318 189.0,256" fill="none" stroke="#9a7838" stroke-width="1.4" stroke-dasharray="5 6"/>
+<path d="M184.0,265 L189.0,256 L194.0,265" fill="none" stroke="#9a7838" stroke-width="1.4"/>
+<text x="640.0" y="352" text-anchor="middle" font-family="'Noto Serif SC','Source Han Serif SC','Songti SC','STSong',Georgia,'Times New Roman',serif" font-size="15" fill="#686257">新证据改变关注点，下一轮按新的范围收集</text>
+</svg>
