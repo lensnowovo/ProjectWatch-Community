@@ -116,3 +116,20 @@ def test_unrelated_done_job_never_masks_external_failure_and_reads_do_not_schedu
         assert client.get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'failed'
         assert client.get('/api/studio/digest').json()['incomplete'][0]['state'] == 'failed'
     assert store.jobs(pid) == before
+
+
+def test_round_number_counts_external_rounds_not_other_work(app):
+    from project_watch.studio import progress
+
+    store, pid = seed(app)
+    assert progress.read(store, pid)['round'] == 0
+    complete(store, pid)
+    store.enqueue(pid, 'brief')
+    assert progress.read(store, pid)['round'] == 1
+    complete(store, pid)
+    assert progress.read(store, pid)['round'] == 2
+    # A follow-up continues its round; asking for another external round meanwhile joins it.
+    store.enqueue(pid, 'external_followup')
+    store.enqueue(pid, 'external')
+    assert progress.read(store, pid)['round'] == 2
+    assert progress.read(store, 'missing-project')['round'] == 0

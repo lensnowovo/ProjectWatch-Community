@@ -32,12 +32,17 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
                              (project_id,)).fetchone()
         if not project:
             return _result('inactive', None, 0, 0)
-        job = db.execute("SELECT status,kind FROM studio_jobs WHERE project_id=? AND kind IN ('external','external_followup') "
+        job = db.execute("SELECT id,status,kind FROM studio_jobs WHERE project_id=? AND kind IN ('external','external_followup') "
                          "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
         plan = db.execute('SELECT data FROM studio_plan WHERE project_id=?', (project_id,)).fetchone()
         pending = db.execute('SELECT count(*) FROM studio_items WHERE project_id=? AND triaged=0', (project_id,)).fetchone()[0]
+        # One external job opens one round (its follow-up finishes it); recovery reuses the same job id.
+        rounds = db.execute("SELECT count(*) FROM studio_jobs WHERE project_id=? AND kind='external'", (project_id,)).fetchone()[0]
         plan_data = json.loads(plan[0]) if plan else {}
         report = plan_data.get('last_report') or {}
+        dsh_coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_coverage'",
+                                 (job['id'],)).fetchone() if job else None
+        dsh_partial = bool(dsh_coverage and json.loads(dsh_coverage[0]).get('partial'))
     rows = [row for row in report.values() if isinstance(row, dict)]
     failures = sum(len(row.get('errors') or []) for row in rows)
     checked = sum(row.get('checked', 0) for row in rows if type(row.get('checked', 0)) is int)
@@ -51,7 +56,7 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         state = 'partial'
     elif job and job['status'] in ('queued', 'running', 'failed'):
         state = job['status']
-    elif pending or failures:
+    elif pending or failures or dsh_partial:
         state = 'partial'
     elif not completed_at or not checked:
         state = 'unobserved'
@@ -64,6 +69,7 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
             state = 'unobserved'
     result = _result(state, completed_at, failures, pending)
     result['first_result_at'] = plan_data.get('first_result_at')
+    result['round'] = rounds
     if state == 'partial' and plan_data.get('collection_phase') == 'first':
         result.update(label='首轮已整理', empty_text='竞品、行业等信息仍在补全。')
     return result
@@ -73,5 +79,5 @@ def _result(state, completed_at, failures, pending):
     label, empty_text = COPY[state]
     return {'state': state, 'label': label, 'empty_text': empty_text,
             'completed_at': completed_at, 'source_failures': failures, 'pending_items': pending,
-            'first_result_at': None,
+            'first_result_at': None, 'round': 0,
             'full_coverage': False}

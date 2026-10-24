@@ -9,9 +9,14 @@ import json
 
 from project_watch.monitor_profile_store import (
     PROFILE_FIELDS as PROFILE_FIELDS,
+)
+from project_watch.monitor_profile_store import (
     ensure_profile_schema as ensure_profile_schema,
+)
+from project_watch.monitor_profile_store import (
     validate_edit as validate_edit,
 )
+
 FIELD_SUBJECTS = {
     "business": ("公司业务", "公司与团队"),
     "stage": ("发展阶段",),

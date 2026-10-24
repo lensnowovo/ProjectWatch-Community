@@ -231,9 +231,15 @@ class ObjectStore:
     def facts(self, project_id: str, subject_id: str, *, include_internal: bool = True) -> list[dict]:
         self.get(project_id, subject_id, include_internal=include_internal)
         with closing(self.store._connect()) as db:
-            records = [json.loads(r[0]) for r in db.execute(
-                "SELECT record FROM studio_fact_records WHERE project_id=? AND subject_id=? "
-                "AND (? OR visibility='public') ORDER BY id LIMIT 500", (project_id, subject_id, include_internal))]
+            # One live, project-scoped read, not one connection per fact. LEFT
+            # JOIN retains facts whose dependency is missing; do not cache this
+            # across requests because withdrawal/identity edits invalidate it.
+            records = [{**json.loads(r[0]), 'dependency': json.loads(r[1]) if r[1] else None}
+                       for r in db.execute(
+                "SELECT f.record,d.record FROM studio_fact_records f "
+                "LEFT JOIN studio_analysis_dependencies d ON d.project_id=f.project_id "
+                "AND d.artifact_key='fact:' || f.id WHERE f.project_id=? AND f.subject_id=? "
+                "AND (? OR f.visibility='public') ORDER BY f.id LIMIT 500", (project_id, subject_id, include_internal))]
         visible = []
         for record in records:
             peer_id = (record.get('attributes') or {}).get('peer_id')
@@ -242,7 +248,7 @@ class ObjectStore:
                     self.get(project_id, peer_id, include_internal=False)
                 except KeyError:
                     continue
-            visible.append({**record, 'dependency': self.evidence.dependencies.get(project_id, 'fact:' + record['id'])})
+            visible.append(record)
         return visible
 
     def public_names(self, project_id: str, *, as_of: str | None = None, kind: str | None = None) -> list[str]:

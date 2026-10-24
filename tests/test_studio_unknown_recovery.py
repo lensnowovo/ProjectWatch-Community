@@ -154,7 +154,8 @@ def test_old_task_without_binding_cannot_be_recovered_or_read_secrets(tmp_path):
         db.execute("DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage='recovery_inputs'", (job['id'],))
     preview, response, _ = authorize(TestClient(app), endpoint(pid, job))
     assert response.status_code == 409 and not preview['can_recover']
-    assert set(preview) == {'job_id', 'kind', 'version', 'can_recover', 'reason', 'requests', 'requires_duplicate_cost_consent'}
+    assert set(preview) == {'job_id', 'kind', 'version', 'can_recover', 'reason', 'requests',
+                            'requires_duplicate_cost_consent', 'mode', 'job_status', 'notice', 'continuation_job_id'}
     assert attempts == [1]
 
 

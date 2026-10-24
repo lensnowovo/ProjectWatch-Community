@@ -21,6 +21,11 @@ from scripts.release_audit import _secret_findings, audit_wheel
 from scripts.studio_runtime_boundary import legacy_closure
 
 FONTS = {'newsreader-latin-wght-normal.woff2', 'noto-serif-sc-chinese-simplified-600-normal.woff2'}
+RUNTIME_ASSETS = {
+    'project_watch/static/brand-desktop.png',
+    'project_watch/static/brand-tray.png',
+    'project_watch/studio/dsh_tools.mjs',
+}
 
 
 def _linked(path: Path) -> bool:
@@ -58,6 +63,7 @@ def inventory(repo: Path, *, profile: str = 'compat') -> dict:
             (len(parts) == 2 and parts[0] == 'static' and path.suffix in {'.html', '.css', '.js', '.mjs', '.svg'})
             or (len(parts) == 2 and parts[0] == 'migrations' and path.suffix == '.sql')
             or relative == 'project_watch/web/index.html'
+            or relative in RUNTIME_ASSETS
             or (len(parts) == 3 and parts[:2] == ('web', 'assets') and
                 (path.suffix in {'.js', '.css', '.svg'} or path.name in FONTS | {'THIRD-PARTY-LICENSES.txt'}))
         ):

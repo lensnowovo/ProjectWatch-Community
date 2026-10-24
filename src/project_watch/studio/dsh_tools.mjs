@@ -1,0 +1,65 @@
+// Only these public tools are advertised by the isolated sdk-minimal profile.
+// The Python gateway owns authorization, validation, journaling and persistence.
+export const name = "projectwatch-public-tools";
+export const inject = ["tools"];
+const string = { type: "string" };
+const definitions = [
+  ["pw_search", "Search public sources for the confirmed company or a justified related topic.",
+    { query: string, category: { type: "string", enum: ["company", "competitor", "industry", "policy"] } }, ["query", "category"]],
+  ["pw_read", "Read a discovered source, reusing cached body. Up to 12000 characters per cached window; use next_offset to continue. No arbitrary URL/file access.",
+    { source_id: string, offset: { type: "integer", minimum: 0 } }, ["source_id"]],
+  ["pw_record", "Retain one evidence-linked fact/news/peer/relation. Relations require relation_type, relation_target appearing in the quote, reason, axis and query, with no exit_rule. Quote must be continuous verbatim text (max 1500 chars) containing all claimed dates/numbers; split records if necessary. Do not add dates to every label or infer event dates from provider_date. Keep qualifications. On record_validation fix all issues together; suggested_quote is only a source-local candidate, not entailment.",
+    { kind: {type: "string", enum: ["business", "product", "person", "founded", "location",
+        "financing", "milestone", "company", "competitor", "industry", "policy", "peer", "relation"]},
+      label: {type: "string", minLength: 1, maxLength: 200}, source_id: string,
+      quote: {type: "string", minLength: 6, maxLength: 1500}, text: {type: "string", minLength: 1, maxLength: 600},
+      reason: string, axis: string, query: string, exit_rule: string,
+      relation_type: {type: "string", enum: ["technology", "product", "indication", "competitor",
+        "supplier", "customer", "industry", "policy"]},
+      relation_target: string, relation_aliases: { type: "array", items: string, maxItems: 8 } }, ["kind", "label", "source_id", "quote", "text"]],
+  ["pw_status", "Inspect retained coverage and source failures before deciding what to research next.", {}, []],
+  ["pw_finish", "Persist the public project result. Explicitly state uncovered or partial categories; no implied completeness.",
+    { gaps: { type: "object", properties: Object.fromEntries(
+      ["company", "products", "people", "competitor", "industry", "policy"].map(k => [k, string])),
+      additionalProperties: false } }, ["gaps"]],
+];
+export function apply(ctx) {
+  const allowed = JSON.parse(process.env.PW_DSH_TOOLS || JSON.stringify(definitions.map(x => x[0])));
+  const monitor = allowed.includes("pw_context");
+  const list = [...definitions,
+    ["pw_context", "Publish retained public records and inspect evidence, standing relations, temporary questions and due scope.", {}, []],
+    ["pw_explore", "Search a due standing relation or research question using one of its configured queries.",
+      { watch_id: string, query: string }, ["watch_id", "query"]],
+    ["pw_assess", "Record a cited assessment. Distinguish object_change from evidence_only (research coverage, NOT company progress) and unclear. Evidence-only saves unchanged; unclear saves insufficient. Does not replace human conclusions.",
+      { watch_id: string, status: {type: "string", enum: ["progress", "setback", "unchanged", "insufficient"]},
+        change_basis: {type: "string", enum: ["object_change", "evidence_only", "unclear"]},
+        note: string, refs: {type: "array", items: string, minItems: 1, maxItems: 12} }, ["watch_id", "status", "change_basis", "note", "refs"]],
+    ["pw_judge", "Save comprehensive judgment using numbered public evidence and the system JSON contract.",
+      { analysis_json: string }, ["analysis_json"]],
+    ["pw_revise", "Review scope after judgment. Do not modify context.revision_blocked_ids; explain gaps in reason instead. changes_json is an array; every row needs action/watch_id/why/refs. note and finish also REQUIRE text (cited answer, max 200 chars). set_exit needs exit_rule; explore needs text/axis/queries/exit_rule. [] is valid. On revision_validation fix the listed fields only, without regenerating judgment. Check items: dropped/proposed does not mean applied.",
+      { changes_json: string, reason: string }, ["changes_json", "reason"]],
+  ].filter(x => allowed.includes(x[0])).map(x => {
+    if (monitor && x[0] === "pw_finish") return [
+      "pw_finish", "End this reviewed round. Does not mean every topic is answered.", {reason: string}, ["reason"]];
+    if (monitor && x[0] === "pw_record") return [x[0], x[1], {...x[2],
+      kind: {...x[2].kind, enum: x[2].kind.enum.filter(k => k !== "watch")}}, x[3]];
+    return x;
+  });
+  for (const [toolName, description, properties, required] of list) {
+    ctx.tools.register({
+      name: toolName, description,
+      parameters: { type: "object", properties, required, additionalProperties: false },
+      output: { schema: {}, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+      // Calls are serialized again by the gateway, including model traffic.
+      isConcurrencySafe: () => false,
+      async execute(args) {
+        const response = await fetch(`${process.env.PW_DSH_GATEWAY}/tools/${toolName}`, {
+          method: "POST", headers: { "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.PW_DSH_GATEWAY_TOKEN}` },
+          body: JSON.stringify(args),
+        });
+        return await response.json();
+      },
+    });
+  }
+}

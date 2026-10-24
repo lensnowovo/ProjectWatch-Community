@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2"
+  },
+  "overrides": {
+    "@modelcontextprotocol/client": "2.3.0",
+    "@deepseek-ai/libreoffice-kit": {
+      "fflate": "0.8.3"
+    }
+  }
+}

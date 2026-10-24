@@ -15,8 +15,9 @@ test("task board is reachable from the sidebar and keeps only work in progress o
 
 test("每条需要处理 explains what happened and what to do, with the button that does it", () => {
   const page = fs.readFileSync(new URL("../src/pages/Tasks.tsx", import.meta.url), "utf8");
-  for (const text of ["发生了什么", "怎么处理", "查看并重发", "去设置测试连接", "重新运行", "忽略"]) assert.match(page, new RegExp(text));
+  for (const text of ["发生了什么", "怎么处理", "查看并重发", "去设置测试连接", "重新运行", "收起提醒"]) assert.match(page, new RegExp(text));
   assert.match(page, /<RecoveryDialog/);
-  assert.match(page, /!j\.dismissed/);
+  assert.match(page, /unresolvedJobs\(jobs\)/);
+  assert.match(fs.readFileSync(new URL("../src/workState.ts", import.meta.url), "utf8"), /!j\.dismissed/);
   assert.doesNotMatch(page, /去处理 →/);
 });

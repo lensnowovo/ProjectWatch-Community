@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from project_watch.blob_store import BlobStore
+from project_watch.evidence_proposals import EvidenceConflictError
 from project_watch.intake_worker import IntakeWorker
 from project_watch.repository import (
     IntakeConflictError,
@@ -18,7 +19,6 @@ from project_watch.repository import (
     ProjectRepository,
     ReviewConflictError,
 )
-from project_watch.evidence_proposals import EvidenceConflictError
 from project_watch.team_http import protect_request
 
 

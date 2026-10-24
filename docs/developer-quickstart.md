@@ -6,12 +6,14 @@
 
 ## 环境与安装
 
+Mac 用户使用 [macOS 开发者步骤](macos-developer.md)，不要执行下方 Windows PowerShell 命令或复制 Windows venv。
+
 建议 Windows x64、Python 3.12、Node.js 22+、Git。以下命令在仓库根运行。
 不要复用另一个工作树的环境，也不要在旧环境里同时安装新旧产品包。
 
 ```powershell
 py -3.12 -m venv .venv-developer
-.\.venv-developer\Scripts\python.exe -m pip install --upgrade "pip>=26.2"
+.\.venv-developer\Scripts\python.exe -m pip install --upgrade "pip>=26.2.2"
 .\.venv-developer\Scripts\python.exe -m pip install -e ".[dev,team,mcp,postgres]" build ruff
 npm --prefix frontend ci
 npm --prefix frontend run build

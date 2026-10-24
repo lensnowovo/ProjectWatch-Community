@@ -28,8 +28,20 @@ Third-party material retains its original terms. In particular:
   In source distributions both frontend/public/assets and
   src/project_watch/web/assets contain the assembled notice.
 - Python and optional dependencies: original license texts in their own
-  distributions/dist-info. These are independently installed dependencies,
-  not code that ProjectWatch purports to relicense.
+  distributions/dist-info. Desktop installers include these dependencies;
+  source installations obtain them separately. Supplemental upstream texts
+  and the desktop component/source checklist are in LICENSES/third-party/.
+  ProjectWatch does not purport to relicense any of these components.
+- Desktop installers bundle DSH (@deepseek-ai/dsh, MIT, DeepSeek) and its
+  lock-pinned npm dependencies. Windows stores these in runtimes/<dsh-id>/,
+  with THIRD-PARTY-NOTICES.txt and LICENSES/ below that directory. Node.js
+  is in runtimes/<node-id>/ with its LICENSE, including built-in components.
+  The bundle manifest identifies the exact runtime IDs. Older bundles and
+  macOS layouts may use dsh/ and node/ directly.
+- LGPL-covered libraries retain their original rights, including replacement
+  and reverse engineering for debugging modifications to those libraries.
+  The ProjectWatch license does not restrict those rights. See the desktop
+  component/source checklist for the corresponding-source delivery gate.
 
 Third-party APIs, models and data are not licensed or resold by this software
 license. Users need their own accounts and applicable provider permissions.

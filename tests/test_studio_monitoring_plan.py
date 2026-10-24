@@ -286,7 +286,8 @@ def test_each_focus_point_has_one_latest_line(tmp_path):
     idle = plan.add(pid, {**ITEM, "text": "还没跑过的问题"}, actor="human", origin="human")
     view = client.get(f"/api/studio/projects/{pid}/monitoring-plan").json()
     latest = view["latest"]
-    assert latest[noted["id"]]["kind"] == "note" and latest[noted["id"]]["text"] == "一期已入组 12 例" and latest[noted["id"]]["fresh"]
+    assert latest[noted["id"]]["kind"] == "note" and latest[noted["id"]]["text"] == "一期已入组 12 例"
+    assert not latest[noted["id"]]["fresh"]  # editing an understanding alone is not new evidence
     assert latest[hit["id"]]["kind"] == "hit" and latest[hit["id"]]["text"].startswith("合成资产一期")
     assert latest[idle["id"]] == {"kind": "none", "text": "尚未检索", "date": "", "url": "", "count": 0, "fresh": False}
     assert latest[routine["id"]]["kind"] == "none" and latest[routine["id"]]["text"] == "已检索，仅有一般信息（1 条）"

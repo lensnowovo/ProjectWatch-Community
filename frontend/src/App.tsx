@@ -11,9 +11,15 @@ import ProjectPage from "./pages/Project";
 import TasksPage from "./pages/Tasks";
 import ProjectsPage from "./pages/Projects";
 import SettingsPage from "./pages/Settings";
+import SetupPage from "./pages/Setup";
+import AgentsPage from "./pages/Agents";
 import { SourceDrawerProvider } from "./ui";
 import SettingsGear from "./SettingsGear";
 import ProjectNavStatus from "./ProjectNavStatus";
+import { useVisiblePoll } from "./Operational";
+import { projectListWork, isMoving } from "./workState";
+import brandMark from "./assets/brand-mark.svg";
+import brandIcon from "./assets/brand-icon.svg";
 
 // 深度分析 is no longer a separate page: each part lives in the tab about its subject.
 const DEEP_TAB: Record<string, string> = { position: "competition", technology: "industry", industry: "industry" };
@@ -31,6 +37,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [modelReady, setModelReady] = useState<boolean | null>(null);
+  const [agentMode, setAgentMode] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const refreshProjects = () => api.projects().then((list) => {
     setProjects(list);
@@ -39,21 +46,20 @@ export default function App() {
   const projectList = projects ?? [];
   // Running or queued work across watched projects, from the stored project rows (no extra request).
   const busyJobs = projectList.filter((p) => p.job_status === "running" || p.job_status === "queued").length;
+  const runningProjects = projectError ? 0 : projectList.filter(p => isMoving(projectListWork(p).state)).length;
+  useVisiblePoll(refreshProjects, busyJobs ? 4000 : 30000);
 
   useEffect(() => {
     refreshProjects();
-    api.settings().then((s) => setModelReady(s.model.ready)).catch(() => undefined);
+    api.settings().then((s) => { setModelReady(s.model.ready); setAgentMode(s.preferred_mode === "agent"); }).catch(() => undefined);
     setMenuOpen(false);
     // Stored-state reads only: no models/search. Keep alert dots current while
     // background monitoring runs; hidden tabs do not poll.
-    const timer = window.setInterval(() => {
-      if (!document.hidden) refreshProjects();
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   const section = location.pathname.split("/")[1] || "home";
   const routeKey = section === "projects" ? location.pathname : section;
+  const currentAgentProject = projectList.some(p => p.execution_mode === "agent" && location.pathname.startsWith(`/projects/${p.id}`));
 
   return (
     <MotionConfig reducedMotion="user">
@@ -63,14 +69,15 @@ export default function App() {
             <aside className="sidebar">
               <NavLink to="/" end className="brand" aria-label="项目监控首页">
                 <span className="brand-mark" aria-hidden>
-                  <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="10.5" /><circle cx="16" cy="16" r="5" /><path d="M16 1.5v6M16 24.5v6M1.5 16h6M24.5 16h6" /></svg>
+                  <img className="brand-light" src={brandMark} alt="" />
+                  <img className="brand-dark" src={brandIcon} alt="" />
                 </span>
                 <div>
                   <div className="brand-name">ProjectWatch</div>
                   <div className="brand-sub">项目监控</div>
                 </div>
               </NavLink>
-              <NavLink to="/new" className="btn sidebar-add">
+              <NavLink to={agentMode ? "/agents" : "/new"} className="btn sidebar-add">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
                   <path d="M12 5v14M5 12h14" />
                 </svg>
@@ -84,21 +91,22 @@ export default function App() {
                 <NavItem to="/projects" label="项目组合" end />
                 <NavItem to="/digest" label="周报" />
                 <NavItem to="/tasks" label="任务">
-                  {busyJobs > 0 && <span className="nav-count" title="进行中与排队的任务">{busyJobs}</span>}
+                  {busyJobs > 0 && <span className="nav-count" title={`${runningProjects} 个项目执行中，其余排队或等待恢复`} aria-label={`${runningProjects} 个项目执行中，${busyJobs} 个项目有待办任务`}>{runningProjects ? `${runningProjects} 执行` : "等待"}</span>}
                 </NavItem>
               </nav>
               <div className="nav-section">关注的公司</div>
               <nav className="nav nav-projects">
                 {projectList.map((p) => (
                   <NavItem key={p.id} to={`/projects/${p.id}`} label={p.name}>
-                    <ProjectNavStatus project={p} />
+                    <ProjectNavStatus project={p} stale={!!projectError} />
                   </NavItem>
                 ))}
                 {projects?.length === 0 && <div className="nav-empty">还没有项目</div>}
               </nav>
               <div className="sidebar-foot">
+                <NavItem to="/agents" label="连接 Agent" />
                 <NavItem to="/settings" label="设置" icon={<SettingsGear size={18} />}>
-                  {modelReady === false && <span className="tag tag-warn">待配置</span>}
+                  {modelReady === false && !agentMode && <span className="tag tag-warn">待配置</span>}
                 </NavItem>
                 <ThemeToggle />
               </div>
@@ -109,7 +117,7 @@ export default function App() {
                 <NavLink to="/" className="topbar-title" aria-label="项目监控首页">ProjectWatch</NavLink>
               </header>
               <AnimatePresence>
-                {modelReady === false && location.pathname !== "/settings" && (
+                {modelReady === false && !agentMode && !currentAgentProject && !["/settings", "/setup", "/agents"].includes(location.pathname) && (
                   <motion.div className="banner" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3, ease: EASE }}>
                     <div className="banner-inner">
@@ -123,15 +131,17 @@ export default function App() {
                 {/* Company changes remove the old workspace immediately, not after an exit animation. */}
                 <AnimatePresence key={section === "projects" ? routeKey : "sections"} mode="wait" initial={false}>
                   <Routes location={location} key={routeKey}>
-                    <Route path="/" element={<HomePage projects={projects} modelReady={modelReady} error={projectError} onRetry={refreshProjects} />} />
+                    <Route path="/" element={<HomePage projects={projects} modelReady={modelReady || agentMode} error={projectError} onRetry={refreshProjects} />} />
                     <Route path="/feed" element={<FeedPage projects={projectList} />} />
                     <Route path="/projects" element={<ProjectsPage onChanged={refreshProjects} />} />
                     <Route path="/projects/:id" element={<ProjectPage onChanged={refreshProjects} />} />
                     <Route path="/projects/:id/deep" element={<DeepRedirect />} />
-                    <Route path="/new" element={<NewProjectPage />} />
+                    <Route path="/new" element={agentMode ? <Navigate to="/agents" replace /> : <NewProjectPage />} />
                     <Route path="/digest" element={<DigestPage />} />
                     <Route path="/tasks" element={<TasksPage projects={projectList} />} />
                     <Route path="/settings" element={<SettingsPage onSaved={(ready) => setModelReady(ready)} />} />
+                    <Route path="/setup" element={<SetupPage onSaved={setModelReady} />} />
+                    <Route path="/agents" element={<AgentsPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                   </Routes>
                 </AnimatePresence>

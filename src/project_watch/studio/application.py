@@ -129,6 +129,7 @@ class StudioApplication:
         return {
             "instance_id": self.instance_id, "schema_version": SCHEMA_VERSION,
             "mode": "studio_local", "capabilities": ["project.read", "monitoring.status.write", "operation.read",
+                                                       "monitoring.scope.read", "monitoring.scope.write", "monitoring.results.write", "monitoring.results.read",
                                                        "evidence.read", "excerpt.resolve", "objects.read", "objects.write",
                                                        "changes.read", "relationships.read", "relationships.correct", "health.read", "materials.package.read", "observations.read", "event_states.read", "milestones.read", "concerns.read", "concerns.feedback", "questions.read", "questions.assess"]
                                                        + (["sources.submit", "sources.read"] if hasattr(self, "materials") else []),
@@ -144,15 +145,15 @@ class StudioApplication:
 
         return compile_package(self, project_id, include_internal=include_internal)
 
-    def project(self, project_id: str) -> dict:
-        project = self.store.get_project(project_id)
+    def project(self, project_id: str, *, db=None) -> dict:
+        project = self.store.get_project(project_id, db=db)
         if not project or project.get("status") is None:
             raise ProjectMissing("Studio project not found")
         # Deliberately omit internal notes/profiles, paths, provider config and
         # raw job errors. Further evidence tools need their own disclosure scope.
         result = {key: project[key] for key in (
             "id", "name", "legal_name", "short_name", "industry", "website",
-            "status", "activated", "config_version",
+            "status", "activated", "config_version", "execution_mode",
         )}
         return {**result, "instance_id": self.instance_id, "schema_version": SCHEMA_VERSION}
 

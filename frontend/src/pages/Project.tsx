@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, type Category, type BodyCoverage, type Job, type ProjectDetail } from "../api";
+import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
 import { CompetitionView, IndustryView, NewsView } from "../landscape";
 import { MetricsView } from "../metrics";
 import { Columns, Figure, Reference, Skeleton, TabSkeleton, VerdictBand } from "../frame";
@@ -11,20 +11,22 @@ import { UploadDialog } from "../upload";
 import { EASE, Page, Reveal, useToast } from "../motion";
 import { CompanyOverview, CurrentBrief, KeyFigures, OWN_CATEGORIES, type Tab } from "../overview";
 import { PlanView } from "../plan";
-import { Drawer, ErrorNote, Spinner, Working, errorMessage, locatorLabel, relTime, useAsync } from "../ui";
+import { Drawer, ErrorNote, Spinner, errorMessage, locatorLabel, relTime, useAsync } from "../ui";
 import ProjectHeader from "../ProjectHeader";
 import CommercialSources from "../CommercialSources";
 import { RaceBoard } from "../race";
 import { raceRevision } from '../raceData';
 import { TrackBoard } from "../track";
 import { TechRoutes } from "../tech";
-import { monitoringLabel } from "../MonitoringProgress";
-import { jobWorkState, WORK_LABEL } from "../workState";
+import { projectWork, needsAttention } from "../workState";
+import { ProjectActivity, useVisiblePoll } from "../Operational";
 import { RecoveryDialog } from '../RecoveryDialog';
 import { IndustryJudgment, TechnologyJudgment, useInsight } from "../judgment";
+import { insightRevision } from "../workState";
 import { ClinicalView, PapersView, PatentsView } from "../researchPages";
 import { BusinessView, OperationsView, RisksView, internalCounts } from "../internalPages";
 import { FinanceAnalysisView } from "../financeAnalysis";
+import { useDossierMotion } from '../DossierMotion';
 
 /** Five sections (8945); each holds one or more of the original pages, which stay the URL's ?tab= values so every
  * existing link keeps working. */
@@ -40,7 +42,6 @@ const SECTIONS: { id: Section; label: string; pages: { id: Tab; label: string }[
 ];
 const sectionOf = (t: Tab) => SECTIONS.find((s) => s.pages.some((p) => p.id === t)) ?? SECTIONS[0];
 
-const JOB_LABEL: Record<Job["kind"], string> = { internal: "分析内部资料", external: "整理首轮信息", external_followup: "补全外部信息", brief: "生成简报", public_profile: "补充公开档案", landscape: "整理竞争与行业", business: "整理产品与用途", competition: "更新竞对资料", details: "整理商业关系与政策条件", commercial: "更新专业来源", insight: "深度分析" };
 
 const ownCount = (d: ProjectDetail) =>
   Object.entries(d.counts).filter(([k]) => OWN_CATEGORIES.has(k)).reduce((n, [, v]) => n + (v ?? 0), 0);
@@ -50,19 +51,17 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
   const [params, setParams] = useSearchParams();
   // Core opens the company overview; explicit saved-judgment links remain readable.
   const raw = params.get("tab") as Tab | null;
-  const { data, error, loading, reload } = useAsync(() => api.project(id), [id]);
+  const { data: loaded, error, loading, reload } = useAsync(() => api.project(id), [id]);
+  const data = useMemo(() => loaded?.project.id === id ? { ...loaded, status_stale: !!error } : null, [loaded, error, id]);
   const defaultTab = data?.capabilities?.insight_generation === true ? "brief" : "overview";
   const tab: Tab = raw && SECTIONS.some((s) => s.pages.some((p) => p.id === raw)) ? raw : defaultTab;
+  const dossierMotion = useDossierMotion(data, tab === 'overview');
   const busy = data?.jobs.some((j) => j.status === "queued" || j.status === "running")
     || data?.documents.some((d) => d.status === "queued" || d.status === "processing")
     || (data?.model_ready && (data?.pending_documents ?? 0) > 0);
 
-  useEffect(() => {
-    if (!busy) return;
-    const stopped = data?.execution?.analysis === "stopped" && data?.execution?.parsing === "stopped";
-    const timer = window.setInterval(() => reload(), stopped ? 30000 : 4000);
-    return () => window.clearInterval(timer);
-  }, [busy, reload, data?.execution?.analysis, data?.execution?.parsing]);
+  const stopped = data?.execution?.analysis === "stopped" && data?.execution?.parsing === "stopped";
+  useVisiblePoll(reload, busy && !stopped ? 4000 : 30000);
 
   if (loading && !data) return <Page className="page-wide page-project"><div className="project-head-skel"><Skeleton lines={2} /></div><TabSkeleton label="加载项目" /></Page>;
   if (error && !data) return <Page><ErrorNote error={error} /></Page>;
@@ -79,6 +78,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
 
   return (
     <Page className="page-wide page-project">
+      {!!error && <ErrorNote error="状态暂时无法刷新，以下保留上次读取的结果。" />}
       <Header detail={data} goto={setTab} onReload={() => { reload(); onChanged(); }} onRemoved={onChanged} status={<Progress detail={data} onReload={reload} />} />
       <div className="tabs-row">
       <nav className="tabs" aria-label="项目内容">
@@ -102,7 +102,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div key={tab} className="tab-panel" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: EASE } }}
           exit={{ opacity: 0, transition: { duration: 0.1 } }}>
-          {tab === "overview" && <CompanyOverview detail={data} onReload={reload} />}
+          {tab === "overview" && <CompanyOverview detail={data} onReload={reload} dossierMotion={dossierMotion} />}
           {tab === "plan" && <PlanView projectId={id} company={data.project.short_name || data.project.name} detail={data} />}
           {tab === "brief" && <CurrentBrief detail={data} goto={setTab} onReload={reload}
             aside={<Note projectId={project.id} initial={project.note ?? ""} onSaved={reload} />} />}
@@ -120,7 +120,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
             race={data.capabilities?.insight_projections === true && <RaceBoard projectId={id} revision={raceRevision(data)} />}
             financing={<CommercialSources projectId={id} revision={commercialRevision} peers onChanged={reload} />} />}
           {tab === "industry" && (data.capabilities?.insight_projections === true ? <IndustryFrame projectId={id} revision={`${commercialRevision}|${project.last_external_at ?? ""}`}
-            insightRevision={project.last_external_at ?? ""} details={<IndustryView detail={data} />} /> : <IndustryView detail={data} />)}
+            insightRevision={insightRevision(data)} details={<IndustryView detail={data} />} /> : <IndustryView detail={data} />)}
           {tab === "documents" && <DocumentsTab detail={data} onUploaded={reload} />}
         </motion.div>
       </AnimatePresence>
@@ -169,8 +169,10 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
       </div>}
       <ProjectHeader detail={detail} goto={goto} actions={removed ? null : <>
         <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>
-        <button className="btn" onClick={refresh} disabled={!project.activated}>立即更新</button>
-        <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
+        {project.execution_mode === "agent" ? <Link className="btn" to={`/agents?project=${project.id}`}>用 Agent 更新</Link> : <>
+          <button className="btn" onClick={refresh} disabled={!project.activated}>立即更新</button>
+          <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
+        </>}
       </>} status={status} />
       <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />
       <ErrorNote error={error} />
@@ -180,74 +182,33 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
 
 export function Progress({ detail, onReload }: { detail: ProjectDetail; onReload: () => void }) {
   const [recovering, setRecovering] = useState(false);
-  const active = detail.jobs.filter((j) => j.status === "queued" || j.status === "running");
-  const parsing = detail.documents.filter((d) => d.status === "queued" || d.status === "processing");
-  const failed = detail.jobs.find((j) => j.status === "failed");
-  const lastDone = detail.jobs.find((j) => j.status === "done");
-  const waiting = detail.model_ready ? detail.pending_documents : 0;
-  useEffect(() => { setRecovering(false); }, [detail.project.id, failed?.id, active.length]);
-  if (detail.execution?.health?.restart_required) {
-    return <div className="progress progress-error" role="status"><strong>后台受阻，等待恢复</strong><span>已有结果保留，不会自动重发结果不明的请求。</span><Link to="/tasks">查看运行状态 →</Link></div>;
-  }
-  if (detail.brief?.origin && !active.length && !parsing.length && !failed && detail.project.status === "paused") {
-    return <div className="progress"><strong>{detail.brief.origin.producer} 已更新</strong><span className="muted"> · 自动监控已暂停，本批由外部 Agent 写回</span></div>;
-  }
-  if (active.length || parsing.length || waiting) {
-    const states = active.map(j => jobWorkState(detail, j));
-    const parseRunning = parsing.some(d => d.status === "processing") && detail.execution?.parsing !== "stopped";
-    const executing = parseRunning || states.some(s => s === "running" || s === "stopping");
-    const stopping = !states.includes("running") && !parseRunning && states.includes("stopping");
-    const offline = states.includes("offline") || (parsing.length > 0 && detail.execution?.parsing === "stopped")
-      || (!!waiting && detail.execution?.analysis === "stopped");
-    const paused = states.length > 0 && states.every(s => s === "paused") && !parsing.length && !waiting;
-    const label = executing ? stopping ? "正在结束当前更新" : "正在更新"
-      : paused ? "监控已暂停" : offline ? "自动更新未运行" : "等待更新";
-    return (
-      <motion.div className="progress" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}>
-        <div>
-          {executing ? <Working text={label} /> : <strong>{label}</strong>}
-          <span className="muted">
-            {parsing.length > 0 && ` · ${parseRunning ? "正在解析" : "等待解析"} ${parsing.length} 份资料`}
-            {!parsing.length && waiting > 0 && !active.some((j) => j.kind === "internal") && ` · ${waiting} 份新资料等待分析`}
-            {active.map((j) => {
-              const state = jobWorkState(detail, j);
-              return ` · ${JOB_LABEL[j.kind]}${state === "running" && j.stage ? `：${j.stage}` : `（${WORK_LABEL[state]}）`}`;
-            }).join("")}
-          </span>
-        </div>
-      </motion.div>
-    );
-  }
-  if (failed && (!lastDone || failed.created_at > lastDone.created_at)) {
-    return (
-      <div className="progress progress-error">
-        <strong>上次{JOB_LABEL[failed.kind]}没有完成</strong>
-        <span>{errorMessage(failed.error)}</span>
-        <button className="link" onClick={() => setRecovering(true)}>继续更新 →</button>
-        {recovering && <RecoveryDialog key={`${detail.project.id}:${failed.id}`} projectId={detail.project.id} job={failed}
-          onClose={() => setRecovering(false)} onQueued={onReload} />}
-        {!detail.model_ready && <Link to="/settings">去设置模型 →</Link>}
-      </div>
-    );
-  }
-  if (detail.detail_summary?.status === "partial") {
-    const summary = detail.detail_summary;
-    return <div className="progress progress-idle muted small">
-      商业关系与政策条件：本次整理保留 {summary.fact_count} 条结果
-      {summary.rejected > 0 && ` · ${summary.rejected} 条线索未采纳`}
-      {summary.unquantified > 0 && ` · ${summary.unquantified} 条金额未明确`}
-    </div>;
-  }
-  return (
-    <div className="progress progress-idle muted small">
-      {monitoringLabel(detail.monitoring_progress, detail.project.status === "paused")}
-      {detail.execution?.analysis === "stopped" && detail.project.status !== "paused" && " · 自动更新未运行"}
-      {detail.project.last_external_at && ` · 外部信息更新于 ${relTime(detail.project.last_external_at)}`}
-      {detail.project.last_internal_at && ` · 资料分析于 ${relTime(detail.project.last_internal_at)}`}
-    </div>
-  );
+  const work = projectWork(detail);
+  const failed = work.failures.find(j => j.status === "failed");
+  const recoveryIndex = useAsync(() => api.recoveryProject(detail.project.id),
+    [detail.project.id, detail.jobs.map(j => `${j.id}:${j.status}`).join('|')]);
+  const pendingRecovery = !!recoveryIndex.data?.items.length;
+  const activeCount = detail.jobs.filter(j => j.status === "running" || j.status === "queued").length;
+  useEffect(() => { setRecovering(false); }, [detail.project.id, failed?.id, activeCount]);
+  return <div className="progress op-project-progress">
+    <ProjectActivity detail={detail} />
+    {(needsAttention(work.state) || work.stop || pendingRecovery) && <div className="op-help muted small">
+      已有结果保留。
+      {work.stop ? <span>{errorMessage(work.stop.error)}</span>
+        : failed?.error && <span>{errorMessage(failed.error)}</span>}
+      {pendingRecovery && <span>仍有待确认请求，完整链路尚未恢复。</span>}
+      {(failed || pendingRecovery) && <button className="link" onClick={() => setRecovering(true)}>查看恢复选项 →</button>}
+      {(work.state === "needs_confirmation" || work.stop?.state === "needs_confirmation") && " 不会自动重发结果不明的请求。"}
+    </div>}
+    {recovering && <RecoveryDialog key={detail.project.id} projectId={detail.project.id} job={failed}
+      onClose={() => setRecovering(false)} onQueued={onReload} />}
+    {work.state === "agent" && <Link to={`/agents?project=${detail.project.id}`}>连接 Agent →</Link>}
+    {detail.brief?.origin && <span className="muted small">{detail.brief.origin.producer} · 本批由外部 Agent 写回</span>}
+    {detail.detail_summary?.status === "partial" && !work.moving && <span className="muted small">
+      本次整理保留 {detail.detail_summary.fact_count} 条结果 · {detail.detail_summary.rejected} 条线索未采纳 · {detail.detail_summary.unquantified} 条金额未明确
+    </span>}
+    {detail.project.last_external_at && !work.moving && <span className="muted small">外部信息更新于 {relTime(detail.project.last_external_at)}</span>}
+  </div>;
 }
-
 function Note({ projectId, initial, onSaved }: { projectId: string; initial: string; onSaved: () => void }) {
   const [value, setValue] = useState(initial);
   const [state, setState] = useState<"" | "saving" | "saved">("");

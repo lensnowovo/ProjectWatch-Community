@@ -1,11 +1,13 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api } from "./api";
+import { api, type TaskDocument } from "./api";
+import { WorkIndicator, useVisiblePoll } from "./Operational";
+import { errorMessage } from "./ui";
 import { EASE } from "./motion";
 
 const ACCEPT = ".pdf,.docx,.pptx,.xlsx,.xls,.txt";
-type Entry = { id: number; name: string; kind: "file" | "link"; state: "working" | "done" | "failed"; note?: string };
+type Entry = { id: number; name: string; kind: "file" | "link"; state: "working" | "done" | "failed"; note?: string; sourceId?: string };
 
 /** One place to add material: drop files, choose files, paste files, or paste a web/PDF link. */
 export function UploadDialog({ projectId, open, onClose, onAdded }: {
@@ -16,19 +18,29 @@ export function UploadDialog({ projectId, open, onClose, onAdded }: {
   const [url, setUrl] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
+  const [documents, setDocuments] = useState<TaskDocument[]>([]);
+  const [statusError, setStatusError] = useState(false);
+  const refresh = async () => {
+    try { const board = await api.tasks(projectId); setDocuments(board.documents); setStatusError(false); }
+    catch { setStatusError(true); }
+  };
+  const received = entries.filter(e => e.sourceId);
+  useVisiblePoll(refresh, 4000, open && received.length > 0);
+  useEffect(() => { if (open && received.length) void refresh(); }, [open, received.length, projectId]);
+  useEffect(() => { setEntries([]); setDocuments([]); }, [projectId]);
 
   const track = (name: string, kind: Entry["kind"]) => {
     const id = ++seq.current;
     setEntries((list) => [{ id, name, kind, state: "working" }, ...list]);
-    return (state: Entry["state"], note?: string) =>
-      setEntries((list) => list.map((e) => (e.id === id ? { ...e, state, note } : e)));
+    return (state: Entry["state"], note?: string, sourceId?: string) =>
+      setEntries((list) => list.map((e) => (e.id === id ? { ...e, state, note, sourceId } : e)));
   };
 
   const addFiles = async (files: FileList | File[]) => {
     for (const file of Array.from(files)) {
       const done = track(file.name, "file");
-      try { await api.uploadFile(projectId, file); done("done", "已加入，正在识别"); onAdded(); }
-      catch (e) { done("failed", e instanceof Error ? e.message : "上传失败"); }
+      try { const r = await api.uploadFile(projectId, file); done("done", "已接收 · 等待处理状态", r.source_id); onAdded(); }
+      catch (e) { done("failed", errorMessage(e)); }
     }
   };
   const addLink = async (value = url) => {
@@ -38,8 +50,8 @@ export function UploadDialog({ projectId, open, onClose, onAdded }: {
     const done = track(link.replace(/^https?:\/\//, ""), "link");
     try {
       const r = await api.addLink(projectId, link);
-      done("done", `已保存为“${r.name}”，正在识别`); onAdded();
-    } catch (e) { done("failed", e instanceof Error ? e.message : "读取失败"); }
+      done("done", "已接收 · 等待处理状态", r.source_id); onAdded();
+    } catch (e) { done("failed", errorMessage(e)); }
   };
 
   useEffect(() => {
@@ -96,7 +108,8 @@ export function UploadDialog({ projectId, open, onClose, onAdded }: {
                   <li key={e.id} className={`ul-${e.state}`}>
                     <span className="ul-kind">{e.kind === "link" ? "链接" : "文件"}</span>
                     <span className="ul-name" title={e.name}>{e.name}</span>
-                    <span className="ul-state">{e.state === "working" ? "处理中…" : e.note}</span>
+                    <span className="ul-state">{e.sourceId ? <UploadProgress document={documents.find(d => d.id === e.sourceId)} stale={statusError} />
+                      : <WorkIndicator state={e.state === "working" ? "running" : "failed"} label={e.state === "working" ? (e.kind === "link" ? "读取链接中" : "上传中") : e.note || "未完成"} />}</span>
                   </li>
                 ))}
               </ul>
@@ -108,4 +121,11 @@ export function UploadDialog({ projectId, open, onClose, onAdded }: {
     </AnimatePresence>,
     document.body,
   );
+}
+
+export function UploadProgress({ document: doc, stale }: { document?: TaskDocument; stale: boolean }) {
+  const step = doc?.steps.find(s => s.state !== "done");
+  const state = stale ? "blocked" : step?.state === "waiting" ? "queued" : step?.state ?? (doc ? "done" : "queued");
+  const label = stale ? "状态暂时无法刷新" : !doc ? "已接收 · 等待处理状态" : !step ? "已纳入项目" : `${step.label} · ${step.state === "failed" ? errorMessage(step.note) : step.note || step.state}`;
+  return <span role="status"><WorkIndicator state={state} label={label} /></span>;
 }

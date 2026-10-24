@@ -71,6 +71,7 @@ def test_optional_mcp_tools_are_bounded(tmp_path):
                 "monitor_observations", "monitor_event_states", "monitor_milestones", "monitor_concerns", "maintain_concern",
                 "tracked_questions", "write_question_assessment",
                 "submit_monitoring_results", "monitoring_result_history", "current_monitoring_result",
+                "monitoring_scope", "update_monitoring_scope",
             }
             overview = (await connection.call_tool("project_overview", {})).structured_content
             assert overview["id"] == pid

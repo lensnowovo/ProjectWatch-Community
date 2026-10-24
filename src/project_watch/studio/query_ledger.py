@@ -48,7 +48,7 @@ class ProjectQueryCache:
             self.guard(db)
 
     def get(self, signature: tuple, fetch) -> tuple[list[dict], bool]:
-        if (len(signature) != 5 or signature[0] not in ("bocha", "tavily", "brave")):
+        if (len(signature) != 5 or signature[0] not in ("deepseek", "bocha", "tavily", "brave")):
             raise ValueError("only public search signatures are accepted")
         key = hashlib.sha256(json.dumps(signature, ensure_ascii=False).encode()).hexdigest()
         # Share process locks but never share results between different projects.
@@ -79,7 +79,7 @@ class ProjectQueryCache:
                 if not isinstance(data, list) or any(not isinstance(h, dict) for h in data):
                     raise HttpError("invalid_search_response")
                 encoded = json.dumps(data, ensure_ascii=False)
-                if len(encoded.encode()) > 2_000_000:
+                if len(encoded.encode()) > (16_000_000 if signature[0] == "deepseek" else 2_000_000):
                     raise HttpError("response_too_large")
             except BaseException as exc:
                 unknown = (not isinstance(exc, HttpError) or exc.code in

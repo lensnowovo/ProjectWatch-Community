@@ -38,7 +38,8 @@ def test_stage_excludes_registered_private_modules_and_marks_probe(tmp_path):
     assert (repo / 'src/project_watch/studio/secret.py').exists()
 
 
-@pytest.mark.parametrize('relative', ['unregistered.py', 'web/assets/settings.json', 'private.sqlite3'])
+@pytest.mark.parametrize('relative', ['unregistered.py', 'web/assets/settings.json', 'private.sqlite3',
+                                     'studio/unregistered.mjs', 'static/unknown.png'])
 def test_unknown_runtime_files_fail_before_staging(tmp_path, relative):
     repo = fixture(tmp_path)
     path = repo / 'src/project_watch' / relative
@@ -47,6 +48,16 @@ def test_unknown_runtime_files_fail_before_staging(tmp_path, relative):
     with pytest.raises(ValueError):
         stage(repo, tmp_path / 'candidate')
     assert not (tmp_path / 'candidate').exists()
+
+
+def test_exact_brand_and_dsh_assets_are_included_without_a_suffix_wildcard(tmp_path):
+    from scripts.build_core_probe import RUNTIME_ASSETS
+    repo = fixture(tmp_path)
+    for relative in RUNTIME_ASSETS:
+        path = repo / 'src' / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'synthetic runtime asset')
+    assert set(inventory(repo)['files']) >= RUNTIME_ASSETS
 
 
 def test_existing_or_in_repo_destinations_are_never_modified(tmp_path):

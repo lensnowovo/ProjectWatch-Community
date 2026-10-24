@@ -36,9 +36,9 @@ def test_developer_test_runner_excludes_known_vulnerable_versions():
 def test_developer_setup_updates_package_installer_before_installing():
     for name in ('README.md', 'docs/developer-quickstart.md'):
         guide = (ROOT / name).read_text(encoding='utf-8')
-        assert guide.index('pip install --upgrade "pip>=26.2"') < guide.index('pip install -e')
+        assert guide.index('pip install --upgrade "pip>=26.2.2"') < guide.index('pip install -e')
     script = (ROOT / 'scripts/start-projectwatch.ps1').read_text(encoding='utf-8')
-    upgrade = script.index('--upgrade "pip>=26.2"')
+    upgrade = script.index('--upgrade "pip>=26.2.2"')
     install = script.index('-q -e "$repo[ocr]"')
     assert 'if ($LASTEXITCODE -ne 0)' in script[upgrade:install]
 

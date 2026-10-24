@@ -80,7 +80,7 @@ $stamp = (Get-Item (Join-Path $repo "pyproject.toml")).LastWriteTimeUtc.Ticks.To
 $installed = if (Test-Path $marker) { Get-Content $marker -Raw } else { "" }
 if ($installed.Trim() -ne $stamp) {
     Write-Host "正在安装 ProjectWatch（首次约 1-3 分钟）……"
-    & $python -m pip install --disable-pip-version-check -q --upgrade "pip>=26.2"
+    & $python -m pip install --disable-pip-version-check -q --upgrade "pip>=26.2.2"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "安装工具更新失败。请检查网络后重试；尚未安装 ProjectWatch。" -ForegroundColor Red
         exit 1

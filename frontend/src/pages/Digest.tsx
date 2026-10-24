@@ -8,6 +8,7 @@ import { Kpi, Seg } from "../widgets";
 import { AttentionBoard } from "../attention";
 import PageHeader from "../PageHeader";
 import { DigestProgress } from "../MonitoringProgress";
+import { useStagedRead } from "../Operational";
 
 const RANGES = [
   { value: 7, label: "近 7 天" },
@@ -17,7 +18,8 @@ const RANGES = [
 
 export default function DigestPage() {
   const [days, setDays] = useState(7);
-  const { data, error, loading, reload } = useAsync(() => api.digest(days), [days]);
+  const { data, error, loading, reload, setData } = useAsync(() => api.digest(days), [days]);
+  const staged = useStagedRead(String(days), () => api.digest(days), next => next.markdown !== data?.markdown, !!data);
   const [pushing, setPushing] = useState(false);
   const toast = useToast();
 
@@ -62,6 +64,8 @@ export default function DigestPage() {
         </p>
       )}
       <ErrorNote error={error} />
+      {staged.failed && <p className="muted small">暂时无法检查更新，当前周报保留。</p>}
+      {staged.pending && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); }}>周报有更新 · 点击查看</button>}
       {!data && loading && <Skeleton lines={6} />}
       {data && (
         <>

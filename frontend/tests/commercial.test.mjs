@@ -33,7 +33,7 @@ test("presets preserve local keys and fees; model use is an explicit, described 
 test("source reads follow stored project updates without triggering paid collection", () => {
   assert.match(component, /useAsync\(\(\) => api.commercial\(projectId\)/);
   assert.match(project, /CommercialSources projectId=\{id\} revision=\{commercialRevision\} peers/);
-  assert.match(project, /commercial: "更新专业来源"/);
+  assert.match(readFileSync(new URL("../src/workState.ts", import.meta.url), "utf8"), /commercial: "更新专业来源"/);
 });
 
 test("company discrepancies never appear as unsupported peer funding discrepancies", () => {

@@ -49,6 +49,7 @@ export interface Brief {
 }
 export interface BriefEntry { text: string; refs: BriefRef[] }
 export interface Project {
+  execution_mode?: "api" | "agent";
   id: string;
   name: string;
   legal_name: string | null;
@@ -74,6 +75,7 @@ export interface Project {
   last_event?: string | null;
   last_event_at?: string | null;
   job_status?: string | null;
+  job_runtime?: JobRuntime;
   nav_alerts?: string[];
   worker_state?: WorkerState;
   worker_health?: string;
@@ -281,6 +283,7 @@ export interface PlanItem {
   section: string;
   /** Relation chain: 0 = the company, 1 = directly related, 2 = second order; parent is the point it extends. */
   hop?: string; parent_id?: string;
+  scope_kind?: "" | "relation" | "question"; relation_type?: string; relation_target?: string; relation_aliases?: string[];
   /** Display module and its parameters (see plan_templates.MODULES). */
   view: string; view_params: Record<string, unknown>;
 }
@@ -307,6 +310,20 @@ export interface PlanChange {
   evidence?: { ref: string; kind?: string; title?: string; text?: string }[];
 }
 export interface MonitoringPlanView {
+  tree_signals?: Record<string, { count: number; recorded_at: string; fresh: boolean;
+    title: string; url: string; basis: string }>;
+  last_round?: { job_id: string; completed_at: string; coverage: "partial" | "complete";
+    assessed_events: number; evidence_only: number; object_changes: number;
+    judgment_change: "first" | "changed" | "unchanged" | "unavailable"; headline: string;
+    stopped: number; active: number; waiting: number; standing: number; unfulfilled: number; pending: number; gaps: string[];
+    stop_reason?: string; stop_details?: { reason: string; count: number }[];
+    outputs?: { saved_entries: number; revision_applied: number; revision_added: number;
+      revision_proposed: number; revision_dropped: number } } | null;
+  relation_updates?: Record<string, { count: number; items: {
+    event_id: string; title: string; url: string; source: string; date: string;
+    basis: "summary" | "full_body" | "partial_body" | "search_summary"; matched_term: string; excerpt: string;
+  }[] }>;
+  explorations?: Record<string, { state: string; reason: string; label: string }>;
   items: PlanItem[]; changes: PlanChange[]; proposals: PlanChange[]; summary: Record<string, number>; max_items: number;
   framework: PlanSection[]; meta: PlanMeta;
   rings?: { key: string; label: string }[];
@@ -325,13 +342,17 @@ export interface MonitoringPlanView {
   labels: Record<"axis" | "cadence" | "tier" | "status" | "origin" | "coverage", Record<string, string>>;
 }
 
+export interface JobRuntime {
+  state: string; label: string; phase?: "collect" | "read" | "judge" | "revise" | null;
+  progress_at: string | null; heartbeat_at: string | null;
+  progress_age_seconds: number | null; yield_count: number; recovery_attempts: number;
+}
 export interface TaskJob {
-  runtime?: { state: string; label: string; progress_at: string | null; heartbeat_at: string | null;
-    progress_age_seconds: number | null; yield_count: number; recovery_attempts: number };
+  runtime?: JobRuntime;
   id: string; project_id: string; project_name: string; kind: Job["kind"]; label: string; status: Job["status"];
   stage: string; error: string; created_at: string; started_at: string | null; finished_at: string | null;
   seconds: number | null; calls: number; unknown: number; position?: number;
-  /** Failed tasks only: what happened, what to do, and which button does it. */
+  /** Failed or partial tasks: what happened, what to do, and which button does it. */
   advice?: { why: string; todo: string; action: "recover" | "rerun" | "settings" | "none" };
   dismissed?: boolean;
 }
@@ -346,6 +367,8 @@ export interface TaskBoard {
   jobs: TaskJob[]; documents: TaskDocument[];
 }
 export interface Job {
+  runtime?: JobRuntime;
+  dismissed?: boolean;
   id: string;
   kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight";
   status: "queued" | "running" | "done" | "failed";
@@ -362,6 +385,10 @@ export interface RecoveryPreview {
   reason: string;
   requests: Record<string, number>;
   requires_duplicate_cost_consent: boolean;
+  job_status: string;
+  mode: 'resume' | 'checkpoint_continuation';
+  notice: string;
+  continuation_job_id?: string | null;
 }
 export interface Plan {
   company_queries: string[];
@@ -407,6 +434,10 @@ export type RegistryResearch = {
 };
 
 export interface ProjectDetail {
+  /** Read-only saved content revisions, not progress percentages or task outcomes. */
+  dossier_saved?: { version: 1; relations: { revision: string; count: number }; judgment: { revision: string; count: number } };
+  /** Frontend-only: last successful snapshot retained after a read failure. */
+  status_stale?: boolean;
   project: Project;
   capabilities?: { insight_generation: boolean; insight_projections: boolean };
   execution?: { analysis: WorkerState; parsing: WorkerState; health?: { state: string; label: string; restart_required: boolean } };
@@ -531,6 +562,7 @@ export interface Preset {
   hint?: string;
 }
 export interface SettingsView {
+  preferred_mode?: "api" | "agent";
   model: { protocol: string; base_url: string; model: string; api_key: string; max_output_tokens?: number; ready: boolean };
   search: { provider: string; api_key: string; providers?: string[]; keys?: Record<string, string>; ready?: boolean; mode?: string; google_news?: boolean };
   registry: { provider: string; api_key: string };
@@ -570,6 +602,8 @@ export interface MonitoringProgress {
   state: "queued" | "running" | "failed" | "partial" | "unobserved" | "stale" | "paused" | "inactive" | "observed";
   label: string; empty_text: string; completed_at: string | null;
   first_result_at?: string | null;
+  /** External rounds started for this project; the latest one is round N. */
+  round?: number;
   source_failures: number; pending_items: number; full_coverage: false;
 }
 export interface DigestPending {
@@ -755,6 +789,15 @@ export interface UpdateView {
   handoff: string;
 }
 
+/** Which public-research executor the running app uses; a saved switch takes effect on restart. */
+export interface ExecutorView {
+  executor: "dsh" | "classic" | "unavailable";
+  source: "bundled" | "custom" | "environment" | "setting" | "default" | "upgrade_preserved";
+  reason: string | null; reason_text: string | null;
+  dsh_version: string; node_version: string | null;
+  configurable: boolean; saved_enabled: boolean | null;
+}
+
 export const api = {
   updates: () => request<UpdateView>("GET", "/api/studio/updates"),
   checkUpdates: () => request<UpdateView>("POST", "/api/studio/updates/check"),
@@ -774,9 +817,21 @@ export const api = {
         decision, relation_type: row.relation_type ?? "unknown", reason: decision === "exclude" ? "用户排除该范围的竞争关系" : "用户撤销排除" }],
     }),
   settings: () => request<SettingsView>("GET", "/api/studio/settings"),
+  agentConnection: (id: string, client: "codex" | "workbuddy", allowInternal: boolean) =>
+    request<{ configuration: string; destination: string; prompt: string; grant_id: string; expires_at: number; status: string }>(
+      "POST", `/api/studio/projects/${id}/agent-connection`, { client, allow_internal: allowInternal }),
+  agentGrants: (id: string) => request<{ id: string; label: string; revoked_at: string | null; expires_at: number; allow_internal: boolean }[]>("GET", `/api/studio/projects/${id}/agent-grants`),
+  revokeAgent: (id: string, grant: string) => request("DELETE", `/api/studio/projects/${id}/agent-grants/${grant}`),
+  createAgentProject: (name: string, drafts: string[]) => request<Project>("POST", "/api/studio/projects", {
+    entity: { legal_name: name }, consent: true, execution_mode: "agent", draft_ids: drafts,
+  }),
   saveSettings: (patch: unknown) => request<SettingsView>("PUT", "/api/studio/settings", patch),
+  executor: () => request<ExecutorView>("GET", "/api/studio/settings/executor"),
+  saveExecutor: (enabled: boolean) => request<ExecutorView>("PUT", "/api/studio/settings/executor", { enabled }),
   testSettings: () =>
     request<Record<string, { ok: boolean | null; message: string }>>("POST", "/api/studio/settings/test"),
+  testSetup: () =>
+    request<Record<string, { ok: boolean | null; message: string }>>("POST", "/api/studio/settings/test?scope=setup"),
   retryDirectOperation: (id: string) => request<{ id: string; status: string }>("POST",
     `/api/studio/operations/${encodeURIComponent(id)}/retry`, { accept_duplicate_cost: true }),
   readAll: (scope: { project_id?: string; days?: number }) =>
@@ -810,8 +865,8 @@ export const api = {
     request("PUT", `/api/studio/projects/${id}/commercial/preference`, { investment_status }),
   patchProject: (id: string, patch: unknown) => request<Project>("PATCH", `/api/studio/projects/${id}`, patch),
   activate: (id: string) => request<Project>("POST", `/api/studio/projects/${id}/activate`),
-  uploadFile: (id: string, file: File) => request("POST", `/api/studio/projects/${id}/files`, upload(file)),
-  addLink: (id: string, url: string) => request<{ source_id: string; name: string; status: string }>("POST", `/api/studio/projects/${id}/links`, { url }),
+  uploadFile: (id: string, file: File) => request<{ source_id: string; parser_status: string; analysis_status: string }>("POST", `/api/studio/projects/${id}/files`, upload(file)),
+  addLink: (id: string, url: string) => request<{ source_id: string; parser_status: string; analysis_status: string }>("POST", `/api/studio/projects/${id}/links`, { url }),
   retryFile: (id: string, sourceId: string) => request("POST", `/api/studio/projects/${id}/files/${sourceId}/retry`),
   insight: (id: string) => request<InsightView>("GET", `/api/studio/projects/${id}/insight`),
   eventContext: (projectId: string, eventId: string) => request<EventContext>("GET", `/api/studio/projects/${projectId}/events/${encodeURIComponent(eventId)}/context`),
@@ -837,6 +892,8 @@ export const api = {
     request<Job>("POST", `/api/studio/projects/${id}/refresh`, { kind }),
   recoveryPreview: (id: string, jobId: string) =>
     request<RecoveryPreview>('GET', `/api/studio/projects/${id}/jobs/${jobId}/recovery`),
+  recoveryProject: (id: string) =>
+    request<{ items: RecoveryPreview[] }>('GET', `/api/studio/projects/${id}/recovery`),
   recover: (id: string, jobId: string, version: string, key: string) =>
     request<{ job_id: string; status: string; recovery_id: string }>('POST',
       `/api/studio/projects/${id}/jobs/${jobId}/recovery`, {

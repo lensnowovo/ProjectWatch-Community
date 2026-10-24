@@ -1,5 +1,7 @@
 import hashlib
 import io
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -94,3 +96,93 @@ def test_object_store_rejects_symlink_destination(tmp_path: Path) -> None:
         store.put_stream("source.txt", io.BytesIO(payload))
     assert not (target / digest).exists()
     assert store.audit((digest,)).unexpected == (digest[:2],)
+
+
+def _make_windows_junction(link: Path, target: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows directory junction regression")
+    # Unlike symbolic links, directory junctions do not require elevated privileges.
+    # Pass paths as data; do not interpolate them into a command or use cmd /c.
+    environment = dict(os.environ, PW_TEST_JUNCTION=str(link), PW_TEST_TARGET=str(target))
+    subprocess.run(
+        [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            "$ErrorActionPreference = 'Stop'; "
+            "New-Item -ItemType Junction -Path $env:PW_TEST_JUNCTION "
+            "-Target $env:PW_TEST_TARGET | Out-Null",
+        ],
+        env=environment, check=True, capture_output=True, timeout=30,
+    )
+    assert link.resolve() == target.resolve()
+    assert not link.is_symlink()
+
+
+def test_object_store_rejects_windows_junction_destination(tmp_path: Path) -> None:
+    store = BlobStore(tmp_path / "objects")
+    payload = b"synthetic junction upload"
+    digest = hashlib.sha256(payload).hexdigest()
+    target = tmp_path / "outside objects"
+    target.mkdir()
+    _make_windows_junction(store.path_for_hash(digest).parent, target)
+
+    with pytest.raises(UploadError, match=r"link|reparse"):
+        store.put_stream("source.txt", io.BytesIO(payload))
+
+    assert not (target / digest).exists()
+    assert list(store.root.glob(".incoming-*")) == []
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_inventory_does_not_descend_windows_junction(
+    tmp_path: Path, nested: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = BlobStore(tmp_path / "objects")
+    payload = b"synthetic outside object"
+    digest = hashlib.sha256(payload).hexdigest()
+    target = tmp_path / "outside objects"
+    target.mkdir()
+    (target / digest).write_bytes(payload)
+    link = store.root / digest[:2]
+    if nested:
+        link.mkdir()
+        link = link / "nested junction"
+    _make_windows_junction(link, target)
+    original_open = Path.open
+
+    def guarded_open(path: Path, *args, **kwargs):
+        assert not path.resolve().is_relative_to(target), "audit read outside objects"
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    inventory = store.audit((digest,))
+    assert inventory.present == ()
+    assert inventory.missing == (digest,)
+    assert inventory.unexpected == (link.relative_to(store.root).as_posix(),)
+
+
+def test_inventory_keeps_reporting_nested_unexpected_files(tmp_path: Path) -> None:
+    store = BlobStore(tmp_path / "objects")
+    valid = store.put_stream("original.txt", io.BytesIO(b"synthetic kept original"))
+    nested = store.root / "unexpected" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "extra.txt").write_text("synthetic stray", encoding="utf-8")
+
+    inventory = store.audit((valid.sha256,))
+
+    assert inventory.present == (valid.sha256,)
+    assert inventory.unexpected == ("unexpected/nested/extra.txt",)
+    assert (nested / "extra.txt").read_text(encoding="utf-8") == "synthetic stray"
+
+
+def test_inventory_does_not_silently_ignore_walk_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = BlobStore(tmp_path / "objects")
+
+    def denied_walk(*args, **kwargs):
+        kwargs["onerror"](PermissionError("synthetic inventory access denied"))
+        return iter(())
+
+    monkeypatch.setattr(os, "walk", denied_walk)
+    with pytest.raises(PermissionError, match="synthetic inventory access denied"):
+        store.audit(())
