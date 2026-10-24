@@ -8,6 +8,8 @@ import re
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime
+from decimal import Decimal
+from itertools import pairwise
 
 from project_watch.studio.insight import SOURCE_LABEL, VERDICTS, counts, held, load, save
 
@@ -37,6 +39,8 @@ SYSTEM = """你是一级市场投资研究员。根据给定的编号素材，�
   优先核对标题与原文摘录中的期间，摘要可能省略期间。原文只有“报告期内”时写“报告期内（具体期间未披露）”，不可猜年份。
   不同报告期分开陈述，预测与实际分开。报告期内零收入与此后销售进展可以同时成立，不直接当作矛盾或当前零收入。
   销售、订单、交付、回款与确认收入不是同一指标，不互相换算；同比比较必须同口径、同长度期间。
+  连续增长或逐年下降须逐期核对同口径数字；先降后升应分年陈述，不由末年增长推出连续增长。
+  前三季度、半年度与全年不是同期；并列说明不同期间可以，不能写成同期规模比较。
   headline、summary、各条依据中的财务结论都要保留其期间，不能仅在引用处标日期。
   缺少最新收入数据只能写“后续收入未披露”，不能把旧报告中的零收入写成“收入仍为零”。
 - 披露与确认：资料没有说明收入确认情况，应写“现有资料未说明/确认情况待核实”，不等于“尚未确认收入”。
@@ -463,6 +467,80 @@ def _operating_direction_conflicts(part: dict) -> bool:
     return False
 
 
+def _annual_revenue_trend_conflict(clause: str) -> bool:
+    """Only prove a contradiction in an adjacent, explicit annual RMB series.
+
+    Do not infer missing periods, currencies, subjects, actuals from forecasts,
+    or compare quarterly figures with annual amounts. This is a narrow guard,
+    not a general financial parser or verification of the cited source.
+    """
+    metric = r'(?:营业收入|营收|收入)'
+    amount = r'\d+(?:\.\d+)?'
+    unit = r'(?:亿元?|万元?|元)'
+    series = re.compile(
+        rf'(20\d{{2}})年?\s*[-—–~～至到]\s*(20\d{{2}})年(?:度)?'
+        rf'{metric}(?:分别)?(?:为)?\s*'
+        rf'(?P<values>(?:{amount}\s*{unit}?\s*[、,，]\s*){{1,9}}{amount}\s*{unit})'
+        r'(?=\s*(?:$|[，,。；;：:]))')
+    trends = list(re.finditer(rf'{metric}(?:连续|持续|逐年)(增长|增加|下降|减少)', clause))
+    for row in series.finditer(clause):
+        count = int(row[2]) - int(row[1]) + 1
+        values = list(re.finditer(rf'({amount})\s*({unit})?', row['values']))
+        if not 2 <= count <= 10 or len(values) != count:
+            continue
+        units = [v[2] for v in values]
+        if not all(units) and any(units[:-1]):
+            continue  # Mixed explicit and missing units are ambiguous.
+        scaled = [Decimal(v[1]) * (100000000 if (u or units[-1]).startswith('亿')
+                                  else 10000 if (u or units[-1]).startswith('万') else 1)
+                  for v, u in zip(values, units, strict=True)]
+        for trend in trends:
+            before = clause[:trend.start()]
+            if re.search(r'(?:不|并非|未|尚未|无法|不能)(?:判断|认定|确认|证明)?\s*$'
+                         r'|(?:若|假设|预计|预期|可能)\s*$', before):
+                continue
+            between = (clause[trend.end():row.start()] if trend.end() <= row.start()
+                       else clause[row.end():trend.start()] if row.end() <= trend.start() else None)
+            if between is None or not re.fullmatch(r'\s*[，,:：]?\s*', between):
+                continue  # Never attach another company's/metric's trend by proximity alone.
+            growing = trend[1] in ('增长', '增加')
+            if any((b < a if growing else b > a) for a, b in pairwise(scaled)):
+                return True
+    return False
+
+
+def _financial_comparison_period_conflict(clause: str) -> bool:
+    """Catch an explicit 'same period' link between unequal financial windows.
+
+    Years alone, implicit dates, unrelated events and qualified non-comparisons
+    are not enough to infer a contradiction. No dates or amounts are rewritten.
+    """
+    if re.search(r'不能|不宜|不可|并非|非同期|口径不同|期间不同', clause):
+        return False
+    windows = {'全年': (1, 12), '前三季度': (1, 9), '上半年': (1, 6), '下半年': (7, 12),
+               '第一季度': (1, 3), '第二季度': (4, 6), '第三季度': (7, 9), '第四季度': (10, 12)}
+    period = re.compile('|'.join(windows))
+
+    def financial_window(fragment):
+        matches = list(period.finditer(fragment))
+        if len(matches) != 1:
+            return None
+        match = matches[0]
+        tail = fragment[match.end():]
+        if re.match(r'[^，,：:；;。\d]{0,12}(?:营业收入|营收|收入|净利润|利润)'
+                    r'[^，,：:；;。\d]{0,8}(?:\d|[千万亿]元)', tail):
+            return windows[match[0]]
+        return None
+
+    for same in re.finditer('同期', clause):
+        left = re.split('[，,]', clause[:same.start()].rstrip(' ，,'))[-1]
+        right = re.split('[，,]', clause[same.end():])[0]
+        a, b = financial_window(left), financial_window(right)
+        if a and b and a != b:
+            return True
+    return False
+
+
 def judgment_issues(data):
     """Reject known scope/assumption defects; this is not general fact checking."""
     issues = []
@@ -476,6 +554,12 @@ def judgment_issues(data):
                 visit(child, f'{path}.{index}')
         elif isinstance(value, str) and path.rsplit('.', 1)[-1] in ('text', 'summary', 'headline'):
             for clause in re.split(r'[。；;\n]', value):
+                if _annual_revenue_trend_conflict(clause):
+                    issues.append({'field': path, 'code': 'financial_series_trend_conflict',
+                                   'hint': '同句逐年收入数字与连续趋势矛盾；逐期核对单位和期间，分年陈述升降，不改写原始数字，也不需重新搜索。'})
+                if _financial_comparison_period_conflict(clause):
+                    issues.append({'field': path, 'code': 'financial_comparison_period_mismatch',
+                                   'hint': '同期比较的明确期间不一致；保留各自报告期并分开陈述，不把季度、半年与全年直接比较，不改日期或补算收入。'})
                 ranking = re.search(r'(?:全球|世界|国际).{0,12}(?:领先|第一|首位)|领先全球', clause)
                 if ranking and not re.search(r'不代表|尚不能|不能判断|无法判断|并非', clause):
                     dimensions = [bool(re.search(pattern, clause)) for pattern in (
@@ -620,8 +704,13 @@ def normalize(data: dict, numbered: dict) -> dict:
                 if key in sections[name]:
                     sections[name][key] = 'unclear'
             sections[name]['summary'] = ''
-    if scope_issues:
+    if any(i['code'] not in ('financial_series_trend_conflict', 'financial_comparison_period_mismatch')
+           for i in scope_issues):
         gaps = ['部分判断缺少可比范围或收入推演条件，未采用；保留事实与反证待核查。', *gaps][:8]
+    if any(i['code'] == 'financial_series_trend_conflict' for i in scope_issues):
+        gaps = ['逐期收入数字与连续趋势结论矛盾，未采用该判断；需核对各年期间、单位及升降。', *gaps][:8]
+    if any(i['code'] == 'financial_comparison_period_mismatch' for i in scope_issues):
+        gaps = ['财务比较期间不一致，未采用同期比较；保留原始期间，待同口径依据后再判断。', *gaps][:8]
     return {"headline": '' if bad_headline or temporal_sections or rejected_sections or scope_issues else headline, "position": position, "technology": technology, "industry": industry,
             "operations": rings["operations"], "chain": rings["chain"],
             "gaps": gaps, "qualifier_checks": qualifier_checks, "consistency_checks": consistency_checks,

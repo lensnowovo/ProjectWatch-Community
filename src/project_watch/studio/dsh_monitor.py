@@ -507,7 +507,7 @@ class PublicMonitor(PublicBootstrap):
         issues = self.pipeline.insight_generator.judgment_issues(raw)
         if issues:
             raise ToolValidationError('judgment_scope_validation', issues, next_tool='pw_judge',
-                                      saved=False, hint='修正范围或推演条件，保留事实、反证和缺口；不要重新搜索。')
+                                      saved=False, hint='按 issues 修正范围、逐期数字与趋势或推演条件，保留事实、反证和缺口；不要重新搜索。')
         analysis = self.pipeline.insight_generator.normalize(raw, ctx["numbered"])
         if not analysis["cited"]:
             raise ValueError("judgment needs valid citations")

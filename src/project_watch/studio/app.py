@@ -14,10 +14,10 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from project_watch.local_ocr import ocr_capabilities
+from project_watch.static_files import ProductStaticFiles
 from project_watch.studio import digest as dg
 from project_watch.studio import finance, review
 from project_watch.studio.agent_access import attach_agent_routes
@@ -1067,11 +1067,11 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     # ------------------------------------------------------------- web UI
     index = WEB_ROOT / "index.html"
     if (WEB_ROOT / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=WEB_ROOT / "assets"), name="studio-assets")
+        app.mount("/assets", ProductStaticFiles(directory=WEB_ROOT / "assets"), name="studio-assets")
 
     def spa():
         if index.is_file():
-            return FileResponse(index, headers={"Cache-Control": "no-store"})
+            return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-store"})
         return HTMLResponse("<h1>ProjectWatch</h1><p>前端尚未构建：请在 frontend 目录运行 npm run build。</p>")
 
     # Replace the classic page at "/" and keep it reachable at /classic.
@@ -1081,7 +1081,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     def classic_page():
         if not getattr(app.state, 'classic_available', True):
             raise HTTPException(503, '此安装包仅提供 Studio，未包含旧版界面。')
-        return FileResponse(classic)
+        return FileResponse(classic, media_type="text/html")
 
     app.add_api_route("/classic", classic_page, include_in_schema=False,
                       response_model=None)

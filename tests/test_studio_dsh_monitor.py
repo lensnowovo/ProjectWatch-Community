@@ -374,6 +374,34 @@ def test_judgment_cannot_skip_pending_public_assessments(loop):
     assert judge(loop, ref)["saved"] is True
 
 
+@pytest.mark.parametrize(('text', 'code'), [
+    ('收入连续增长：2022-2024年营收8000万、7000万、1.2亿元', 'financial_series_trend_conflict'),
+    ('甲公司2024年前三季度收入1亿元，同期乙公司全年收入1.2亿元', 'financial_comparison_period_mismatch'),
+])
+def test_financial_contradiction_rejected_before_save_then_corrected(loop, text, code):
+    from project_watch.studio import insight
+    from project_watch.studio.dsh_bootstrap import ToolValidationError
+
+    _, ctx, ref = collect(loop)
+    for row in loop.pending_assessments(ctx):
+        loop.tool("pw_assess", {"watch_id": row["watch_id"], "refs": row["refs"],
+                               "status": "insufficient", "note": "合成测试：仍需后续公开材料"})
+    raw = {"operations": {"verdict": "improving", "for": [{
+        "text": text, "refs": [ref]}]}}
+    before = insight.load(loop.store, loop.project_id)
+    with pytest.raises(ToolValidationError) as error:
+        loop.tool("pw_judge", {"analysis_json": json.dumps(raw)})
+    feedback = error.value.feedback()
+    assert feedback['saved'] is False and feedback['next_tool'] == 'pw_judge'
+    assert feedback['issues'][0]['field'] == 'operations.for.0.text'
+    assert feedback['issues'][0]['code'] == code
+    assert not loop.state.get('judged')
+    assert insight.load(loop.store, loop.project_id) == before
+    # The correction uses the already supplied evidence; no search/retry is needed.
+    assert judge(loop, ref)['saved'] is True
+    assert insight.load(loop.store, loop.project_id) is not None
+
+
 def test_assessment_feedback_explains_routing_and_numeric_failures(loop):
     from project_watch.studio.dsh_bootstrap import ToolValidationError
 
