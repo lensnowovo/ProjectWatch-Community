@@ -11,6 +11,9 @@ import { comparePeriods } from "./metrics";
 import { ChartHint } from "./chartHint";
 import { SignalListDrawer } from "./signalList";
 import { raceRevision, useRace } from './raceData';
+import { jobWorkState, WORK_LABEL } from "./workState";
+import { WorkIndicator } from "./Operational";
+import { TrackSignalRows } from './TrackSignalRows';
 
 /**
  * 当前判断 organised by question (8945 分析): a strip of equal tiles, one per question; the chosen one shows a chart
@@ -61,6 +64,10 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   const selected = QUESTIONS.find(q => q.key === chosen);
   const active = selected && judged(view, selected) ? selected.key : first;
   const running = !!view?.job && ["queued", "running"].includes(view.job.status);
+  const analysisJob = detail.jobs?.find(j => j.id === view?.job?.id);
+  const analysisState = analysisJob ? jobWorkState(detail, analysisJob) : view?.job ? jobWorkState(detail, {
+    ...view.job, kind: "insight", stage: "", error: view.job.error || "", finished_at: null,
+  }) : "idle";
   const q = QUESTIONS.find((x) => x.key === active);
   const j = q ? judged(view, q) : null;
   const labelsFor = (x: Question) => view?.labels?.[x.scale === "maturity" ? "maturity" : (x.key as "position")] ?? {};
@@ -70,6 +77,10 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   </section>;
   return (
     <section className="qa" aria-label="按问题看判断">
+      {(running || analysisState === "failed" || analysisState === "needs_confirmation") && <div className="op-local" role="status">
+        <WorkIndicator state={analysisState} label={`综合判断 · ${analysisJob?.runtime?.label || WORK_LABEL[analysisState] || "状态待同步"}`} />
+        {analysis && <span className="muted small">当前显示上次结果</span>}
+      </div>}
       <div className="rj-tiles qa-tiles" role="tablist" aria-label="选择问题">
         {QUESTIONS.map((x, i) => {
           const v = judged(view, x);
@@ -80,7 +91,7 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
             <span className="rj-tile-head"><span className="rj-tile-label"><span className="qa-no">0{i + 1}</span>{x.label}</span>
               <span className={`rj-verdict ${v ? verdictTone(x.scale, v.verdict) : ""}`}>{v ? labelsFor(x)[v.verdict] ?? v.verdict : "—"}</span></span>
             <span className="rj-tile-summary">{v ? v.summary : error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : analysis ? "下次 AI 交叉分析时生成" : "还没有 AI 交叉分析"}</span>
-            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : running ? "分析中…" : ""}</span>
+            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : "暂无结果"}</span>
             <i className="rj-tile-glow" aria-hidden="true" />
           </button>;
         })}
@@ -313,29 +324,14 @@ function Chain({ detail }: { detail: ProjectDetail }) {
 
 // ------------------------------------------------------------------ 行业环境
 
-const TONE: Record<string, string> = { good: "顺风", bad: "逆风", neutral: "中性", unknown: "方向未明" };
-
 /** The four sector signals as rows: direction, the number, its recent trend, and what it means for the company. */
 function Track({ projectId, revision }: { projectId: string; revision: string }) {
   const { data, loading } = useAsync<TrackView | null>(() => api.track(projectId).catch(() => null), [projectId, revision]);
   const [open, setOpen] = useState<TrackCell | null>(null);
   if (loading && !data) return <Skeleton lines={5} />;
   if (!data?.cells.length) return <Visual title="赛道信号"><p className="muted small">赛道资料不足；见行业环境页签。</p></Visual>;
-  const good = data.cells.filter((c) => c.tone === "good").length, bad = data.cells.filter((c) => c.tone === "bad").length;
-  const reading = [data.summary || "", `${good} 个信号顺风、${bad} 个逆风、${data.cells.length - good - bad} 个方向未明。`].filter(Boolean);
-  return <Visual title="赛道信号" note={`${data.industry ? `${data.industry} · ` : ""}近 ${data.quarters.length} 个季度`} reading={reading}>
+  return <>
     <SignalListDrawer projectId={projectId} cell={open} open={!!open} onClose={() => setOpen(null)} />
-    <div className="qa-signals">{data.cells.map((c) => {
-      const vals = c.series.map((s) => s.value), max = Math.max(1, ...vals), any = vals.some((v) => v);
-      return <button key={c.key} className={`qa-signal ${c.tone}`} onClick={() => setOpen(c)} aria-label={`看全部${c.label}记录`}>
-        <span className="qa-signal-name">{c.label}<em>{TONE[c.tone] ?? c.direction}</em></span>
-        <span className="qa-signal-value"><b>{c.value || "—"}</b><small>{c.sub || c.direction}</small></span>
-        <span className="qa-signal-trend" aria-label={any ? c.series.map((s) => `${s.label} ${s.value}`).join("，") : "没有分季度记录"}>
-          {any ? c.series.map((s, i) => <ChartHint key={s.label} title={`${c.label} · ${s.label}`} value={`${s.value} 条记录`} meta={`当前方向：${TONE[c.tone] ?? c.direction}`}
-            note="柱高是本季度收录记录数，不是市场规模或景气指数。颜色对应本行的整体方向。"><motion.i initial={{ height: 0 }} animate={{ height: `${s.value / max * 100}%` }}
-            transition={{ delay: i * .04, duration: .4, ease: EASE }} /></ChartHint>) : <small className="muted">无分季度记录</small>}</span>
-        <span className="qa-signal-us">{c.for_us || <span className="muted">对公司的影响未整理</span>}<i className="qa-signal-go" aria-hidden="true">→</i></span>
-      </button>;
-    })}</div>
-  </Visual>;
+    <TrackSignalRows data={data} onOpen={setOpen} />
+  </>;
 }

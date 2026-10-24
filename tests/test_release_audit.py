@@ -349,3 +349,27 @@ def test_binary_disguised_as_synthetic_json_is_rejected(tmp_path: Path) -> None:
     assert findings == [
         "products/project-watch/tests/fixtures/monitoring-golden.json: invalid text JSON"
     ]
+
+
+def test_windows_launcher_csharp_is_scanned_not_exempted(tmp_path: Path) -> None:
+    launcher = tmp_path / 'products/project-watch/scripts/windows/Launcher.cs'
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text('// synthetic token: ' + 'ghp_' + 'x' * 36, encoding='utf-8')
+    subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True, capture_output=True)
+    count, findings = audit_tracked_source(tmp_path)
+    assert count == 1
+    assert any('github_token' in finding for finding in findings)
+    assert not any('non-text' in finding for finding in findings)
+
+
+def test_nsis_installer_is_scanned_not_exempted(tmp_path: Path) -> None:
+    installer = tmp_path / 'products/project-watch/scripts/windows/Installer.nsi'
+    installer.parent.mkdir(parents=True)
+    installer.write_text('; synthetic token: ' + 'ghp_' + 'x' * 36, encoding='utf-8')
+    subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True, capture_output=True)
+    count, findings = audit_tracked_source(tmp_path)
+    assert count == 1
+    assert any('github_token' in finding for finding in findings)
+    assert not any('non-text' in finding for finding in findings)

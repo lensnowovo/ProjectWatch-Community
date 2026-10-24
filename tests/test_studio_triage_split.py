@@ -23,7 +23,9 @@ class ShortModel:
         self.calls.append(len(ids))
         if len(ids) > self.limit or (self.stubborn and self.stubborn in user):
             raise ModelError("模型输出未完成", code="model_output_truncated")
-        return {"results": [{"id": i, "relevant": True, "importance": "notable", "summary": "s", "impact": "i"} for i in ids]}
+        return {"results": [{"id": i, "source_title": t, "source_quote": t,
+                             "relevant": True, "importance": "notable", "summary": "s", "impact": "i"}
+                            for i, t in zip(ids, re.findall(r"标题：(.*)", user), strict=True)]}
 
 
 def _setup(tmp_path, n):
@@ -81,8 +83,9 @@ class MalformedModel(ShortModel):
         self.calls.append(len(ids))
         if len(ids) > self.limit or (self.stubborn and self.stubborn in user):
             raise ModelError("模型返回的内容不是有效 JSON", code="model_output_invalid_json")
-        return {"results": [{"id": i, "relevant": True, "importance": "notable",
-                             "summary": "s", "impact": "i"} for i in ids]}
+        return {"results": [{"id": i, "source_title": t, "source_quote": t, "relevant": True, "importance": "notable",
+                             "summary": "s", "impact": "i"}
+                            for i, t in zip(ids, re.findall(r"标题：(.*)", user), strict=True)]}
 
 
 def test_malformed_complete_batches_are_split(tmp_path):
@@ -155,7 +158,8 @@ def test_http_200_stop_and_failed_repair_can_recover_by_bisection(tmp_path):
         if len(ids) > 1 or not ids:  # Invalid batch and equally invalid repair, both complete.
             text = '{"results":[{"id":"example","",""}]}'
         else:
-            text = json.dumps({"results": [{"id": ids[0], "relevant": True,
+            title = re.findall(r"标题：(.*)", user)[0]
+            text = json.dumps({"results": [{"id": ids[0], "source_title": title, "source_quote": title, "relevant": True,
                                             "importance": "notable", "summary": "s"}]})
         return Response(200, {}, json.dumps({"choices": [{"message": {"content": text},
                                                          "finish_reason": "stop"}]}).encode())

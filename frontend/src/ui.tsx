@@ -1,5 +1,5 @@
-import { AnimatePresence, motion } from "motion/react";
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import ShinyText from "./bits/ShinyText";
 import { api, ApiError, type Category, type Fragment, type Importance, type Ref } from "./api";
 
@@ -116,6 +116,7 @@ const CODE_MESSAGE: Record<string, string> = {
   model_output_truncated: "模型输出不完整，请在设置中提高单次回复上限后重试。",
   model_http_failure: "模型服务返回错误，请稍后重试。",
   model_access_denied: "模型服务拒绝访问，请检查密钥。",
+  dsh_unavailable: "DSH 研究引擎不可用，自动研究已暂停，已有结果保留。请到设置 → 研究引擎查看。",
   commercial: "专业来源暂时无法读取，已保留上次结果。",
 };
 
@@ -143,20 +144,27 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
+  // One read per dependency generation. Late responses from another project or
+  // filter never overwrite the current view; refresh keeps the last snapshot.
+  const request = useMemo(() => ({ fn, active: true, flight: null as Promise<void> | null }), deps);
   const load = useCallback(() => {
+    if (request.flight) return request.flight;
     setLoading(true);
-    return fn()
+    request.flight = Promise.resolve().then(request.fn)
       .then((value) => {
+        if (!request.active) return;
         setData(value);
         setError(null);
       })
-      .catch(setError)
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+      .catch(e => { if (request.active) setError(e); })
+      .finally(() => { request.flight = null; if (request.active) setLoading(false); });
+    return request.flight;
+  }, [request]);
   useEffect(() => {
+    request.active = true;
     load();
-  }, [load]);
+    return () => { request.active = false; };
+  }, [load, request]);
   return { data, error, loading, reload: load, setData };
 }
 
@@ -269,7 +277,8 @@ export function Drawer({ open, onClose, eyebrow, title, subtitle, children }: {
 
 /** Status line for background work: a quiet shimmer instead of a spinner. */
 export function Working({ text }: { text: string }) {
-  return <ShinyText text={text} speed={2.4} className="working" color="var(--muted)" shineColor="var(--ink)" spread={110} />;
+  const reduced = useReducedMotion();
+  return <ShinyText text={text} disabled={!!reduced} speed={2.4} className="working" color="var(--muted)" shineColor="var(--ink)" spread={110} />;
 }
 
 /** Amounts in 万元 switch to 亿元 above 1 亿 so a laptop-width tile stays readable. */

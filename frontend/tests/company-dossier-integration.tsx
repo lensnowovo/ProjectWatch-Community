@@ -1,0 +1,17 @@
+// Synthetic UI harness: actual production components, no live API or stored configuration.
+import React, {useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {BrowserRouter} from 'react-router-dom';
+import '../src/styles.css';
+import ProjectHeader from '../src/ProjectHeader';
+import {CompanyOverview} from '../src/overview';
+import {ToastProvider} from '../src/motion';
+import {api, type ProjectDetail} from '../src/api';
+import './company-dossier-integration.css';
+for(const key of Object.keys(api)) (api as any)[key]=async()=>{if(key==='questions')return {questions:[]};throw new Error('Synthetic preview does not permit API operations');};
+const fact=(kind:string,label:string,text:string,date='',published='2026-10-01')=>({kind,label,text,date,refs:[{url:'https://example.invalid/source',source:'模拟公告',title:'模拟来源',published_at:published,quote:text}]});
+const fixture={project:{id:'synthetic-editorial',name:'澄序医疗',legal_name:'澄序神经科技（上海）有限公司',description:'面向科研与临床研究的神经接口系统、信号采集设备和康复研究工具。',industry:'医疗器械 · 神经接口',location:'上海',stage:'A轮（2026年9月公告）',founded:'2018',website:'example.invalid',activated:false,status:'active'},documents:[],jobs:[{id:'synthetic-job',kind:'commercial',status:'failed',dismissed:true,created_at:'2026-10-01',runtime:{state:'partial',label:'部分来源已更新'}}],model_ready:false,profile:{one_liner:'面向科研与临床研究的神经接口系统、信号采集设备和康复研究工具。',summary:'公司围绕神经信号采集、处理和反馈开展产品研发。全部公司、人员与事件为合成样本，不指代真实项目。',documents:1,sections:[{title:'客户与应用',points:[{text:'科研设备面向科研单位与临床研究团队。意向订单尚未转为已签合同，未确认收入。',refs:[],date:'2026-09'}]}],highlights:[],milestones:[{text:'计划扩大临床研究，尚未完成。',date:'2027',status:'planned',refs:[]}]},public_profile:{updated_at:'2026-10-01',facts:[fact('product','Sense · 信号采集','非植入式神经信号采集设备已有研究用途交付，不代表医疗器械获批。'),fact('product','Link · 神经接口','完成首例临床入组，仍处于临床研究阶段，尚未取得上市许可。'),fact('product','Rehab · 康复研究','终端处于样机验证阶段。现有材料没有披露商业订单，也未取得完整注册进度。'),...Array.from({length:4},(_,i)=>fact('product',`合成扩展产品 ${i+1}`,'产品描述保留完整报告期和限定词。' .repeat(18))),fact('person','林知远 · 创始人','神经工程研究背景，负责技术与产品方向；以上履历为虚构样本。'),fact('person','许文清 · 临床负责人','负责临床研究及医院合作，为合成履历。'),fact('financing','新一轮融资','公告列示晨桥创投、知行医疗基金参与，金额未在公告披露；不推算股权比例。','','2026-09-26'),fact('milestone','首例入组','植入式系统首例入组，仍处于临床研究。','2026-10-18'),fact('milestone','首批交付','科研设备首批交付。','2023'),fact('milestone','早期研发','事件日期尚未取得。',''),fact('business','注册地址','合成市合成区合成路1号')]}} as unknown as ProjectDetail;
+function App(){const [empty,setEmpty]=useState(false);const [dark,setDark]=useState(false);const detail=empty?{project:{id:'synthetic-empty',name:'新项目',activated:false},jobs:[],documents:[]} as unknown as ProjectDetail:fixture;
+return <ToastProvider><div className="integration-tools"><span>正式组件 · 合成数据 · 不连接当前实例</span><label><input type="checkbox" checked={empty} onChange={e=>setEmpty(e.target.checked)}/>空档案</label><button onClick={()=>{setDark(!dark);document.documentElement.setAttribute('data-theme',dark?'light':'dark');}}>切换深浅色</button></div><main className="integration-page"><ProjectHeader detail={detail} actions={<><button className="btn primary" disabled>＋ 上传资料</button><button className="btn" disabled>立即更新</button></>} status={<p>已有结果保留。部分来源未覆盖；提醒已收起，不表示任务已完成。</p>} goto={()=>{}}/><nav className="integration-tabs"><span>01 当前判断</span><strong>02 项目总览</strong><span>03 内部信息</span><span>04 外部信息</span><span>05 监控范围</span></nav><CompanyOverview key={detail.project.id} detail={detail} onReload={()=>{}}/></main></ToastProvider>;
+}
+createRoot(document.getElementById('root')!).render(<BrowserRouter><App/></BrowserRouter>);

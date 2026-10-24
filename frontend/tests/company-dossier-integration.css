@@ -1,0 +1,6 @@
+.integration-tools{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:10px 20px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.integration-tools button{font:inherit;color:inherit;background:var(--paper);border:1px solid var(--line);padding:4px 8px;border-radius:4px}
+.integration-page{width:min(1240px,calc(100% - 48px));margin:0 auto 64px}
+.integration-tabs{display:flex;gap:24px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:20px 0 28px;padding:12px 0;font-size:13px;color:var(--muted)}
+.integration-tabs strong{color:var(--ink)}
+@media(max-width:760px){.integration-page{width:calc(100% - 24px)}.integration-tabs{gap:12px;font-size:12px}.integration-tools{gap:10px;padding:8px 12px}}

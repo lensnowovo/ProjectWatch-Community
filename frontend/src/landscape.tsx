@@ -12,9 +12,10 @@ import { RedFlags } from "./flags";
 import { EASE, useToast } from "./motion";
 import { Empty, EvidenceLinks, byNewest, seenAt, errorMessage, relTime, useAsync } from "./ui";
 import { Seg } from "./widgets";
-import { jobWorkState, monitoringRevision, WORK_LABEL } from "./workState";
-import { companyName } from "./peerNames";
+import { insightRevision, jobWorkState, monitoringRevision, WORK_LABEL } from "./workState";
+import { companyName, competitionIdentity } from "./peerNames";
 import { Block, Columns, Figure, Reference, Skeleton, VerdictBand } from "./frame";
+import { useStagedRead, WorkIndicator } from "./Operational";
 
 // ------------------------------------------------------------------ 公司动态
 
@@ -65,8 +66,12 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
   const { data, loading, setData } = useAsync(
     () => (watch ? api.watchEvents(watch)
       : api.feed({ project_id: projectId, category: "company", importance: major ? "major" : undefined, limit: 200 })),
-    [projectId, major, watch, revision],
+    [projectId, major, watch],
   );
+  const staged = useStagedRead(`${projectId}:${major}:${watch}`, () => watch ? api.watchEvents(watch)
+    : api.feed({ project_id: projectId, category: "company", importance: major ? "major" : undefined, limit: 200 }),
+    next => next.some(item => !(data ?? []).some(old => old.id === item.id)), !!data);
+  const added = staged.pending?.filter(item => !(data ?? []).some(old => old.id === item.id)).length ?? 0;
   const own = (watch ? data ?? [] : (data ?? []).filter((i) => i.category === "company")).slice().sort(byNewest);
   const outlook = detail.brief?.outlook;
   const stale = detail.brief?.dependency?.status === "stale";
@@ -98,6 +103,8 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
         </>} />
 
       <NewsStats items={own} counts={detail.counts} />
+      {staged.failed && <p className="muted small">暂时无法检查更新，当前动态保留。</p>}
+      {added > 0 && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); }}>新增 {added} 条 · 点击查看</button>}
       <Commitments projectId={projectId} revision={revision} progress={detail.monitoring_progress} />
       {detail.capabilities?.insight_projections === true && <RedFlags projectId={projectId} revision={revision} progress={detail.monitoring_progress} />}
 
@@ -244,7 +251,7 @@ function LandscapeStatus({ detail, landscape, what }: { detail: ProjectDetail; l
     <div className="landscape-status muted small">
       {landscape ? <>上次 {relTime(landscape.generated_at)} · {landscape.evidence_count} 条依据{landscape.with_search ? " · 含搜索结果" : " · 仅收录新闻"}</>
         : "资料摘要尚未整理"}
-      {running ? <span> · {work ? WORK_LABEL[work] : "等待更新"}</span> : <button className="link" disabled={busy || !detail.model_ready || !detail.project.activated} onClick={refresh}>更新资料摘要 ↻</button>}
+      {running ? <WorkIndicator state={work || "queued"} label={last?.runtime?.label || (work ? WORK_LABEL[work] : "等待更新")} /> : <button className="link" disabled={busy || !detail.model_ready || !detail.project.activated} onClick={refresh}>更新资料摘要 ↻</button>}
       {landscape?.errors?.length ? <span className="text-warn"> · 部分未完成：{landscape.errors.map(errorMessage).join("；")}</span> : null}
       {failed && <span className="text-warn"> · 上次整理没有完成{failed.error ? `：${errorMessage(failed.error)}` : ""}</span>}
     </div>
@@ -372,7 +379,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
   expandAll?: boolean;
 }) {
   const [openPeer, setOpenPeer] = useState<string | null>(null);
-  const deep = useAsync(() => api.insight(detail.project.id).catch(() => null), [detail.project.id, detail.project.last_external_at]);
+  const deep = useAsync(() => api.insight(detail.project.id).catch(() => null), [detail.project.id, insightRevision(detail)]);
   const toast = useToast();
   const [saving, setSaving] = useState(false);
   const [peerName, setPeerName] = useState("");
@@ -421,39 +428,46 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
   // Defense in depth for an older API/cache. Legacy peer rows have no verified
   // relation contract; never show their threats or field assignments as facts.
   const candidates = competitionCandidates(detail);
+  const peerKey = competitionIdentity(detail);
   for (const row of detail.competition_research?.candidates ?? []) {
     if (!companyName(row.name)) continue;
     if (!(detail.relationships?.items ?? []).some((r) => r.peer_id === row.id)
         && !(detail.relationships?.exclusions ?? []).some((r) => r.peer_id === row.id && r.company_wide)
-        && !candidates.some((r) => r.name === row.name)) candidates.push({ name: row.name, refs: [] });
+        && !candidates.some((r) => peerKey(r.name, r.peerId) === peerKey(row.name, row.id)))
+      candidates.push({ name: row.name, refs: [], peerId: row.id });
   }
   const manual = (detail.relationships?.items ?? []).filter((r) => r.origin === "user_override" && companyName(r.peer_name));
   const automatic = (detail.relationships?.items ?? []).filter((r) => r.origin === "auto_research" && companyName(r.peer_name));
   const supported = automatic.filter((r) => r.support === "supported" && r.status === "current" && !r.scope_identity_changed);
   const exclusions = detail.relationships?.exclusions ?? [];
-  const peers = new Map(candidates.map(c => [c.name, { ...c, rows: [] as ScopedRelationship[] }]));
+  const peers = new Map(candidates.map(c => [peerKey(c.name, c.peerId), { ...c, aliases: [c.name], rows: [] as ScopedRelationship[] }]));
   for (const row of [...manual, ...automatic]) {
     if (!companyName(row.peer_name)) continue;
-    const peer = peers.get(row.peer_name) ?? { name: row.peer_name, refs: [], rows: [] };
-    peer.rows.push(row); peers.set(row.peer_name, peer);
+    const key = peerKey(row.peer_name, row.peer_id);
+    const peer = peers.get(key) ?? { name: row.peer_name, refs: [], aliases: [], rows: [], peerId: row.peer_id };
+    peer.aliases = [...new Set([...peer.aliases, row.peer_name, ...(row.peer_names ?? [])])];
+    if (!peer.rows.length || row.origin === "user_override") peer.name = row.peer_name;
+    peer.peerId = row.peer_id ?? peer.peerId;
+    peer.rows.push(row); peers.set(key, peer);
   }
-  const removedNames = new Set(exclusions.filter(r => r.company_wide).flatMap(r => r.peer_names ?? [r.peer_name]).map(n => n.toLocaleLowerCase()));
-  for (const name of peers.keys()) if (removedNames.has(name.toLocaleLowerCase())) peers.delete(name);
+  const removedNames = new Set(exclusions.filter(r => r.company_wide)
+    .flatMap(r => (r.peer_names ?? [r.peer_name]).map(n => peerKey(n, r.peer_id))));
+  for (const key of peers.keys()) if (removedNames.has(key)) peers.delete(key);
   const self = comp?.companies.find((c) => c.is_self);
   const ownCells = (comp?.dimensions ?? []).filter((dim) => self?.cells[dim]?.text);
   // Registry programmes summarise a card; unverified search leads go last.
   const registryByPeer = new Map<string, RegistryOverlap[]>();
-  for (const { peer, product } of registryRows(detail)) registryByPeer.set(peer.name, [...(registryByPeer.get(peer.name) ?? []), product]);
-  const isLead = (name: string) => !!detail.competition_research?.candidates?.some(c => c.name === name && c.origin === "search");
+  for (const { peer, product } of registryRows(detail)) registryByPeer.set(peerKey(peer.name), [...(registryByPeer.get(peerKey(peer.name)) ?? []), product]);
+  const isLead = (name: string) => !!detail.competition_research?.candidates?.some(c => peerKey(c.name, c.id) === peerKey(name) && c.origin === "search");
   const orderedPeers = [...peers.values()].sort((a, b) =>
     Number(isLead(a.name) && !a.rows.length) - Number(isLead(b.name) && !b.rows.length)
-    || Number(!registryByPeer.has(a.name)) - Number(!registryByPeer.has(b.name)));
+    || Number(!registryByPeer.has(peerKey(a.name, a.peerId))) - Number(!registryByPeer.has(peerKey(b.name, b.peerId))));
 
   const peerView = (peer: (typeof orderedPeers)[number]) => {
     const selected = peer.rows.some(r => r.origin === "user_override");
-    const peerId = peer.rows.find(r => r.peer_id)?.peer_id ?? detail.competition_research?.candidates?.find(c => c.name === peer.name)?.id;
-    const profile = comp?.profiles?.find(p => p.name === peer.name)
-      ?? comp?.companies.find(p => !p.is_self && p.name === peer.name);
+    const peerId = peer.peerId;
+    const profile = comp?.profiles?.find(p => peerKey(p.name) === peerKey(peer.name, peerId))
+      ?? comp?.companies.find(p => !p.is_self && peerKey(p.name) === peerKey(peer.name, peerId));
     const cells = Object.entries(profile?.cells ?? {}).filter(([, c]) => c.text && c.refs.length).slice(0, 4);
     const peerFacts = peer.rows.flatMap(r => (r.basis_facts ?? []).filter(f =>
       (f.subject_id === r.peer_id || f.subject_id === r.peer_product_id) && f.basis === "actual" && f.refs.length))
@@ -461,14 +475,14 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
     // Display labels often append English names in brackets or after a
     // space. Match those literal Chinese labels in reports, without
     // merging stored company identities or inferring relationship facts.
-    const mentionNames = [peer.name, peer.name.split(/[（(]/)[0].trim(), peer.name.match(/^[\u3400-\u9fff]{2,}/)?.[0]]
+    const mentionNames = [...peer.aliases, peer.name, peer.name.split(/[（(]/)[0].trim(), peer.name.match(/^[\u3400-\u9fff]{2,}/)?.[0]]
       .filter((n): n is string => !!n);
     const latest = reports.filter(m => mentionNames.some(n => m.title.toLocaleLowerCase().includes(n.toLocaleLowerCase()))).slice(0, 2);
     const refs = (peer.refs ?? []).filter((r, i, all) => r.quote && !all.some((other, j) => j !== i
       && other.id === r.id && (other.quote?.length ?? 0) > r.quote!.length && other.quote?.includes(r.quote!))).slice(0, 2);
     // Search leads with nothing verified (news mentions alone do not count) become one compact line;
     // planned competitors keep their card so they can be confirmed at a glance.
-    const verified = cells.length || refs.length || peerFacts.length || registryByPeer.has(peer.name)
+    const verified = cells.length || refs.length || peerFacts.length || registryByPeer.has(peerKey(peer.name, peerId))
       || peer.rows.some(r => r.basis_facts?.length || r.peer_product_name);
     const empty = !selected && !verified && isLead(peer.name);
     return { peer, selected, peerId, cells, peerFacts, latest, refs, empty };
@@ -482,7 +496,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
   const confirmed = views.filter((v) => v.selected).length;
   const recent = reports.filter((m) => m.date && Date.now() - Date.parse(m.date) < 30 * 86400_000).length;
   const summaryOf = (v: (typeof views)[number]) => v.cells[0]?.[1].text || v.refs[0]?.quote || v.peerFacts[0]?.value
-    || v.peer.rows.find((r) => r.peer_product_name)?.peer_product_name || (registryByPeer.get(v.peer.name) ?? [])[0]?.name || "";
+    || v.peer.rows.find((r) => r.peer_product_name)?.peer_product_name || (registryByPeer.get(peerKey(v.peer.name, v.peerId)) ?? [])[0]?.name || "";
 
   return (
     <div className="tab-frame landscape competition-view">
@@ -504,7 +518,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
         {cardViews.length > 0 && <ol className="rival-list">{cardViews.map((v) => {
           const { peer, selected, peerId, cells, peerFacts, latest, refs } = v;
           const open = expandAll || openPeer === peer.name;
-          return <li key={peer.name} className={`rival-row${open ? " open" : ""}`}>
+          return <li key={peerKey(peer.name, peerId)} className={`rival-row${open ? " open" : ""}`}>
             <button className="rival-line" aria-expanded={open} onClick={() => setOpenPeer(open ? null : peer.name)}>
               <span className="rival-name"><h4>{peer.name}</h4>{selected ? <span className="cf-tag">已确认</span>
                 : !peer.rows.length && isLead(peer.name) ? <span className="cf-tag muted" title="名字出自搜索摘要原文，尚未核实是否为竞对">搜索线索</span> : null}</span>
@@ -522,7 +536,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
               {latest.map(m => <p className="rival-latest" key={m.id}><time>{m.date}</time>
                 {m.url ? <a href={m.url} target="_blank" rel="noreferrer noopener">{m.title}</a> : m.title}</p>)}
               {peer.rows.map(r => <BilateralBasis key={r.scope_key} projectId={detail.project.id} row={r} />)}
-              {(registryByPeer.get(peer.name) ?? []).slice(0, 2).map(p => <p className="rival-pos" key={p.product_id}>{p.name}
+              {(registryByPeer.get(peerKey(peer.name, peerId)) ?? []).slice(0, 2).map(p => <p className="rival-pos" key={p.product_id}>{p.name}
                 <span className="muted small"> · {REGISTRY_LEVEL[p.level]}{p.indication_overlap === "same" ? " · 同一疾病类别" : ""}
                   {p.trials?.[0]?.phase ? ` · ${p.trials[0].phase}` : ""}</span></p>)}
               {!!peer.refs?.length && <details><summary className="muted small">出处</summary><EvidenceLinks refs={peer.refs} /></details>}
@@ -585,21 +599,24 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
 
 // Pending source leads must stay separate even when paired with a legacy API.
 export function competitionCandidates(detail: ProjectDetail) {
+  const peerKey = competitionIdentity(detail);
   const comp = detail.landscape?.competition;
   const rows = [...(comp?.candidates ?? []),
     ...(comp?.companies.filter((c) => !c.is_self) ?? []),
     ...(detail.plan?.competitors ?? [])];
-  const candidates = new Map<string, { name: string; refs: NonNullable<typeof comp>["summary_refs"] }>();
+  const candidates = new Map<string, { name: string; refs: NonNullable<typeof comp>["summary_refs"]; peerId?: string }>();
   const excluded = new Set((detail.relationships?.exclusions ?? []).filter((r) => r.company_wide)
-    .flatMap((r) => r.peer_names ?? [r.peer_name]).map(n => n.toLocaleLowerCase()));
-  const ownNames = new Set([detail.project.name, detail.project.legal_name].filter(Boolean).map(n => n!.toLocaleLowerCase()));
+    .flatMap((r) => (r.peer_names ?? [r.peer_name]).map(n => peerKey(n, r.peer_id))));
+  const ownNames = new Set([detail.project.name, detail.project.legal_name].filter(Boolean).map(n => peerKey(n!)));
   for (const row of rows) {
     const name = row.name.trim();
-    if (!companyName(name) || excluded.has(name.toLocaleLowerCase()) || ownNames.has(name.toLocaleLowerCase())) continue;
-    const old = candidates.get(name);
+    const key = peerKey(name);
+    if (!companyName(name) || excluded.has(key) || ownNames.has(key)) continue;
+    const old = candidates.get(key);
     const refs = "refs" in row ? row.refs ?? [] : [];
-    candidates.set(name, { name, refs: [...(old?.refs ?? []), ...refs].filter((r, i, all) =>
-      (r.title + (r.quote ?? "")).includes(name) && all.findIndex((x) => x.id === r.id && x.quote === r.quote) === i) });
+    const namedRefs = refs.filter(r => (r.title + (r.quote ?? "")).includes(name));
+    candidates.set(key, { name: old?.name ?? name, refs: [...(old?.refs ?? []), ...namedRefs].filter((r, i, all) =>
+      all.findIndex((x) => x.id === r.id && x.quote === r.quote) === i) });
   }
   return [...candidates.values()];
 }

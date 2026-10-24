@@ -381,7 +381,7 @@ class FakeWeb:
             ids = re.findall(r"id=([0-9a-f]+)", user)
             titles = re.findall(r"标题：(.*)", user)
             return {"results": [
-                {"id": i, "relevant": "bakery" not in t, "category": None,
+                {"id": i, "source_title": t, "source_quote": t, "relevant": "bakery" not in t, "category": None,
                  "importance": "major" if "Series B" in t else "notable",
                  "summary": f"摘要：{t}", "impact": ""} for i, t in zip(ids, titles, strict=True)]}
         if "动态简报" in system:

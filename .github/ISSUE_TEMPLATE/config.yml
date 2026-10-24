@@ -1,0 +1,10 @@
+{
+  "blank_issues_enabled": false,
+  "contact_links": [
+    {
+      "name": "私密安全报告",
+      "url": "https://github.com/lensnowovo/ProjectWatch-Community/blob/main/docs/security-reporting.md",
+      "about": "密钥、资料泄漏、越权等问题先阅读安全反馈说明，不公开敏感材料。"
+    }
+  ]
+}

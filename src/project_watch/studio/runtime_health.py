@@ -8,6 +8,62 @@ IDLE_SECONDS = 15 * 60
 CALL_GRACE_SECONDS = 60
 
 
+def stage_phase(stage):
+    """Explicit vocabulary of emitted stages; unknown stages stay unknown.
+
+    This is a display contract, not a scheduler or a claim that earlier steps
+    completed. Jobs may revisit phases and run independently of one another.
+    """
+    if (stage or '').startswith('DSH '):
+        return {'DSH 检索公开信息': 'collect', 'DSH 阅读来源': 'read',
+                'DSH 检索公开信息：专题': 'collect', 'DSH 整理公开证据': 'read',
+                'DSH 结束本轮探索': 'revise',
+                'DSH 整理证据': 'read', 'DSH 检查覆盖': 'read',
+                'DSH 保存公开档案': 'read'}.get(stage)
+    groups = {
+        'revise': ('制定监控方案', '生成首版监控方案', '修订监控方案'),
+        'judge': ('更新跟踪问题', '对照新旧资料', '生成简报', '生成当前判断', '深度分析'),
+        'collect': ('检索', '寻找公司官网', '查找报道原文', '更新融资与专业来源'),
+        'read': ('阅读', '核对', 'AI 筛选信息', '筛选待阅读材料', '合并同一事件',
+                 '更新事件线索', '整理公司档案', '补充公开公司档案', '提取产品',
+                 '整理商业关系', '整理同行公司线索', '整理竞争与行业'),
+    }
+    return next((phase for phase, prefixes in groups.items() if (stage or '').startswith(prefixes)), None)
+
+
+def project_jobs(store, project_id, *, worker='running'):
+    """All active jobs and the last terminal job per kind, without lease secrets.
+
+    A small recent-history limit must not hide a still-unresolved older failure.
+    """
+    from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
+
+    with closing(store._connect()) as db:
+        rows = db.execute(f"""WITH ranked AS (
+            SELECT j.*, ROW_NUMBER() OVER (
+                PARTITION BY kind, CASE WHEN status IN ('done','failed') THEN 'terminal' ELSE id END
+                ORDER BY COALESCE(finished_at,created_at) DESC, created_at DESC, id DESC
+            ) AS rn FROM studio_jobs j WHERE project_id=?
+        ) SELECT * FROM ranked WHERE rn=1 OR EXISTS (SELECT 1 FROM studio_job_calls c
+          WHERE c.job_id=ranked.id AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE})))
+          ORDER BY created_at DESC""", (project_id,)).fetchall()
+        dismissed = {r[0].removeprefix('task_dismissed:') for r in db.execute(
+            "SELECT key FROM studio_state WHERE key LIKE 'task_dismissed:%'")}
+        return [{**{key: row[key] for key in ('id', 'kind', 'status', 'stage', 'error', 'created_at', 'finished_at')},
+                 'dismissed': row['id'] in dismissed, 'runtime': projection(db, row, worker=worker)} for row in rows]
+
+
+def active_projections(store, *, worker='running'):
+    """Small project-list status projection, preferring execution over queued work."""
+    with closing(store._connect()) as db:
+        result = {}
+        for row in db.execute("SELECT * FROM studio_jobs WHERE status IN ('running','queued') "
+                              "ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, created_at"):
+            if row['project_id'] not in result:
+                result[row['project_id']] = {'status': row['status'], 'runtime': projection(db, row, worker=worker)}
+        return result
+
+
 def stamp():
     return datetime.now(UTC).isoformat()
 
@@ -101,17 +157,22 @@ def projection(db, job, *, worker='running', at=None):
         elif job['yield_count']:
             label = '已保存进度，排队继续'
     elif state in ('failed', 'done'):
-        from project_watch.studio.recovery import UNRESOLVED
+        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
 
         if db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1', (job['id'],)).fetchone():
             state, label = ('needs_confirmation', '请求结果不明，等待确认') if state == 'failed' else (
                 'partial', '已有结果保留，部分请求结果不明')
+        elif db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job['id'],)).fetchone():
+            state, label = 'needs_confirmation', '模型服务出错，等待确认恢复'
         elif job['error'].startswith('watchdog_'):
             state, label = 'stalled', '多次无进展，已停止恢复'
         elif state == 'done':
+            bootstrap = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_coverage'", (job['id'],)).fetchone()
+            if bootstrap and json.loads(bootstrap[0]).get('partial'):
+                state, label = 'partial', '公开信息已整理，仍有覆盖缺口'
             coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='commercial_coverage'", (job['id'],)).fetchone()
             if coverage and json.loads(coverage[0]).get('partial'):
                 state, label = 'partial', '部分来源已更新，其余暂不可用'
-    return {'state': state, 'label': label, 'progress_at': job['progress_at'],
+    return {'state': state, 'label': label, 'phase': stage_phase(job['stage']), 'progress_at': job['progress_at'],
             'heartbeat_at': job['heartbeat_at'], 'progress_age_seconds': seconds_since(job['progress_at'], at),
             'yield_count': job['yield_count'], 'recovery_attempts': max(0, job['attempts'] - 1)}

@@ -32,11 +32,11 @@ def git(repo: Path, *args: str) -> bytes:
     return subprocess.check_output(['git', *args], cwd=repo)
 
 
-def wheel_record(path: Path) -> dict:
+def wheel_record(path: Path, *, compatible_tags=None) -> dict:
     if linked(path) or not path.is_file() or path.suffix != '.whl':
         raise ValueError('Only regular wheel files are accepted')
     name, version, _, tags = parse_wheel_filename(path.name)
-    if not tags.intersection(sys_tags()):
+    if not tags.intersection(sys_tags() if compatible_tags is None else compatible_tags):
         raise ValueError('Wheel is incompatible with the build interpreter/platform')
     with ZipFile(path) as archive:
         names = archive.namelist()

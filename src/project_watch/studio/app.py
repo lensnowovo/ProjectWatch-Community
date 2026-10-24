@@ -14,10 +14,10 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from project_watch.local_ocr import ocr_capabilities
+from project_watch.static_files import ProductStaticFiles
 from project_watch.studio import digest as dg
 from project_watch.studio import finance, review
 from project_watch.studio.agent_access import attach_agent_routes
@@ -76,6 +76,7 @@ class CompanyNameIntent(BaseModel):
 
 
 class ProjectCreate(CompanyNameIntent):
+    execution_mode: Literal['api', 'agent'] = 'api'
     entity: Entity
     consent: bool
     draft_ids: list[str] = Field(default_factory=list, max_length=10)
@@ -272,6 +273,25 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
+    @app.get("/api/studio/settings/executor")
+    def get_executor():
+        from project_watch.studio import public_executor
+
+        return public_executor.current(data_dir)
+
+    @app.put("/api/studio/settings/executor")
+    def put_executor(body: dict):
+        from project_watch.studio import public_executor
+
+        if type(body.get('enabled')) is not bool:
+            raise HTTPException(422, 'enabled 必须是 true 或 false')
+        if not public_executor.current(data_dir)['configurable']:
+            raise HTTPException(409, {'code': 'executor_not_configurable',
+                                      'message': '当前以开发方式运行，执行方式由环境变量决定。'})
+        # Saved only; the running worker keeps its executor until the app restarts.
+        public_executor.write_choice(data_dir, body['enabled'])
+        return public_executor.current(data_dir)
+
     @app.get('/api/studio/projects/{project_id}/commercial')
     def commercial_view(project_id: str):
         project = project_or_404(project_id)
@@ -420,11 +440,15 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(422, str(exc)) from exc
 
     @app.post("/api/studio/settings/test")
-    def test_settings(response: Response):
+    def test_settings(response: Response, scope: Literal['all', 'setup'] = 'all'):
         config = settings_store.load()
-        return run_direct('settings_test', {}, config, lambda: _test_settings(config), response)
+        if scope == 'setup' and len(config.search.enabled()) != 1:
+            raise HTTPException(422, '首次配置请选择一个搜索服务。')
+        # Both screens share one receipt: switching screens must not bypass an
+        # uncertain paid request. A fresh cached receipt contains only tested services.
+        return run_direct('settings_test', {}, config, lambda: _test_settings(config, scope), response)
 
-    def _test_settings(config):
+    def _test_settings(config, scope='all'):
         _settings, _http, llm, collectors = pipeline.tools(config)
         result: dict[str, dict] = {}
 
@@ -433,6 +457,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             messages = {
                 'search_key_invalid': '搜索 Key 无效，请检查并重新保存 Key。',
                 'search_key_missing': '尚未填写搜索 Key，请在设置中填写并保存。',
+                'search_query_invalid': '搜索词长度或返回条数不符合服务要求，请缩短检索词。',
                 'search_access_denied': '搜索服务没有访问权限，请检查账号和套餐权限。',
                 'search_quota_exhausted': '搜索额度已用完，请到服务商充值或切换搜索服务。',
                 'model_access_denied': '模型 Key 无效或没有权限，请检查 Key 和模型权限。',
@@ -454,12 +479,13 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                 result["model"] = {"ok": False, "message": failure_message(exc)}
         else:
             result["model"] = {"ok": False, "message": "尚未填写模型服务"}
-        try:
-            news = collectors.bing_news("人工智能")
-            result["news"] = {"ok": True, "message": f"Bing 新闻可用（{len(news)} 条）"}
-        except (HttpError, ValueError):
-            result["news"] = {"ok": False, "message": "必应新闻不可达，请检查网络；也可配置搜索服务。"}
-        if _settings.search.google_news:
+        if scope == 'all':
+            try:
+                news = collectors.bing_news("人工智能")
+                result["news"] = {"ok": True, "message": f"Bing 新闻可用（{len(news)} 条）"}
+            except (HttpError, ValueError):
+                result["news"] = {"ok": False, "message": "必应新闻不可达，请检查网络；也可配置搜索服务。"}
+        if scope == 'all' and _settings.search.google_news:
             try:
                 news = collectors.google_news("人工智能")
                 result["google_news"] = {"ok": True, "message": f"Google News 可用（{len(news)} 条，仅标题）"}
@@ -606,7 +632,12 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
         def commit(specs, db):
             project = repository.create_project(display, db=db)
+            existing = db.execute('SELECT execution_mode FROM studio_projects WHERE project_id=?', (project.id,)).fetchone()
+            if existing and (body.execution_mode == 'agent' or existing[0] == 'agent'):
+                raise HTTPException(409, '同名项目已存在，请选择已有项目；本次不会改变其配置或暂停状态')
             store.upsert_project(project.id, entity, consent=True, db=db)
+            if body.execution_mode == 'agent':
+                db.execute("UPDATE studio_projects SET execution_mode='agent',status='paused' WHERE project_id=?", (project.id,))
             pipeline.objects.confirm_subject_identity(project.id, entity['legal_name'],
                 body.confirmed_company_names, db=db)
             for text, spec in zip(points, specs, strict=True):
@@ -620,6 +651,15 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             return {'id': project.id}
 
         try:
+            if body.execution_mode == 'agent':
+                if len(attachments) != len(body.draft_ids):
+                    raise HTTPException(404, '上传的文件已过期，请重新上传')
+                if points:
+                    raise HTTPException(422, '请连接 Agent 后设置监控范围')
+                with closing(store._connect()) as db, db:
+                    db.execute('BEGIN IMMEDIATE')
+                    result = commit([], db)
+                return project_or_404(result['id'])
             result = run_direct('create_project', body.model_dump(), config, prepare, response, commit=commit)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -628,11 +668,17 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     # ------------------------------------------------------------- projects
     @app.get("/api/studio/projects")
     def list_projects():
+        from project_watch.studio.runtime_health import active_projections
+
         projects = store.list_projects()
+        active = active_projections(store, worker=studio_worker.runtime_state())
         for p in projects:
             p['worker_state'] = studio_worker.runtime_state()
             p['worker_health'] = studio_worker.health()['state']
             p["nav_alerts"] = store.nav_alerts(p["id"])
+            if p['id'] in active:
+                p['job_status'] = active[p['id']]['status']
+                p['job_runtime'] = active[p['id']]['runtime']
             brief = store.get_brief(p["id"])
             p["headline"] = brief.get("headline") if brief else ""
             p["tone"] = brief.get("tone") if brief else ""
@@ -641,10 +687,14 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
     @app.get("/api/studio/projects/{project_id}")
     def project_detail(project_id: str):
+        from project_watch.studio import insight
+        from project_watch.studio.agent_results import insight_projection
+        from project_watch.studio.dossier_activity import saved_revisions
         from project_watch.studio.event_state import timeline
         from project_watch.studio.milestones import read as read_milestones
         from project_watch.studio.observations import read as read_observations
         from project_watch.studio.progress import read as read_progress
+        from project_watch.studio.runtime_health import project_jobs
 
         project = project_or_404(project_id)
         intake = {j.source_id: j for j in repository.list_intake(project_id)}
@@ -665,6 +715,8 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
         return project_projection(store, project_id, {
             "project": project,
+            "dossier_saved": saved_revisions(pipeline.monitor.watchpoints(project_id),
+                                             insight_projection(store, project_id, insight.load(store, project_id))),
             "execution": execution,
             "capabilities": {"insight_generation": pipeline.insight_generator is not None,
                              "insight_projections": pipeline.insight_available},
@@ -691,7 +743,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "doc_changes": store.doc_changes(project_id, 3),
             "body_coverage": store.body_coverage(project_id),
             "counts": store.category_counts(project_id),
-            "jobs": store.jobs(project_id, 8),
+            "jobs": project_jobs(store, project_id, worker=execution['analysis']),
             "documents": sorted(documents, key=lambda d: d["created_at"], reverse=True),
             "model_ready": settings_store.load().model.ready,
             # Current configuration, not the flags stored with the last round (those go stale after setup).
@@ -785,6 +837,8 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     @app.post("/api/studio/projects/{project_id}/refresh", status_code=202)
     def refresh(project_id: str, body: RefreshRequest):
         project = project_or_404(project_id)
+        if project.get('execution_mode') == 'agent':
+            raise HTTPException(409, '此项目由已有 Agent 更新。请到“连接 Agent”复制研究指令，不会调用内置 API。')
         if not project.get("activated"):
             raise HTTPException(409, "项目尚未启动监控")
         if body.kind == 'external_followup':
@@ -889,11 +943,14 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
     @app.post("/api/studio/tasks/{job_id}/dismiss", status_code=204)
     def dismiss_task(job_id: str):
-        """Owner chose to ignore a failed task: it leaves 需要处理 but stays in the history."""
+        """Quiet an incomplete outcome's reminder; never mark it successful or retry it."""
+        from project_watch.studio.runtime_health import projection
+
         with closing(store._connect()) as db:
-            row = db.execute("SELECT status FROM studio_jobs WHERE id=?", (job_id,)).fetchone()
-        if not row or row[0] != "failed":
-            raise HTTPException(404, "没有这个失败任务")
+            row = db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone()
+            if not row or not (row['status'] == 'failed' or
+                               (row['status'] == 'done' and projection(db, row)['state'] == 'partial')):
+                raise HTTPException(404, "没有这个需要处理的任务")
         from project_watch.studio.store import now
 
         store.set_state(f"task_dismissed:{job_id}", now())
@@ -944,6 +1001,13 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         if found is None:
             raise HTTPException(404, "事件不存在")
         return found
+
+    @app.get('/api/studio/projects/{project_id}/recovery')
+    def project_recovery_preview(project_id: str):
+        from project_watch.studio.recovery import project_preview
+
+        project_or_404(project_id)
+        return project_preview(pipeline, project_id)
 
     @app.get('/api/studio/projects/{project_id}/jobs/{job_id}/recovery')
     def recovery_preview(project_id: str, job_id: str):
@@ -1003,11 +1067,11 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     # ------------------------------------------------------------- web UI
     index = WEB_ROOT / "index.html"
     if (WEB_ROOT / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=WEB_ROOT / "assets"), name="studio-assets")
+        app.mount("/assets", ProductStaticFiles(directory=WEB_ROOT / "assets"), name="studio-assets")
 
     def spa():
         if index.is_file():
-            return FileResponse(index, headers={"Cache-Control": "no-store"})
+            return FileResponse(index, media_type="text/html", headers={"Cache-Control": "no-store"})
         return HTMLResponse("<h1>ProjectWatch</h1><p>前端尚未构建：请在 frontend 目录运行 npm run build。</p>")
 
     # Replace the classic page at "/" and keep it reachable at /classic.
@@ -1017,7 +1081,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     def classic_page():
         if not getattr(app.state, 'classic_available', True):
             raise HTTPException(503, '此安装包仅提供 Studio，未包含旧版界面。')
-        return FileResponse(classic)
+        return FileResponse(classic, media_type="text/html")
 
     app.add_api_route("/classic", classic_page, include_in_schema=False,
                       response_model=None)
@@ -1029,7 +1093,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
     register_attention_routes(app, pipeline)
 
-    for path in ("/feed", "/projects", "/projects/{rest:path}", "/new", "/settings", "/digest", "/tasks"):
+    for path in ("/feed", "/projects", "/projects/{rest:path}", "/new", "/settings", "/setup", "/agents", "/digest", "/tasks"):
         app.add_api_route(path, spa, include_in_schema=False, response_model=None)
 
 

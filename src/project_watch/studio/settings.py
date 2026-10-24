@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 MODEL_PROTOCOLS = ("openai", "anthropic")
-SEARCH_PROVIDERS = ("none", "bocha", "brave", "tavily")
+SEARCH_PROVIDERS = ("none", "deepseek", "bocha", "brave", "tavily")
 REGISTRY_PROVIDERS = ("none", "tianyancha")
 COMMERCIAL_PRESETS = (
     {"id": "xiniu", "label": "烯牛数据", "description": "公司融资轮次、金额与投资方",
@@ -133,6 +133,7 @@ class NotifyConfig:
 
 @dataclass
 class StudioSettings:
+    preferred_mode: str = "api"
     model: ModelConfig = field(default_factory=ModelConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     registry: RegistryConfig = field(default_factory=RegistryConfig)
@@ -223,9 +224,11 @@ def _validate_structure(raw: dict) -> None:
                 valid = type(actual) is type(expected)
             if not valid:
                 raise ValueError("配置字段类型不正确")
-    for name in ("proxy_url", "refresh_hours"):
+    for name in ("proxy_url", "refresh_hours", "preferred_mode"):
         if name in raw and type(raw[name]) is not type(getattr(defaults, name)):
             raise ValueError("配置字段类型不正确")
+    if raw.get('preferred_mode', 'api') not in ('api', 'agent'):
+        raise ValueError('不支持的运行模式')
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -271,6 +274,7 @@ class SettingsStore:
             return cls(**{k: v for k, v in (data or {}).items() if k in names})
 
         return StudioSettings(
+            preferred_mode=raw.get('preferred_mode', 'api'),
             model=pick(ModelConfig, raw.get("model")),
             search=pick(SearchConfig, raw.get("search")),
             registry=pick(RegistryConfig, raw.get("registry")),
@@ -308,6 +312,8 @@ class SettingsStore:
         with self._lock:
             _validate_structure(patch)
             current = self._load()
+            if 'preferred_mode' in patch:
+                current.preferred_mode = patch['preferred_mode']
             model = patch.get("model")
             if model is not None:
                 previous_endpoint = (current.model.protocol, current.model.base_url.rstrip("/"))
@@ -335,10 +341,10 @@ class SettingsStore:
             if search is not None:
                 if "providers" in search or "keys" in search:
                     providers = search.get("providers", current.search.enabled())
-                    if (not isinstance(providers, list) or len(providers) > 3
+                    if (not isinstance(providers, list) or len(providers) > len(SEARCH_PROVIDERS) - 1
                             or any(p not in SEARCH_PROVIDERS[1:] for p in providers)
                             or len(set(providers)) != len(providers)):
-                        raise ValueError("搜索服务应为博查、Tavily、Brave 的不重复列表")
+                        raise ValueError("搜索服务应为 DeepSeek、博查、Tavily、Brave 的不重复列表")
                     keys = current.search.credentials()
                     updates = search.get("keys", {})
                     if not isinstance(updates, dict) or any(p not in SEARCH_PROVIDERS[1:] for p in updates):
@@ -484,6 +490,7 @@ class SettingsStore:
                 "daily_limit": settings.commercial.daily_limit,
                 "model_use": settings.commercial.model_use,
             },
+            "preferred_mode": settings.preferred_mode,
             "proxy_url": settings.proxy_url,
             "refresh_hours": settings.refresh_hours,
             "presets": list(MODEL_PRESETS),

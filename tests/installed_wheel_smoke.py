@@ -18,10 +18,22 @@ from project_watch.api import create_app
 from project_watch.studio.app import create_studio_app
 
 
+def within_runtime(path: Path, runtime: Path) -> bool:
+    """Compare directory identities, including Windows extended-length paths."""
+    try:
+        resolved = path.resolve(strict=True)
+        prefix = runtime.resolve(strict=True)
+        return resolved.is_file() and prefix.is_dir() and any(
+            parent.samefile(prefix) for parent in resolved.parents
+        )
+    except OSError:
+        return False
+
+
 def main() -> None:
     without_insight = '--without-insight' in sys.argv[1:]
     installed_at = Path(project_watch.__file__).resolve()
-    if not installed_at.is_relative_to(Path(sys.prefix).resolve()):
+    if not within_runtime(installed_at, Path(sys.prefix)):
         raise RuntimeError("Project Watch was loaded from source rather than the fresh venv")
     private = ('competition', 'competition_evaluation', 'competition_research', 'landscape',
                'product_matching', 'question_advisor', 'plan_replan', 'race', 'red_flags', 'registry_peers',
@@ -33,7 +45,7 @@ def main() -> None:
     else:
         for name in private:
             module = importlib.import_module('project_watch.studio.' + name)
-            assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), name
+            assert within_runtime(Path(module.__file__), Path(sys.prefix)), name
         print(json.dumps({'installed_analysis_modules': len(private), 'full_distribution': True}))
     with tempfile.TemporaryDirectory(prefix="project-watch-synthetic-") as temp_dir:
         # Load only the fake transport harness from the checkout, never product

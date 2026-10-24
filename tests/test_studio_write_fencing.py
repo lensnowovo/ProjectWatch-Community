@@ -95,12 +95,11 @@ def test_nested_scope_restores_guard_and_lazy_schema_is_guarded(tmp_path):
     assert len(checks) == count
 
 
-def test_site_reads_replay_and_unknown_robots_never_dispatch_page(tmp_path):
+def test_site_reads_replay_and_unreadable_robots_never_dispatch_page(tmp_path):
     from test_studio_monitor import HOME, Site
 
     from project_watch.feeds import FeedError
     from project_watch.studio.execution import JobExecution
-    from project_watch.studio.http import HttpError
     from project_watch.studio.monitor import MonitorStore, check_sites
 
     service, pid = make_service(tmp_path / 'site-replay.sqlite3')
@@ -128,6 +127,8 @@ def test_site_reads_replay_and_unknown_robots_never_dispatch_page(tmp_path):
             calls.append(url)
             raise FeedError('timeout')
     for _ in range(2):
-        with pytest.raises(HttpError, match='request_outcome_unknown'), service2.store.write_scope(execution2._guard):
+        with service2.store.write_scope(execution2._guard):
             check_sites(monitor2, Failed(), pid2, 'https://synthetic.example/', execution=execution2)
     assert calls == ['https://synthetic.example/robots.txt']
+    assert execution2.usage()['site']['unknown'] == 0
+    assert monitor2.pages(pid2)[0]['status'] == 'robots_disallowed'

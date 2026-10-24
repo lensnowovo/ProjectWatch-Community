@@ -1,0 +1,15 @@
+{
+  "comment": "Darwin counterparts of the unused Windows native packages in prune.json. Required system/koffi/addon-loader packages remain. Cross-assembled files still require real Mac protocol testing.",
+  "remove_packages": [
+    "@deepseek-ai/libreoffice-kit-darwin-arm64",
+    "@deepseek-ai/libreoffice-kit-darwin-x64",
+    "sherpa-onnx-darwin-arm64",
+    "sherpa-onnx-darwin-x64",
+    "@img/sharp-darwin-arm64",
+    "@img/sharp-darwin-x64",
+    "@img/sharp-libvips-darwin-arm64",
+    "@img/sharp-libvips-darwin-x64",
+    "@vscode/ripgrep-darwin-arm64",
+    "@vscode/ripgrep-darwin-x64"
+  ]
+}

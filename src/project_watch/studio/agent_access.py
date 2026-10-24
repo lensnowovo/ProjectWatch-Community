@@ -59,6 +59,11 @@ def attach_agent_routes(app: FastAPI, service: StudioApplication) -> None:
         service.authorize(token, project_id, permission)
         return token
 
+    from project_watch.studio.agent_connections import attach
+
+    attach(app, service, service.materials.settings_store.path.parent,
+           app.state.studio_pipeline.monitoring_plan, scoped)
+
     @app.get("/api/studio/agent/runtime")
     def manifest(response: Response):
         response.headers['Cache-Control'] = 'no-store'

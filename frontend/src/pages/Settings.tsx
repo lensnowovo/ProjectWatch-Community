@@ -1,11 +1,12 @@
 import { Skeleton } from "../frame";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, type NotifyView, type SettingsView, type UpdateView } from "../api";
+import { api, type ExecutorView, type NotifyView, type SettingsView, type UpdateView } from "../api";
 import { Page, ThemeToggle, useToast } from "../motion";
 import { ErrorNote, Spinner, useAsync } from "../ui";
 import { Seg } from "../widgets";
 
 const SEARCH = [
+  { id: "deepseek", label: "DeepSeek Search", hint: "自动模式优先 · 搜索与正文读取" },
   { id: "bocha", label: "博查搜索", hint: "中文搜索 · 国内直连" },
   { id: "tavily", label: "Tavily", hint: "英文与全球信息" },
   { id: "brave", label: "Brave Search", hint: "需海外网络" },
@@ -13,7 +14,7 @@ const SEARCH = [
 const NOTIFY_LABEL: Record<NotifyView["kind"], string> = { none: "不推送", wecom: "企业微信群机器人", feishu: "飞书群机器人", dingtalk: "钉钉群机器人" };
 const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const HOURS_LABEL: Record<number, string> = { 6: "每 6 小时", 12: "每 12 小时", 24: "每天", 72: "每 3 天", 168: "每周" };
-const TEST_LABEL: Record<string, string> = { model: "AI 模型", news: "免费新闻源（必应）", google_news: "Google News", search: "搜索服务", search_bocha: "博查搜索", search_tavily: "Tavily", search_brave: "Brave Search" };
+const TEST_LABEL: Record<string, string> = { model: "AI 模型", news: "免费新闻源（必应）", google_news: "Google News", search: "搜索服务", search_deepseek: "DeepSeek Search", search_bocha: "博查搜索", search_tavily: "Tavily", search_brave: "Brave Search" };
 
 type Tests = Record<string, { ok: boolean | null; message: string }>;
 
@@ -70,13 +71,14 @@ type Form = {
   hours: number;
 };
 
-const SECTIONS: { id: SectionId | "overview" | "interface" | "usage"; label: string }[] = [
+const SECTIONS: { id: SectionId | "overview" | "executor" | "interface" | "usage"; label: string }[] = [
   { id: "overview", label: "配置概况" },
   { id: "model", label: "AI 模型" },
   { id: "search", label: "新闻与搜索" },
   { id: "data", label: "工商与专业数据" },
   { id: "notify", label: "推送" },
   { id: "network", label: "更新与网络" },
+  { id: "executor", label: "研究引擎" },
   { id: "interface", label: "界面" },
   { id: "usage", label: "用量" },
 ];
@@ -241,7 +243,8 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
           <Section id="search" title="新闻与搜索" badge={<span className="tag">可选</span>} dirty={dirty.includes("search")}
             state={data.search.ready ? "已配置搜索服务" : "仅免费来源"} ok={!!data.search.ready}>
             <p className="muted small">服务商分别计费。未启用时使用免费来源；相同检索缓存 1 小时，重启清空。</p>
-            <p className="small"><a href="https://open.bochaai.com/dashboard" target="_blank" rel="noopener noreferrer">获取博查 Key ↗</a>
+            <p className="small"><a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">获取 DeepSeek Key ↗</a>
+              {" · "}<a href="https://open.bochaai.com/dashboard" target="_blank" rel="noopener noreferrer">获取博查 Key ↗</a>
               {" · "}<a href="https://app.tavily.com/home" target="_blank" rel="noopener noreferrer">获取 Tavily Key ↗</a></p>
             <div className="radio-list">
               {SEARCH.map((s) => {
@@ -268,7 +271,7 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
                 <option value="auto">自动搭配（推荐）</option>
                 <option value="combined">联合检索</option>
               </select>
-              <small className="muted">自动：中文优先博查、英文优先 Tavily，无结果或失败时换源。联合：调用全部服务，费用更高。连接测试各调用一次。</small>
+              <small className="muted">自动：已启用的 DeepSeek 优先，中文由博查、英文由 Tavily 补位。无结果或明确失败时换源；结果不明则停止。联合：调用全部服务，费用更高。连接测试各调用一次。</small>
             </label>}
             <label className="field checkbox-field">
               <span><input type="checkbox" checked={form.search.google_news} onChange={(e) => set("search", { ...form.search, google_news: e.target.checked })} /> 同时使用 Google News</span>
@@ -406,6 +409,8 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
               </label>
             </div>
           </Section>
+
+          <ExecutorCard />
 
           <section className="card card-pad settings-section" id="settings-interface">
             <div className="card-head"><h2>界面</h2><span className="muted small">仅保存在本浏览器，立即生效</span></div>
@@ -611,4 +616,47 @@ function overview(data: SettingsView, tests: Tests | null): Row[] {
     { id: "network", label: "更新与网络", state: HOURS_LABEL[data.refresh_hours] ?? `${data.refresh_hours} 小时`, tone: "ok",
       detail: data.proxy_url ? `代理 ${data.proxy_url}` : "使用系统代理" },
   ];
+}
+
+const EXECUTOR_SOURCE: Record<ExecutorView["source"], string> = {
+  bundled: "安装包自带", custom: "自定义路径", environment: "环境变量", setting: "设置", default: "默认",
+  upgrade_preserved: "沿用升级前的执行方式",
+};
+
+/** The public-research engine. Saved here, applied on the next start; an unavailable DSH never falls back silently. */
+export function ExecutorCard() {
+  const { data, error, setData } = useAsync(() => api.executor(), []);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<unknown>(null);
+  const running = data ? data.executor !== "classic" : false;
+  const wanted = data?.saved_enabled ?? running;
+  const pending = !!data && data.saved_enabled !== null && data.saved_enabled !== running;
+  const change = async (enabled: boolean) => {
+    setSaving(true); setSaveError(null);
+    try { setData(await api.saveExecutor(enabled)); } catch (e) { setSaveError(e); } finally { setSaving(false); }
+  };
+  const state = !data ? null : data.executor === "dsh" ? <span className="tag tag-ok">DSH 已启用</span>
+    : data.executor === "unavailable" ? <span className="tag tag-warn">不可用</span> : <span className="tag">经典流程</span>;
+  return <section className="card card-pad settings-section" id="settings-executor">
+    <div className="card-head"><h2>研究引擎</h2>{state}</div>
+    {error ? <ErrorNote error={error} /> : !data ? <Skeleton lines={2} /> : <>
+      <p className="muted small">
+        {data.executor === "dsh" ? "由 DSH 决定检索、阅读和补全的顺序；模型与搜索请求仍经过本机网关，逐次记录用量与回执。"
+          : data.executor === "unavailable" ? `${data.reason_text ?? "DSH 无法启动。"} 自动研究已暂停，已有结果保留；不会改用经典流程。`
+          : "按固定顺序采集、阅读和整理公开信息。"}
+      </p>
+      <dl className="settings-prefs">
+        <div><dt>当前使用</dt><dd>{data.executor === "classic" ? "经典流程"
+          : data.executor === "unavailable" ? `DSH ${data.dsh_version} 未能启动，自动研究暂停中` : `DSH ${data.dsh_version}`}
+          {data.executor !== "classic" && data.node_version && <span className="muted small"> · Node {data.node_version}</span>}
+          <span className="muted small"> · 来源：{EXECUTOR_SOURCE[data.source] ?? data.source}</span></dd></div>
+        <div><dt>使用 DSH</dt><dd>{data.configurable
+          ? <label className="settings-check"><input type="checkbox" checked={wanted} disabled={saving}
+              onChange={(e) => change(e.target.checked)} /> <span>{wanted ? "开启（推荐）" : "关闭，使用经典流程"}</span></label>
+          : <span className="muted small">当前以开发方式运行，由环境变量决定。</span>}</dd></div>
+      </dl>
+      {pending && <p className="small" role="status">已保存，重启 ProjectWatch 后生效；当前仍按原方式运行。</p>}
+      <ErrorNote error={saveError} />
+    </>}
+  </section>;
 }

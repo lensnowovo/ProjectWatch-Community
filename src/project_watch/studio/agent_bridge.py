@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from project_watch.studio.agent_contracts import ScopeWrite
 from project_watch.studio.agent_result_contracts import MonitoringResults
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -203,6 +204,12 @@ class AgentClient:
     def result_history(self) -> dict:
         return self._request('GET', self._project_path + '/results')
 
+    def monitoring_scope(self) -> dict:
+        return self._request('GET', self._project_path + '/scope')
+
+    def update_scope(self, body: dict) -> dict:
+        return self._request('POST', self._project_path + '/scope', body)
+
     def current_result(self) -> dict:
         return self._request('GET', self._project_path + '/results/current')
 
@@ -227,6 +234,17 @@ def client_from_env() -> AgentClient:
 
         try:
             config = json.loads(Path(os.environ['PROJECT_WATCH_AGENT_CONFIG']).read_text(encoding='utf-8'))
+            if config.get('desktop_marker'):
+                from project_watch.studio.desktop import existing_url
+
+                url = existing_url(Path(config['desktop_marker']))
+                if not url:
+                    raise AgentClientError('请先打开 ProjectWatch，再重新连接 Agent；未重试任何任务')
+                # Verify persistent application identity without disclosing the token to a reused port.
+                code, raw = _transport('GET', url.rstrip('/') + '/api/studio/agent/runtime', {}, None)
+                if code != 200 or json.loads(raw).get('instance_id') != config['instance_id']:
+                    raise AgentClientError('ProjectWatch instance changed; reconnect this project')
+                config['url'] = url.rstrip('/')
             return AgentClient(config['url'], config['instance_id'], config['project_id'], config['token'])
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise AgentClientError('Local Agent connection file is missing or invalid; reconnect this project') from exc
@@ -274,6 +292,22 @@ def build_studio_mcp_server(client: AgentClient):
     def project_overview() -> dict[str, object]:
         """Read stable project identity and current configuration version."""
         return invoke(client.project)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def monitoring_scope() -> dict[str, object]:
+        """Read permitted monitoring questions, queries and current project/scope versions. No web search."""
+        return invoke(client.monitoring_scope)
+
+    @server.tool()
+    def update_monitoring_scope(change: ScopeWrite) -> dict[str, object]:
+        """Save one explicit scope addition/replacement with version checks and idempotency.
+
+        Read monitoring_scope first for expected_version (= config_version) and expected_scope_version.
+        Omit watch_id to add; include it to replace that item. Set status retired to stop tracking.
+        Only public items are created. Do not put private BP content in a public scope item.
+        No search, provider call or job is started; receipt is a saved change, not completed research.
+        """
+        return invoke(client.update_scope, change.model_dump(mode='json'))
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def search_project(query: str = "") -> dict[str, object]:

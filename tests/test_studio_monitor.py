@@ -185,8 +185,9 @@ class Model:
         if "关注点" in system or "监控设置" in system:
             return {"label": "比亚迪合作", "queries": ["光启视界 比亚迪"], "criteria": "与比亚迪的合作或订单"}
         ids = re.findall(r"id=([0-9a-f]+)", user)
-        return {"results": [{"id": i, "relevant": True, "category": "company", "importance": "routine",
-                             "summary": "s", "impact": "", "watch": ["W1"]} for i in ids]}
+        return {"results": [{"id": i, "source_title": t, "source_quote": t, "relevant": True, "category": "company", "importance": "routine",
+                             "summary": "s", "impact": "", "watch": ["W1"]}
+                            for i, t in zip(ids, re.findall(r"标题：(.*)", user), strict=True)]}
 
 
 def test_triage_applies_rules_feedback_and_watch_points(tmp_path):

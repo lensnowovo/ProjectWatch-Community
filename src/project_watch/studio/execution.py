@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 
 from project_watch.studio.http import Http, HttpError, Response
@@ -53,6 +53,28 @@ class JobExecution:
         self.last_replay = False
         self.slice_started = time.monotonic()
         self.slice_seconds = 120
+        self._model_continuation = None
+        self._site_recovery = None
+
+    @contextmanager
+    def site_recovery(self, pipeline, slot):
+        """Only the original authorized site request may cross this boundary."""
+        previous = self._site_recovery
+        self._site_recovery = (pipeline, slot)
+        try:
+            yield
+        finally:
+            self._site_recovery = previous
+
+    @contextmanager
+    def model_continuation(self, previous_key):
+        """Gateway-only scope; the journal atomically consumes one approved slot."""
+        previous = self._model_continuation
+        self._model_continuation = previous_key
+        try:
+            yield
+        finally:
+            self._model_continuation = previous
 
     def yield_if_due(self):
         if time.monotonic() - self.slice_started >= self.slice_seconds:
@@ -80,8 +102,52 @@ class JobExecution:
 
     def read_checkpoint(self, stage):
         with closing(self.store._connect()) as db:
+            db.execute("BEGIN")
             row = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?", (self.job["id"], stage)).fetchone()
-            return json.loads(row[0]) if row else None
+            data = json.loads(row[0]) if row else None
+            if isinstance(data, dict) and data.get("_chunked_checkpoint") == 1:
+                # One read snapshot: a concurrent checkpoint replacement cannot
+                # mix a new manifest with old parts (or vice versa).
+                rows = db.execute("SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? AND stage LIKE ?",
+                                  (self.job["id"], data["prefix"] + "%")).fetchall()
+                parts = {r[0]: json.loads(r[1]) for r in rows}
+                try:
+                    encoded = "".join(parts[data["prefix"] + str(i)] for i in range(data["count"]))
+                except (KeyError, TypeError) as exc:
+                    raise ValueError("checkpoint parts missing or corrupt") from exc
+                if hashlib.sha256(encoded.encode()).hexdigest() != data["sha256"]:
+                    raise ValueError("checkpoint parts checksum mismatch")
+                return json.loads(encoded)
+            return data
+
+    def checkpoint_chunked(self, stage, data):
+        """Opt-in lossless large snapshot; each row retains the normal bound.
+
+        All parts and manifest replace atomically under the job lease. This is
+        durable storage, not permission to send unbounded model context.
+        """
+        encoded = json.dumps(data, ensure_ascii=False)
+        if not 1 <= len(stage) <= 60 or len(encoded) > 16_000_000:
+            raise ValueError("chunked checkpoint exceeds bounds")
+        prefix = "cpchunk:" + hashlib.sha256(stage.encode()).hexdigest()[:32] + ":"
+        parts = [encoded[i:i + 100_000] for i in range(0, len(encoded), 100_000)]
+        manifest = json.dumps({"_chunked_checkpoint": 1, "prefix": prefix,
+                               "count": len(parts), "sha256": hashlib.sha256(encoded.encode()).hexdigest()})
+        with closing(self.store._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            self._guard(db)
+            old = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
+                             (self.job["id"], stage)).fetchone()
+            if old and old[0] == manifest:
+                return
+            db.execute("DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage LIKE ?",
+                       (self.job["id"], prefix + "%"))
+            db.executemany("INSERT INTO studio_job_checkpoints VALUES (?,?,?)",
+                           [(self.job["id"], prefix + str(i), json.dumps(part, ensure_ascii=False))
+                            for i, part in enumerate(parts)])
+            db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data",
+                       (self.job["id"], stage, manifest))
+            progress(db, self.job["id"])
 
     def call(self, kind, key, transport, *, provider="", read_only=False, timeout=300):
         if kind not in self.budgets or not key or len(key) > 200:
@@ -92,12 +158,34 @@ class JobExecution:
         with closing(self.store._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             self._guard(db)
+            request_key = key
+            recovery_owner = self.job['id']
             recovery = db.execute('SELECT next_key FROM studio_call_recoveries WHERE job_id=? AND base_key=? '
                                   'ORDER BY rowid DESC LIMIT 1', (self.job['id'], key)).fetchone()
+            if not recovery and not self._model_continuation:
+                alias = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
+                                   (self.job["id"], "dsh_request:" + key)).fetchone()
+                if alias:
+                    recovery = json.loads(alias[0])
+            if self._model_continuation:
+                if kind != "model":
+                    raise HttpError("request_outcome_unknown")
+                from project_watch.studio.recovery import model_continuation_slot
+
+                recovery = model_continuation_slot(db, self.job)
+                if not recovery or recovery['previous_key'] != self._model_continuation:
+                    raise HttpError("request_outcome_unknown")
+                recovery_owner = recovery['origin_job_id']
             if recovery:
                 key = recovery['next_key']
+                identity = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
+                                      (self.job["id"], "dsh_continuation:" + key)).fetchone()
+                if identity and json.loads(identity[0])["request_key"] != request_key:
+                    raise HttpError("recovery_payload_mismatch")
             old = db.execute("SELECT * FROM studio_job_calls WHERE job_id=? AND call_key=?", (self.job["id"], key)).fetchone()
             if old:
+                if self._site_recovery and kind != 'site':
+                    raise HttpError('recovery_request_mismatch')
                 self.last_replay = True
                 if old["status"] == "failed_read":
                     raise HttpError("response_too_large")
@@ -106,6 +194,14 @@ class JobExecution:
                 db.execute("INSERT INTO studio_job_cache_hits VALUES (?,?,1) ON CONFLICT(job_id,call_key) DO UPDATE SET hits=hits+1", (self.job["id"], key))
                 return Response(old["response_status"], json.loads(old["response_headers"]), old["response_body"])
             # A pause is a dispatch boundary, not an uncertain transport outcome.
+            if self._site_recovery:
+                from project_watch.studio.recovery import dsh_site_recovery
+
+                pipeline, approved = self._site_recovery
+                current = dsh_site_recovery(pipeline, self, db=db)
+                if (current != approved or kind != 'site' or request_key != approved['base_key']
+                        or key != approved['next_key'] or provider_hash != approved['provider']):
+                    raise HttpError('recovery_request_mismatch')
             # Already-received replies above remain replayable. Explicitly
             # uploaded internal materials retain their existing processing path.
             project = db.execute('SELECT status FROM studio_projects WHERE project_id=?',
@@ -125,7 +221,17 @@ class JobExecution:
                         self.job['id'], key))
             if recovery:
                 db.execute('UPDATE studio_call_recoveries SET consumed_at=? WHERE job_id=? AND next_key=?',
-                           (now(), self.job['id'], key))
+                           (now(), recovery_owner, key))
+                if self._model_continuation:
+                    # Persist linkage in the SAME transaction as request admission.
+                    stage = "dsh_continuation:" + key
+                    data = {"mode": "checkpoint_continuation", "previous_key": self._model_continuation,
+                            "next_key": key, "request_key": request_key, "origin_job_id": recovery_owner}
+                    db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?)",
+                               (self.job["id"], stage, json.dumps(data)))
+                    db.execute("""INSERT INTO studio_job_checkpoints VALUES (?,?,?)
+                        ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data""",
+                        (self.job["id"], "dsh_request:" + request_key, json.dumps({"next_key": key})))
         self.last_replay = False
         started = time.monotonic()
         try:

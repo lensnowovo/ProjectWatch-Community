@@ -307,6 +307,8 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
     @app.post("/api/studio/projects/{project_id}/watchpoints", status_code=201)
     def add_watchpoint(project_id: str, body: WatchIn, response: Response):
         project = project_or_404(project_id)
+        if project.get('execution_mode') == 'agent':
+            raise HTTPException(409, '此项目由 Agent 更新，请在连接的 Agent 中调整关注点')
         if project.get('status') == 'removed':
             raise HTTPException(404, '项目不存在')
         from project_watch.studio.monitoring_plan import MAX_ITEMS
