@@ -7,7 +7,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = ('docs/acceptance/', 'docs/plans/', 'docs/handoff/', 'docs/reviews/')
-PAGES = ('README.md', 'SUPPORT.md', 'CHANGELOG.md', 'docs/developer-architecture.md',
+PAGES = ('README.md', 'SUPPORT.md', 'CONTRIBUTING.md', 'docs/agent-contributing.md',
+         'CHANGELOG.md', 'docs/developer-architecture.md',
          'docs/release-support-matrix.md', 'docs/release-checklist.md',
          'docs/windows-clean-pc-acceptance.md', 'docs/macos-clean-pc-acceptance.md',
          'docs/windows-signing-distribution-review.md', 'docs/windows-user-build.md',
