@@ -28,6 +28,19 @@ This change does not introduce a claim ledger, new sources, model configuration,
 UI changes or a new analysis platform. Installation and public release require
 their existing gates.
 
+## Record admission and exact quotes
+
+Record admission v2 isolates a review's noncontiguous or altered quotation to its
+own record. That record is rejected; other records may proceed only after their
+own review and the existing consistency checks pass. The original evidence is
+retained, and no quote is normalized or repaired to make it pass.
+
+This isolation requires complete, unique field coverage, valid review fields and
+known source identities. Missing fields, malformed witnesses, unknown sources or
+unknown requests still stop the batch. No automatic retry is introduced. Final
+judgment validation remains strict; this record-level policy does not relax it.
+Receipts from the older record-admission policy cannot authorize new projections.
+
 ## Bounded review requests
 
 Review v2 assigns at most 12 fields and 6000 field-text characters per request.

@@ -7,7 +7,7 @@ from project_watch.studio import dsh_judgment_review as review
 from project_watch.studio.dsh_bootstrap import digest
 from project_watch.studio.http import HttpError
 
-VERSION = 'public-record-admission-v1'
+VERSION = 'public-record-admission-v2'
 CONTENT = ('label', 'text', 'date', 'reason', 'relation_type', 'relation_target', 'relation_aliases')
 GUIDANCE = ('\n每个 field 是一条候选记录，包含标题、正文及关系属性；逐项断言全部支持才能判 supported。'
             '正面支持必须引用该 field 的 bound_evidence；其余 evidence 可用于反证。'
@@ -28,6 +28,37 @@ def payload_for(research, rows):
             bindings[key].append(name)
     return {'purpose': 'public_record_admission', 'analysis': fields, 'fields': fields,
             'evidence': numbered, 'bound_evidence': bindings}
+
+
+def validate_records(value, payload):
+    """Quarantine inexact quotes only after checking batch and source identity."""
+    if not isinstance(value, dict) or not isinstance(value.get('checks'), list):
+        raise ValueError('review_checks_required')
+    seen = set()
+    for row in value['checks']:
+        if not isinstance(row, dict):
+            raise ValueError('review_check_invalid')
+        path = row.get('field')
+        if not isinstance(path, str) or path not in payload['fields'] or path in seen:
+            raise ValueError('review_field_coverage_invalid')
+        seen.add(path)
+    if seen != set(payload['fields']):
+        raise ValueError('review_field_coverage_invalid')
+    issues = []
+    for row in value['checks']:
+        path = row['field']
+        try:
+            issues.extend(review.validate_review({'checks': [row]},
+                {**payload, 'fields': {path: payload['fields'][path]}}))
+        except ValueError as exc:
+            if str(exc) != 'review_evidence_invalid' or not all(
+                isinstance(w, dict) and isinstance(w.get('ref'), str)
+                and w['ref'] in payload['evidence'] and isinstance(w.get('quote'), str)
+                and w['quote'].strip() for w in row['evidence']
+            ):
+                raise
+            issues.append({'field': path, 'code': 'evidence_quote_invalid'})
+    return issues
 
 
 def admit(research, records, old_facts):
@@ -71,7 +102,7 @@ def admit(research, records, old_facts):
             response = reviewer(batch)
             try:
                 issues = (review.validate_consistency(response, batch) if batch['phase'] == 'consistency'
-                          else review.validate_review(response, batch))
+                          else validate_records(response, batch))
                 if batch['phase'] == 'fields':
                     for check in response['checks']:
                         if check['status'] == 'not_factual':
