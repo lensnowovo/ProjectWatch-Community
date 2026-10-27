@@ -19,7 +19,10 @@ def budget(research):
     for kind, limit in execution.budgets.items():
         used = usage.get(kind, {}).get('requests', 0)
         requests[kind] = dict(limit=limit, used=used, remaining=None if limit is None else max(0, limit - used))
-    return dict(requests=requests, reserve_model_calls=RESERVE,
+    from project_watch.studio.dsh_record_review import pending_calls
+    record_review = pending_calls(research)
+    return dict(requests=requests, reserve_model_calls=RESERVE + record_review,
+                pending_record_review_calls=record_review,
                 phase=(execution.read_checkpoint(STAGE) or {}).get('phase', 'research'))
 
 
@@ -62,7 +65,8 @@ def prepare_model(research, body):
         if remaining == 0:
             research.hold('request_budget')
             raise HttpError('request_budget')
-        closing = status['phase'] == 'closeout' or (remaining is not None and remaining <= RESERVE)
+        closing = status['phase'] == 'closeout' or (
+            remaining is not None and remaining <= status['reserve_model_calls'])
         status['phase'] = 'closeout' if closing else 'research'
         advice = status
         execution.checkpoint(key, advice)

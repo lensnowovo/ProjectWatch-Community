@@ -61,12 +61,10 @@ def validate_records(value, payload):
     return issues
 
 
-def admit(research, records, old_facts):
-    """Filter projections, not stored evidence; never regenerate rejected records."""
+def admission_plan(research, records, old_facts):
+    """The same exact-input plan drives dispatch and remaining-cost accounting."""
     pool = {'record:' + r['key']: r for r in records}
     pool.update({'previous:' + digest(f): f for f in old_facts})
-    if not pool:
-        return records, old_facts, {'version': VERSION, 'accepted': 0, 'rejected': []}
     # Validate each provenance independently. The profile's text deduplication
     # must not discard a refreshed reference before admission has reviewed it.
     rows = {k: r for k, r in pool.items() if research.partition_public_facts([r])[0]}
@@ -77,6 +75,32 @@ def admit(research, records, old_facts):
                       review.MAX_FIELDS, review.MAX_FIELD_CHARS, review.MAX_BATCHES,
                       review.OUTPUT_TOKENS, research.binding, generation, payload])
     prefix = 'dsh_record_review_' + binding[:40]
+    batches = review.review_batches(payload) if rows else []
+    return rows, rejected, generation, payload, binding, prefix, batches
+
+
+def pending_calls(research):
+    """Count mandatory unpaid review batches without dispatching or changing state."""
+    records = research.state.get('records', [])
+    if not records or research.state.get('published') == digest(records) or research.state.get('finished'):
+        return 0
+    old = research.store.get_public_profile(research.project_id) or {}
+    plan = admission_plan(research, records, [] if research.topic_projection else old.get('facts') or [])
+    _, _, _, _, binding, prefix, batches = plan
+    pending = 0
+    for index in range(len(batches)):
+        saved = research.execution.read_checkpoint(prefix + ':' + str(index))
+        if saved is not None and saved.get('binding') != binding:
+            raise ValueError('record_review_binding_mismatch')
+        pending += saved is None
+    return pending
+
+
+def admit(research, records, old_facts):
+    """Filter projections, not stored evidence; never regenerate rejected records."""
+    if not records and not old_facts:
+        return records, old_facts, {'version': VERSION, 'accepted': 0, 'rejected': []}
+    rows, rejected, generation, payload, binding, prefix, batches = admission_plan(research, records, old_facts)
 
     def guard():
         research.guard()
@@ -86,7 +110,6 @@ def admit(research, records, old_facts):
             raise ValueError('public inputs changed during record review')
 
     # An empty eligible set has no assertions to send; all raw records remain.
-    batches = review.review_batches(payload) if rows else []
     checked = set()
     for index, batch in enumerate(batches):
         guard()

@@ -47,6 +47,79 @@ def test_status_exposes_real_remaining_budget_without_provider_call(research):
     assert research.execution.usage() == {}
 
 
+def test_record_review_cost_enters_closeout_before_it_consumes_submission_turns(research):
+    from test_dsh_record_review import prepare
+
+    from project_watch.studio import dsh_closeout, dsh_record_review
+    prepare(research, 25)
+    research.execution.budgets['model'] = 16
+    seen = []
+    gateway = gateway_for(research, transport(seen))
+    assert dsh_record_review.pending_calls(research) == 4  # Three field batches and consistency.
+    for turn in range(4):
+        gateway.model_call(request(turn))
+        assert 'pw_search' in {t['function']['name'] for t in seen[-1]['tools']}
+    gateway.model_call(request(4))
+    assert 'pw_search' not in {t['function']['name'] for t in seen[-1]['tools']}
+    assert dsh_closeout.budget(research)['reserve_model_calls'] == 12
+    dsh_record_review.admit(research, research.state['records'], [])
+    # Review used the reserved four calls, leaving seven for submission after
+    # the first closeout turn. The old fixed reserve allowed research too long.
+    assert research.execution.usage()['model']['requests'] == 9
+    assert research.execution.budgets['model'] == 16
+    assert dsh_record_review.pending_calls(research) == 0
+    assert dsh_closeout.budget(research)['reserve_model_calls'] == 8
+
+
+def test_review_cost_includes_previous_facts_and_preserves_partial_receipts(research):
+    from test_dsh_record_review import prepare
+    from test_studio_dsh_monitor import synthetic_review
+
+    from project_watch.studio import dsh_record_review
+    prepare(research, 1)
+    row = research.state['records'][0]
+    old = [{**row, 'label': 'Previous ' + str(i)} for i in range(24)]
+    research.store.put_public_profile(research.project_id, {'facts': old})
+    assert dsh_record_review.pending_calls(research) == 4
+    calls = []
+    def interrupted(batch):
+        calls.append(batch)
+        if len(calls) == 2:
+            raise RuntimeError('synthetic pre-dispatch interruption')
+        return synthetic_review(batch)
+    research.record_reviewer = interrupted
+    with pytest.raises(RuntimeError, match='pre-dispatch'):
+        dsh_record_review.admit(research, research.state['records'], old)
+    assert dsh_record_review.pending_calls(research) == 3
+    assert dsh_record_review.pending_calls(research) == 3
+    assert len(calls) == 2  # Accounting never dispatches.
+    old[0]['label'] = 'Changed input'
+    research.store.put_public_profile(research.project_id, {'facts': old})
+    assert dsh_record_review.pending_calls(research) == 4
+
+
+@pytest.mark.parametrize('state', ['no_records', 'published', 'finished', 'topic'])
+def test_review_reserve_respects_projection_lifecycle(research, state):
+    from test_dsh_record_review import prepare
+
+    from project_watch.studio import dsh_record_review
+    from project_watch.studio.dsh_bootstrap import digest
+    prepare(research)
+    row = research.state['records'][0]
+    research.store.put_public_profile(research.project_id,
+        {'facts': [{**row, 'label': 'Previous ' + str(i)} for i in range(24)]})
+    if state == 'no_records':
+        research.state['records'] = []
+    elif state == 'published':
+        research.state['published'] = digest(research.state['records'])
+    elif state == 'finished':
+        research.state['finished'] = {'status': 'partial'}
+    else:
+        research.topic_projection = True
+    assert dsh_record_review.pending_calls(research) == (1 if state == 'topic' else 0)
+    assert research.execution.usage().get('model', {}).get('requests', 0) == 0
+
+
 def test_closeout_preserves_cached_model_reply_and_blocks_more_collection(research):
     fixtures.call(research, 'pw_search', query='Synthetic Optics', category='company')
     fixtures.record(research)

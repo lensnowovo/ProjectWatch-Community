@@ -68,6 +68,18 @@ policy. The local judgment tool waits for the host's bounded review plan; the ho
 still owns the overall round deadline and drains in-flight requests on exit.
 Whitelisted transport phase and failure codes are persisted without raw errors.
 
+Record admission and orchestration share the same hard model-call budget. Before
+another orchestration request, closeout adds the exact outstanding record-review
+batch count to its existing submission reserve. This uses the admission plan's
+same current records, retained facts, evidence generation and policy binding;
+settled matching batches do not consume the reserve again. Already-published
+unchanged records need no further projection review, and topic projections do
+not inherit unrelated profile facts. Accounting itself dispatches no requests.
+The first/incremental hard limits remain 40/16. This causes research tools to
+close earlier when mandatory review is pending; it does not bypass evidence
+review, extend a budget, retry requests, or fabricate a complete result when a
+round is too large. Exact SDK request replays retain their frozen budget advice.
+
 
 ## Capacity during evidence projection
 
