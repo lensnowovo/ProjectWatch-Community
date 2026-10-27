@@ -263,6 +263,7 @@ class Gateway:
             CONSISTENCY_SYSTEM,
             OUTPUT_TOKENS,
             SYSTEM,
+            ReviewFieldAliases,
         )
         from project_watch.studio.llm import structured_options
 
@@ -274,9 +275,10 @@ class Gateway:
             if payload.get('purpose') == 'public_record_admission' and payload.get('phase') != 'consistency':
                 from project_watch.studio.dsh_record_review import GUIDANCE
                 system += GUIDANCE
+            aliases = ReviewFieldAliases(payload)
             body = {'model': self.model.model, 'stream': False, 'messages': [
                 {'role': 'system', 'content': system},
-                {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]}
+                {'role': 'user', 'content': json.dumps(aliases.payload, ensure_ascii=False)}]}
             body['max_tokens'] = min(self.model.max_output_tokens, OUTPUT_TOKENS)
             options = structured_options(self.model)
             if 'reasoning_effort' in options:
@@ -292,7 +294,7 @@ class Gateway:
                 message = choice['message']
                 if choice.get('finish_reason') != 'stop' or message.get('tool_calls'):
                     raise ValueError('review_response_incomplete')
-                return json.loads(message['content'])
+                return aliases.decode(json.loads(message['content']))
             except (KeyError, TypeError, ValueError, IndexError) as exc:
                 self.research.hold('judgment_review_invalid')
                 raise HttpError('judgment_review_invalid') from exc

@@ -59,7 +59,7 @@ def test_actual_gateway_reviews_before_save_without_generation_history(loop):
     result = submit(loop, data)
     assert result['saved'] and result['evidence_review']['passed']
     assert insight.load(loop.store, loop.project_id)['analysis']['headline'] == data['headline']
-    covered = [p for call in calls if call['phase'] == 'fields' for p in call['fields']]
+    covered = [call['field_paths'][p] for call in calls if call['phase'] == 'fields' for p in call['fields']]
     assert len(covered) == len(set(covered))
     assert 'headline' in covered and 'operations.verdict' in covered
     assert all(len(call['fields']) <= review.MAX_FIELDS for call in calls if call['phase'] == 'fields')

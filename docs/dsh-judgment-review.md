@@ -43,7 +43,16 @@ Receipts from the older record-admission policy cannot authorize new projections
 
 ## Bounded review requests
 
-Review v2 assigns at most 12 fields and 6000 field-text characters per request.
+Review v3 sends request-local field identifiers (`F1`, `F2`, ...) instead of
+requiring the model to copy durable record hashes. The host restores exact keys
+before the existing admission checks. Missing, duplicate, unknown or altered
+identifiers still fail; there is no fuzzy matching or automatic retry. Record
+analysis and bound-evidence keys share the mapping, including the full candidate
+outside a batch. Judgment analysis retains its semantic structure and supplies
+field paths for context. Evidence IDs, original text and quoted excerpts are
+unchanged. Prior policy receipts cannot authorize a new review.
+
+Requests contain at most 12 fields and 6000 field-text characters per request.
 Each request retains the complete candidate and all original exposed evidence;
 counterevidence is never filtered by the candidate's citations. Oversized fields
 or plans exceeding 24 requests are rejected before dispatch, not truncated.
