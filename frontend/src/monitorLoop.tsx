@@ -11,7 +11,7 @@ import { RoundOutcome } from "./RoundOutcome";
  * 监控循环: the four stages this project actually runs — collect, read, judge, revise the plan — with the real
  * cumulative results. The halo breathes on the stage the server reports while it executes; the light crosses a
  * link only when that stage really moves on, and glides slowly back to 采集 only on a real revise → collect. Where work
- * stopped the node is marked with its reason. Nothing here loops on a timer and nothing is a forecast.
+ * stopped the node is marked with its reason. A rotating ring indicates in-flight work, not stage completion.
  */
 
 export type Stage = "collect" | "read" | "judge" | "revise";
@@ -158,6 +158,7 @@ export function MonitorLoop({ detail, plan, inline = false }: { detail: ProjectD
   const alongside = !!work.stop && work.stop.job !== work.job;
 
   const body = <div className={`ml${inline ? " ml-inline" : ""}${activeStage ? " ml-live" : ""}`}>
+    {work.moving && !activeStage && !inline && <p className="ml-activity" role="status"><i className="ml-busy" aria-hidden="true" />{work.label}</p>}
     <div className="ml-track" role="list" aria-label="监控处理阶段">
       {ORDER.map((key, i) => {
         const active = activeStage === key;
@@ -166,6 +167,7 @@ export function MonitorLoop({ detail, plan, inline = false }: { detail: ProjectD
           role="listitem" aria-current={active ? "step" : undefined}>
           <div className="ml-node">
             <span className="ml-no">{STAGE[key].no}</span>
+            {active && <i className="ml-spinner" aria-hidden="true" />}
             {active && !reduced && (work.state === "running"
               ? <motion.i key={transit?.key ?? "rest"} className="ml-halo" aria-hidden="true" initial={{ opacity: 0, scale: 1 }}
                   animate={{ opacity: [.45, .9, .45], scale: [1, 1.08, 1] }} transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }} />
@@ -177,11 +179,9 @@ export function MonitorLoop({ detail, plan, inline = false }: { detail: ProjectD
             {/* The stage name stays centred; state tags hang beside it instead of pushing it aside. */}
             <h4><span className="ml-label">{STAGE[key].label}
               {(active || stopped) && <span className="ml-tags">
-                {active && <em>{work.state === "waiting_response" ? "等待响应" : work.state === "stopping" ? "正在结束" : "进行中"}</em>}
+                {active && <em>{work.state === "waiting_response" ? "请求处理中" : work.state === "stopping" ? "正在结束" : "进行中"}</em>}
                 {stopped && !alongside && <em className="ml-stop-tag">{STOP_LABEL[work.stop!.state]}</em>}</span>}</span></h4>
             <b className="ml-count-full">{counts[key]}</b><b className="ml-count-compact">{compactCounts[key]}</b>
-            <p>{STAGE[key].what}</p>
-            <small>{notes[key]}</small>
             {stopped && alongside && <span className="ml-other-stop" title={`${work.stop!.label}：${errorMessage(work.stop!.error)}`}>另有任务未完成</span>}
           </div>
           {i < ORDER.length - 1 && <span className="ml-link" aria-hidden="true">

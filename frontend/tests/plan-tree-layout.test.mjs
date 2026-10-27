@@ -186,11 +186,12 @@ test("arcs are cubic Béziers with control points at each end's angle on the mid
   assert.ok(Math.abs(angle({ x: 0, y: -1 }) - -90) < 1e-9);
 });
 
-test("minimal reach is always above the table; previous tree component remains isolated", () => {
+test("scope follows the runtime loop; previous depth and tree components remain isolated", () => {
   const plan = fs.readFileSync(new URL("../src/plan.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(plan, /scopeView|<PlanChainTree /);
-  assert.match(plan, /<MonitorReach /);
-  assert.ok(plan.indexOf("<MonitorReach ") < plan.indexOf("<RelationScope "));
+  assert.doesNotMatch(plan, /<MonitorReach /);
+  assert.match(plan, /<MonitorScope /);
+  assert.ok(plan.indexOf("<MonitorLoop ") < plan.indexOf("<MonitorScope "));
   assert.match(plan, /setOpenId\(item\.id\)/);
   const tree = fs.readFileSync(new URL("../src/planTree.tsx", import.meta.url), "utf8");
   assert.match(tree, /role="button" tabIndex=\{0\}/);

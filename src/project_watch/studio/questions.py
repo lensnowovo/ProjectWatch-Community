@@ -855,7 +855,7 @@ class QuestionLedger:
                 continue
             from project_watch.studio.monitoring_plan import MonitoringPlan
 
-            # System suggestions enter the plan as revertible, low-cadence trials (owner confirms in 监控方案).
+            # Suggestions are revertible trials; confidence does not override cadence.
             watch = MonitoringPlan(self.monitor).add(project_id, {
                 'text': text, 'label': str(row.get('label') or text[:8])[:12], 'queries': queries, 'alert': False,
                 'criteria': str(row.get('criteria') or f'与“{text}”直接相关的消息')[:200],

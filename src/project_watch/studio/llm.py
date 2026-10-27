@@ -59,6 +59,26 @@ def _extract_json(text: str):
     raise ModelError("模型返回的内容不是有效 JSON", code="model_output_invalid_json")
 
 
+def structured_options(config):
+    """Established provider capabilities for bounded structured inference."""
+    # Official DeepSeek defaults to high thinking effort. On batch extraction,
+    # reasoning can consume the entire budget before a single JSON token.
+    # Its documented non-thinking mode reserves the budget for structured output.
+    options = {"thinking": False, "json_object": True} if (
+        config.protocol == "openai"
+        and urlsplit(config.base_url).hostname == "api.deepseek.com"
+        and config.model in {"deepseek-flash", "deepseek-v4-pro"}
+    ) else {}
+    # GLM-5.3 defaults to maximum reasoning. Structured extraction needs a
+    # bounded thinking effort so large evidence tables can return promptly.
+    # https://huggingface.co/zai-org/GLM-5.3/blob/main/README.md
+    if (config.protocol == "openai"
+            and urlsplit(config.base_url).hostname == "open.bigmodel.cn"
+            and config.model == "glm-5.3"):
+        options["reasoning_effort"] = "low"
+    return options
+
+
 class LLM:
     def __init__(self, config: ModelConfig, http: Http, *, on_usage=None) -> None:
         self.config = config
@@ -179,21 +199,7 @@ class LLM:
 
     def json(self, system: str, user: str, *, max_tokens: int = 4096):
         system = system + "\n\n只输出 JSON，不要输出任何解释或 Markdown。"
-        # Official DeepSeek defaults to high thinking effort. On batch extraction,
-        # reasoning can consume the entire budget before a single JSON token.
-        # Its documented non-thinking mode reserves the budget for structured output.
-        options = {"thinking": False, "json_object": True} if (
-            self.config.protocol == "openai"
-            and urlsplit(self.config.base_url).hostname == "api.deepseek.com"
-            and self.config.model in {"deepseek-flash", "deepseek-v4-pro"}
-        ) else {}
-        # GLM-5.3 defaults to maximum reasoning. Structured extraction needs a
-        # bounded thinking effort so large evidence tables can return promptly.
-        # https://huggingface.co/zai-org/GLM-5.3/blob/main/README.md
-        if (self.config.protocol == "openai"
-                and urlsplit(self.config.base_url).hostname == "open.bigmodel.cn"
-                and self.config.model == "glm-5.3"):
-            options["reasoning_effort"] = "low"
+        options = structured_options(self.config)
         text = self.complete(system, user, max_tokens=max_tokens, **options)
         try:
             return _extract_json(text)

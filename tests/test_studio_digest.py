@@ -43,6 +43,8 @@ def _seed(app, name="光启视界", *, importance="major", title="光启视界�
                                                                    "short_name": name}, "consent": True}).json()
     store = app.state.studio_store
     with store._connect() as db:
+        # Remove only admission metadata in this synthetic queue-reset fixture.
+        db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute("DELETE FROM studio_jobs")
     store.add_items(project["id"], "company", [{"key": title, "title": title, "url": "https://direct.example/1",
                                                 "source": "投资界", "snippet": "", "published_at": None}])

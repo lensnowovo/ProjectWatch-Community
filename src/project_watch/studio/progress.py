@@ -40,6 +40,10 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         rounds = db.execute("SELECT count(*) FROM studio_jobs WHERE project_id=? AND kind='external'", (project_id,)).fetchone()[0]
         plan_data = json.loads(plan[0]) if plan else {}
         report = plan_data.get('last_report') or {}
+        collection_report = plan_data.get('collection_report') or {}
+        collection_partial = (collection_report.get('schema_version') == 1
+                              and collection_report.get('job_id') == plan_data.get('round_id')
+                              and collection_report.get('status') != 'complete')
         dsh_coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_coverage'",
                                  (job['id'],)).fetchone() if job else None
         dsh_partial = bool(dsh_coverage and json.loads(dsh_coverage[0]).get('partial'))
@@ -56,7 +60,7 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         state = 'partial'
     elif job and job['status'] in ('queued', 'running', 'failed'):
         state = job['status']
-    elif pending or failures or dsh_partial:
+    elif pending or failures or dsh_partial or collection_partial:
         state = 'partial'
     elif not completed_at or not checked:
         state = 'unobserved'

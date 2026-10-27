@@ -108,6 +108,11 @@ class RefreshRequest(BaseModel):
     kind: Literal["internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight"] = "external"
 
 
+class TopicRequest(BaseModel):
+    watch_id: str = Field(min_length=1, max_length=64)
+    expected_version: str = Field(min_length=1, max_length=64)
+
+
 class RecoveryRequest(BaseModel):
     expected_version: str = Field(min_length=1, max_length=64)
     idempotency_key: str = Field(min_length=8, max_length=100)
@@ -712,6 +717,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         metrics = store.list_metrics(project_id)
         detail_result = pipeline.structured_facts.get(project_id)
         from project_watch.studio.agent_results import project_projection
+        from project_watch.studio.collection_dsh import latest_report
 
         return project_projection(store, project_id, {
             "project": project,
@@ -726,6 +732,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "trials": company_trials(project, store.list_items(project_id=project_id, category="trial", limit=100)),
             "brief": store.get_brief(project_id),
             "plan": plan,
+            "collection_report": latest_report(store, project_id),
             "metrics": metrics,
             "finance": finance.view(metrics),
             "landscape": _landscape_view(project_id),
@@ -833,6 +840,39 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         retried = repository.retry_failed_intake(job.id)
         store.reset_analyzed(project_id)
         return {"status": retried.status}
+
+    @app.get('/api/studio/projects/{project_id}/research-topic/{watch_id}')
+    def research_topic_result(project_id: str, watch_id: str):
+        from project_watch.studio.dsh_topic import latest_topic
+
+        project_or_404(project_id)
+        try:
+            return latest_topic(store, project_id, watch_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, '专题结果暂时无法核验，请保留原任务并检查本地回执') from exc
+
+    @app.post('/api/studio/projects/{project_id}/research-topic', status_code=202)
+    def research_topic(project_id: str, body: TopicRequest):
+        from project_watch.studio.dsh_runtime import runtime_entry
+        from project_watch.studio.dsh_topic import enqueue_topic
+        from project_watch.studio.public_executor import require_available
+
+        project_or_404(project_id)
+        try:
+            require_available()
+            root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+            if not root or os.environ.get('PROJECT_WATCH_DSH_MONITOR') != '1':
+                raise ValueError('专题研究需要启用 DSH 监控')
+            if not runtime_entry(Path(root)).is_file():
+                raise ValueError('DSH 运行时不可用')
+            settings = settings_store.load()
+            if not settings.model.ready or not settings.search.ready_providers():
+                raise ValueError('请先配置模型与搜索服务')
+            return enqueue_topic(pipeline, project_id, body.watch_id, body.expected_version)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.post("/api/studio/projects/{project_id}/refresh", status_code=202)
     def refresh(project_id: str, body: RefreshRequest):

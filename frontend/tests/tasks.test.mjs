@@ -7,7 +7,7 @@ test("task board is reachable from the sidebar and keeps only work in progress o
   assert.match(app, /<NavItem to="\/tasks" label="任务">/);
   assert.match(app, /path="\/tasks"/);
   const page = fs.readFileSync(new URL("../src/pages/Tasks.tsx", import.meta.url), "utf8");
-  for (const text of ["正在处理", "需要处理", "处理记录", "现在没有在处理的任务", "后台任务未运行"]) assert.match(page, new RegExp(text));
+  for (const text of ["正在处理", "运行异常 · 待确认", "已有结果 · 可选查看", "处理记录", "现在没有在处理的任务", "后台任务未运行"]) assert.match(page, new RegExp(text));
   assert.match(page, /<details className="task-history">/);  // history folded by default (no open attribute)
   assert.doesNotMatch(page, /task-kpis/);
   assert.match(page, /api\.tasks/);

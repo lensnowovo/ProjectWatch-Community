@@ -1,8 +1,8 @@
 import { Skeleton } from "../frame";
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { WorkIndicator, useVisiblePoll } from "../Operational";
-import { jobReason, unresolvedJobs } from "../workState";
+import { JobActivity, WorkIndicator, useVisiblePoll } from "../Operational";
+import { isCoverageNote, jobReason, unresolvedJobs } from "../workState";
 import { api, type Job, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
 import { RecoveryDialog } from "../RecoveryDialog";
 import { Page } from "../motion";
@@ -41,7 +41,9 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
   const docs = data?.documents ?? [];
   const active = useMemo(() => jobs.filter((j) => j.status === "running" || j.status === "queued"), [jobs]);
   const activeDocs = useMemo(() => docs.filter((d) => !docDone(d) && !docFailed(d)), [docs]);
-  const failures = useMemo(() => unresolvedFailures(jobs), [jobs]);
+  const unresolved = useMemo(() => unresolvedFailures(jobs), [jobs]);
+  const failures = unresolved.filter(j => !isCoverageNote(j));
+  const coverage = unresolved.filter(isCoverageNote);
   const dismissed = useMemo(() => unresolvedJobs(jobs, true).filter(j => j.dismissed), [jobs]);
   const stuckDocs = useMemo(() => docs.filter(docFailed), [docs]);
   const finished = useMemo(() => jobs.filter((j) => (j.status === "done" || j.status === "failed")
@@ -52,7 +54,7 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
 
   return (
     <Page className="page-workspace">
-      <PageHeader variant="feed" title="任务" label="运行看板" description="只列出正在处理和需要你处理的事；完成的收在下方记录里。"
+      <PageHeader variant="feed" title="任务" label="运行看板" description="查看研究进展和已有结果；只有运行异常需要进一步确认。"
         meta={data ? `${data.runtime?.label ?? (data.worker === "running" ? "后台运行中" : "后台未运行")} · ${busy ? "每 4 秒" : "每 30 秒"}自动刷新` : ""} />
       {data?.runtime?.restart_required && <div className="note note-error" role="status">后台长时间没有进展。已保留结果；托管模式会尝试恢复，普通启动需重启应用。结果不明的请求不会自动重发。</div>}
       {data?.runtime?.state === "degraded" && <div className="note" role="status">后台调度暂时受阻，正在重试。</div>}
@@ -79,15 +81,21 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
               <span className="task-what"><Link to={`/projects/${j.project_id}`} className="cell-title">{j.project_name}</Link> · {j.label}
                 {j.status === "running" && j.stage && <span className="muted"> — {j.stage}</span>}</span>
               <span className="muted small num" title={j.runtime?.heartbeat_at ? `后台心跳：${j.runtime.heartbeat_at}` : undefined}>{j.runtime?.progress_at ? `进展 ${relTime(j.runtime.progress_at)}` : `加入于 ${relTime(j.created_at)}`}</span>
+              <JobActivity job={j} stale={!!error} />
             </li>)}</ul>}
             {activeDocs.length > 0 && <ul className="doc-pipeline">{activeDocs.map((d) => <DocumentRow key={d.id} d={d} />)}</ul>}
           </>}
         </section>
 
         {(failures.length > 0 || stuckDocs.length > 0) && <section className="card card-pad task-attention">
-          <div className="card-head"><h3>需要处理</h3><span className="muted small">未完成或部分完成；收起提醒不会改变任务结果</span></div>
+          <div className="card-head"><h3>运行异常 · 待确认</h3><span className="muted small">以下任务未完成；不会自动重跑，收起提醒不改变结果</span></div>
           {failures.length > 0 && <ul className="fix-list">{failures.map((j) => <FailureRow key={j.id} j={j} onChanged={reload} />)}</ul>}
           {stuckDocs.length > 0 && <ul className="doc-pipeline">{stuckDocs.map((d) => <DocumentRow key={d.id} d={d} />)}</ul>}
+        </section>}
+
+        {coverage.length > 0 && <section className="card card-pad task-coverage">
+          <div className="card-head"><h3>已有结果 · 可选查看</h3><span className="muted small">{coverage.length} 项</span></div>
+          <ul className="fix-list">{coverage.map(j => <CoverageRow key={j.id} j={j} />)}</ul>
         </section>}
 
         {dismissed.length > 0 && <details className="task-history">
@@ -119,6 +127,16 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
   );
 }
 
+export function CoverageRow({ j }: { j: TaskJob }) {
+  return <li className="coverage-row">
+    <div><Link to={`/projects/${j.project_id}`} className="cell-title">{j.project_name}</Link><span className="muted"> · {j.label}</span>
+      <details><summary>部分完成 · 查看详情</summary><p>{jobReason(j)}</p></details>
+    </div>
+    <span className="muted small">{relTime(j.finished_at)}</span>
+    <Link className="btn btn-sm" to={`/projects/${j.project_id}?tab=external`}>查看已有结果</Link>
+  </li>;
+}
+
 export function FinishedRow({ j }: { j: TaskJob }) {
   return <tr className={j.status === "failed" ? "task-failed" : ""}>
     <td className="muted small num">{relTime(j.finished_at)}</td>
@@ -128,7 +146,9 @@ export function FinishedRow({ j }: { j: TaskJob }) {
       : j.runtime?.state === 'needs_confirmation' ? <span className="tag tag-warn" title={j.runtime.label}>仍有请求待确认</span>
       : j.status === "done" ? <span className="tag tag-ok">成功</span> : <span className="tag tag-warn">{j.runtime?.label || "失败"}</span>}</td>
     <td className="num muted">{duration(j.seconds)}</td>
-    <td className="num muted">{j.calls ? `${j.calls} 次` : "—"}{!!j.unknown && <div>另有 {j.unknown} 次服务请求待确认</div>}</td>
+    <td className="num muted">{j.calls ? `${j.calls} 次` : "—"}{!!j.unknown && <div>另有 {j.unknown} 次服务请求待确认</div>}
+      {!!j.runtime?.activity?.model_requests && <details className="task-usage"><summary>查看 Token 用量</summary><JobActivity job={j} /></details>}
+    </td>
   </tr>;
 }
 

@@ -19,11 +19,13 @@ USER_AGENT = "ProjectWatch/0.2 (+self-hosted investment monitoring)"
 
 
 class HttpError(RuntimeError):
-    def __init__(self, code: str, *, status: int | None = None, detail: str = "") -> None:
+    def __init__(self, code: str, *, status: int | None = None, detail: str = "",
+                 transport_phase: str = "unknown", failure_kind: str = "unknown") -> None:
         super().__init__(f"{code}{f' ({status})' if status else ''}{': ' + detail if detail else ''}")
         self.code = code
         self.status = status
         self.detail = detail
+        self.transport_phase, self.failure_kind = transport_phase, failure_kind
 
 
 @dataclass(frozen=True)
@@ -88,8 +90,10 @@ def urllib_transport(proxy_url: str = "") -> Transport:
             raise HttpError("disallowed_url")
         request = urllib.request.Request(url, data=body, method=method,
                                          headers={"User-Agent": USER_AGENT, **headers})
+        phase = 'connect_or_headers'
         try:
             with opener.open(request, timeout=timeout) as response:
+                phase = 'response_body'
                 data = response.read(MAX_RESPONSE_BYTES + 1)
                 status = response.status
                 response_headers = {k.lower(): v for k, v in response.headers.items()}
@@ -97,7 +101,9 @@ def urllib_transport(proxy_url: str = "") -> Transport:
             data = exc.read(64_000) if exc.fp else b""
             return Response(exc.code, {k.lower(): v for k, v in exc.headers.items()}, data)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise HttpError("connection_failed", detail=str(getattr(exc, "reason", exc))) from exc
+            reason = getattr(exc, 'reason', exc)
+            raise HttpError("connection_failed", detail=str(reason), transport_phase=phase,
+                            failure_kind='timeout' if isinstance(reason, TimeoutError) else 'transport_error') from exc
         if len(data) > MAX_RESPONSE_BYTES:
             raise HttpError("response_too_large")
         return Response(status, response_headers, data)

@@ -551,11 +551,15 @@ def site_discovery(store, project_id: str) -> dict:
 
 def check_sites(monitor: MonitorStore, transport, project_id: str, website: str | None,
                 stage=lambda _t: None, *, execution=None, candidates: list[str] | None = None,
-                names: list[str] | None = None, recovery_key: str | None = None) -> dict:
+                names: list[str] | None = None, recovery_key: str | None = None,
+                force: bool = False, record_changes: bool = True, on_snapshot=None, guard=None,
+                journal_requests: bool = True) -> dict:
     """Discover pages (first run), then read due pages and record changes. Returns a small report.
 
     Without a website, ``candidates`` are possible homepages from a search: one is adopted only when
-    its page source carries one of ``names``; the report then says which (``found``) and why."""
+    its page source carries one of ``names``; the report then says which (``found``) and why.
+    Host collection can force snapshots without diff events. It disables this
+    logical-request journal only when its transport journals each physical GET."""
     from project_watch.feeds import FeedError
     from project_watch.studio.http import HttpError, Response
 
@@ -568,6 +572,8 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
     # or permission to retry; paid model/search/commercial journals are unchanged.
 
     def fetch(url: str):
+        if guard:
+            guard()
         if url in fetched:
             return fetched[url]
         def request():
@@ -603,8 +609,9 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
             import hashlib
 
             try:
-                response = execution.call('site', hashlib.sha256(('site:' + url).encode()).hexdigest(),
-                                          request, provider='guarded_site:' + urlsplit(url).netloc)
+                response = (execution.call('site', hashlib.sha256(('site:' + url).encode()).hexdigest(),
+                                           request, provider='guarded_site:' + urlsplit(url).netloc)
+                            if journal_requests else request())
             except Exception as exc:
                 if isinstance(exc, HttpError) and exc.code in ('provider_backoff', 'request_budget'):
                     if finding_site or recovery_key:
@@ -694,7 +701,7 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
                 if execution and isinstance(exc, (RuntimeError, HttpError)) and not isinstance(exc, FeedError):
                     raise
                 report["errors"].append(f"发现页面：{type(exc).__name__}")
-    due = monitor.due_pages(project_id)
+    due = monitor.pages(project_id) if force else monitor.due_pages(project_id)
     if due:
         stage(f"检查官网 {len(due)} 个页面")
     for page in due:
@@ -718,13 +725,15 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
                 monitor.save_check(page["id"], status="unreadable", error="页面内容需要脚本加载，无法读取")
                 continue
             report["checked"] += 1
+            if on_snapshot:
+                on_snapshot(page, blocks)
             previous = _previous_blocks(monitor, page["id"])
             if previous is None:
                 monitor.save_check(page["id"], status="ok", blocks=blocks)
                 continue
             added, removed = sw.diff(previous, blocks)
             changed = bool(added or removed)
-            if changed:
+            if changed and record_changes:
                 monitor.add_change(project_id, page, added, removed)
                 report["changed"] += 1
             monitor.save_check(page["id"], status="ok", blocks=blocks, changed=changed)

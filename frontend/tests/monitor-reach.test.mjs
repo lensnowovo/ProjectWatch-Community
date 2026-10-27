@@ -50,8 +50,10 @@ test("theme variables, scoped styles and horizontal scroll preserved",()=>{
  const css=fs.readFileSync(new URL("../src/monitorReach.css",import.meta.url),"utf8");
  assert.doesNotMatch(css,/#[0-9a-f]{3,8}\b/i);assert.match(css,/overflow-x:auto/);assert.match(css,/focus-visible/);
  const source=fs.readFileSync(new URL("../src/plan.tsx",import.meta.url),"utf8");
- assert.match(source,/workRevision\(detail\)/);assert.match(source,/<MonitorReach company=\{company\} plan=\{data\}/);
- assert.ok(source.indexOf("<MonitorLoop ")<source.indexOf("<MonitorReach "));assert.ok(source.indexOf("<MonitorReach ")<source.indexOf("<RelationScope "));
+ assert.match(source,/workRevision\(detail\)/);
+ assert.doesNotMatch(source,/<MonitorReach /); // Removed by the approved scope redesign.
+ assert.ok(source.indexOf("<MonitorLoop ")>=0);
+ assert.ok(source.indexOf("<MonitorLoop ")<source.indexOf("<MonitorScope "));
 });
 
 test("compact strip keeps readable geometry and avoids stacked card margins",()=>{

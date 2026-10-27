@@ -100,25 +100,30 @@ class JobExecution:
             db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data",
                        (self.job["id"], stage, encoded))
 
-    def read_checkpoint(self, stage):
+    def read_checkpoint(self, stage, *, db=None):
+        if db is not None:
+            return self._read_checkpoint(db, stage)
         with closing(self.store._connect()) as db:
             db.execute("BEGIN")
-            row = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?", (self.job["id"], stage)).fetchone()
-            data = json.loads(row[0]) if row else None
-            if isinstance(data, dict) and data.get("_chunked_checkpoint") == 1:
-                # One read snapshot: a concurrent checkpoint replacement cannot
-                # mix a new manifest with old parts (or vice versa).
-                rows = db.execute("SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? AND stage LIKE ?",
-                                  (self.job["id"], data["prefix"] + "%")).fetchall()
-                parts = {r[0]: json.loads(r[1]) for r in rows}
-                try:
-                    encoded = "".join(parts[data["prefix"] + str(i)] for i in range(data["count"]))
-                except (KeyError, TypeError) as exc:
-                    raise ValueError("checkpoint parts missing or corrupt") from exc
-                if hashlib.sha256(encoded.encode()).hexdigest() != data["sha256"]:
-                    raise ValueError("checkpoint parts checksum mismatch")
-                return json.loads(encoded)
-            return data
+            return self._read_checkpoint(db, stage)
+
+    def _read_checkpoint(self, db, stage):
+        row = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?", (self.job["id"], stage)).fetchone()
+        data = json.loads(row[0]) if row else None
+        if isinstance(data, dict) and data.get("_chunked_checkpoint") == 1:
+            # One read snapshot: a concurrent checkpoint replacement cannot
+            # mix a new manifest with old parts (or vice versa).
+            rows = db.execute("SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? AND stage LIKE ?",
+                              (self.job["id"], data["prefix"] + "%")).fetchall()
+            parts = {r[0]: json.loads(r[1]) for r in rows}
+            try:
+                encoded = "".join(parts[data["prefix"] + str(i)] for i in range(data["count"]))
+            except (KeyError, TypeError) as exc:
+                raise ValueError("checkpoint parts missing or corrupt") from exc
+            if hashlib.sha256(encoded.encode()).hexdigest() != data["sha256"]:
+                raise ValueError("checkpoint parts checksum mismatch")
+            return json.loads(encoded)
+        return data
 
     def checkpoint_chunked(self, stage, data):
         """Opt-in lossless large snapshot; each row retains the normal bound.
@@ -249,6 +254,15 @@ class JobExecution:
                     self._guard(db)
                 db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
                            ("failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                phase = getattr(exc, 'transport_phase', 'unknown')
+                failure = getattr(exc, 'failure_kind', 'unknown')
+                diagnostic = {'call_key': key,
+                    'phase': phase if phase in ('connect_or_headers', 'response_body') else 'unknown',
+                    'failure': failure if failure in ('timeout', 'transport_error') else 'unknown'}
+                # No exception text, URL, credentials or response body in diagnostics.
+                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
+                           'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                           (self.job['id'], 'call_error:' + key[:40], json.dumps(diagnostic)))
             if failed_read:
                 raise HttpError("response_too_large") from exc
             raise

@@ -1,7 +1,8 @@
 """Durable, local exploration control. No model calls and no project scheduler changes.
 
-An exploration may sleep while ordinary monitoring keeps collecting evidence. Only
-new, routed evidence wakes it; replaying a job or touching an event timestamp does not.
+An exploration may sleep while ordinary monitoring keeps collecting evidence.
+New routed evidence or an explicit owner topic admission may wake it; replaying
+a job or touching an event timestamp does not.
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ CREATE TABLE IF NOT EXISTS studio_exploration_history (
 
 NO_GAIN_ROUNDS = 3
 REASONS = {
-    'exploring': '探索中', 'new_evidence': '新证据唤醒', 'answered': '本次问题已回答',
+    'exploring': '探索中', 'new_evidence': '新证据唤醒', 'owner_requested': '用户启动专题', 'answered': '本次问题已回答',
     'no_gain': '连续三轮无新线索', 'relation_limit': '已到关联边界',
     'capacity_limit': '已到关注点容量', 'source_failure': '来源失败，等待重试',
     'request_budget': '本轮调用额度已到，等待后续运行',
@@ -133,9 +134,11 @@ class Explorations:
                    (row['watch_id'], row['generation'], row['state'], row['reason'],
                     json.dumps(sorted(evidence)), now()))
 
-    def refresh(self, project_id, ledger=None, *, event_filter=None):
+    def refresh(self, project_id, ledger=None, *, event_filter=None, watch_ids=None):
         """Called at evidence/collection boundaries, never by a status GET."""
         for watch in self.monitor.watchpoints(project_id):
+            if watch_ids is not None and watch['id'] not in watch_ids:
+                continue
             if watch['status'] == 'retired' or not self.managed(watch):
                 continue
             aliases = {}
@@ -178,6 +181,89 @@ class Explorations:
                     db.execute("UPDATE studio_watchpoints SET completed_queries='[]' WHERE id=?", (watch['id'],))
                 db.execute('UPDATE studio_explorations SET generation=?,state=?,reason=?,no_gain=0,gain=1,updated_at=? WHERE watch_id=?',
                            (row['generation'], row['state'], row['reason'], now(), watch['id']))
+
+    def admit_collection(self, execution, plan):
+        """Bind host query sets to exploration generations before dispatch.
+
+        Admission never wakes a sleeping question and is separate from whether
+        the collected evidence eventually answers its exit condition.
+        """
+        ids = {u['target_id'][6:] for u in plan['units'] if u['disposition'] == 'pending'
+               and u['source'] == 'search' and u['target_id'].startswith('watch:')}
+        with execution.store.write_scope(execution._guard):
+            self.refresh(plan['project_id'], watch_ids=ids)
+            for watch in self.monitor.watchpoints(plan['project_id']):
+                if watch['id'] not in ids or watch['visibility'] != 'public' or not self.managed(watch):
+                    continue
+                units = [u for u in plan['units'] if u['target_id'] == 'watch:' + watch['id']
+                         and u['source'] == 'search' and u['disposition'] == 'pending']
+                if any(u['query_version'] != 'watch:' + str(watch['lifecycle_version']) for u in units):
+                    raise ValueError('question scope changed before collection')
+                with self.monitor._db() as db:
+                    execution._guard(db)
+                    previous = db.execute('SELECT * FROM studio_exploration_cycles WHERE watch_id=? AND cycle=?',
+                                          (watch['id'], execution.job['id'])).fetchone()
+                    state = db.execute('SELECT * FROM studio_explorations WHERE watch_id=?', (watch['id'],)).fetchone()
+                if previous:
+                    if (not state or previous['generation'] != state['generation']
+                            or previous['version'] != state['version']):
+                        raise ValueError('question generation changed during collection')
+                    continue  # Replay preserves the original cycle, including collected/reused.
+                if not self.start(watch, execution.job['id']):
+                    raise ValueError('question is not runnable for collection')
+
+    @staticmethod
+    def record_collection(db, plan, successful):
+        """Project only this cycle's complete query set, in the receipt transaction.
+
+        Old cached results remain readable but cannot count again toward the
+        no-gain stopping threshold. Failed/truncated sets never exhaust a topic.
+        """
+        from project_watch.studio.collection_history import moment
+
+        ids = {u['target_id'][6:] for u in plan['units']
+               if u['source'] == 'search' and u['target_id'].startswith('watch:')}
+        for wid in ids:
+            row = db.execute('SELECT * FROM studio_watchpoints WHERE id=? AND project_id=?',
+                             (wid, plan['project_id'])).fetchone()
+            if not row or row['visibility'] != 'public' or row['status'] == 'retired' or not Explorations.managed(dict(row)):
+                continue
+            watch = dict(row)
+            cycle = db.execute('SELECT * FROM studio_exploration_cycles WHERE watch_id=? AND cycle=?',
+                               (wid, plan['round_id'])).fetchone()
+            state = db.execute('SELECT * FROM studio_explorations WHERE watch_id=?', (wid,)).fetchone()
+            if (not cycle or cycle['state'] != 'collecting' or not state
+                    or cycle['version'] != str(watch['lifecycle_version'])
+                    or state['version'] != cycle['version'] or state['generation'] != cycle['generation']):
+                continue
+            queries = set(json.loads(watch['queries']))
+            units = [u for u in plan['units'] if u['source'] == 'search' and u['target_id'] == 'watch:' + wid
+                     and u['query_version'] == 'watch:' + cycle['version'] and u['disposition'] == 'pending']
+            if not queries or {u['query'] for u in units} != queries:
+                continue
+            times = {}
+            for unit in units:
+                if unit['id'] not in successful:
+                    continue
+                saved = db.execute('SELECT fetched_at FROM studio_collection_successes '
+                                   'WHERE project_id=? AND job_id=? AND unit_id=? AND query_key=?',
+                                   (plan['project_id'], plan['round_id'], unit['id'], unit['history_key'])).fetchone()
+                if saved:
+                    times[unit['query']] = moment(saved['fetched_at'])
+            if times.keys() != queries:
+                continue
+            fetched = min(times.values())
+            fresh = not watch['last_run_at'] or fetched > moment(watch['last_run_at'])
+            db.execute('UPDATE studio_exploration_cycles SET state=? WHERE watch_id=? AND cycle=?',
+                       ('collected' if fresh else 'reused', wid, plan['round_id']))
+            if fresh:
+                attempt = max(times.values())
+                if watch['last_attempt_at']:
+                    attempt = max(attempt, moment(watch['last_attempt_at']))
+                db.execute("UPDATE studio_watchpoints SET last_run_at=?,last_attempt_at=?,completed_queries='[]' WHERE id=?",
+                           (fetched.isoformat(), attempt.isoformat(), wid))
+            # The downstream engine alone decides answered/no_gain. Do not
+            # clear any recovery hold or alter the exploration state here.
 
     def start(self, watch, cycle):
         with self.monitor._db() as db, db:
@@ -289,14 +375,16 @@ class Explorations:
             self._history(db, row, evidence)
             return True
 
-    def finish(self, project_id, cycle, ledger=None, *, event_filter=None):
+    def finish(self, project_id, cycle, ledger=None, *, event_filter=None, watch_ids=None):
         """One successful complete query set + downstream routing = one round.
 
         Idempotent across process restarts. A partial/failing query set is never
         evidence of exhaustion. Explicit answer/boundary outcomes win over counts.
         """
-        self.refresh(project_id, ledger, event_filter=event_filter)
+        self.refresh(project_id, ledger, event_filter=event_filter, watch_ids=watch_ids)
         for watch in self.monitor.watchpoints(project_id):
+            if watch_ids is not None and watch['id'] not in watch_ids:
+                continue
             with self.monitor._db() as db, db:
                 db.execute('BEGIN IMMEDIATE')
                 if not self._valid(db, watch):

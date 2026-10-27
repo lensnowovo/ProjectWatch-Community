@@ -255,6 +255,47 @@ class Gateway:
         self.advertised_tools = set()
         self.server = None
         self.closing = threading.Event()
+        research.judgment_reviewer = self.review_judgment
+        research.record_reviewer = self.review_judgment
+
+    def review_judgment(self, payload):
+        from project_watch.studio.dsh_judgment_review import (
+            CONSISTENCY_SYSTEM,
+            OUTPUT_TOKENS,
+            SYSTEM,
+        )
+        from project_watch.studio.llm import structured_options
+
+        with self.research.lock, self.research.store.write_scope(self.research.execution._guard):
+            if self.closing.is_set():
+                raise HttpError('execution_stopped')
+            self.research.guard()
+            system = CONSISTENCY_SYSTEM if payload.get('phase') == 'consistency' else SYSTEM
+            if payload.get('purpose') == 'public_record_admission' and payload.get('phase') != 'consistency':
+                from project_watch.studio.dsh_record_review import GUIDANCE
+                system += GUIDANCE
+            body = {'model': self.model.model, 'stream': False, 'messages': [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]}
+            body['max_tokens'] = min(self.model.max_output_tokens, OUTPUT_TOKENS)
+            options = structured_options(self.model)
+            if 'reasoning_effort' in options:
+                body['reasoning_effort'] = options['reasoning_effort']
+            if 'thinking' in options:
+                body['thinking'] = {'type': 'enabled' if options['thinking'] else 'disabled'}
+            if options.get('json_object'):
+                body['response_format'] = {'type': 'json_object'}
+            self.research.store.set_stage(self.research.execution.job['id'], 'DSH 复核判断依据')
+            data = self._send_model(body)
+            try:
+                choice = data['choices'][0]
+                message = choice['message']
+                if choice.get('finish_reason') != 'stop' or message.get('tool_calls'):
+                    raise ValueError('review_response_incomplete')
+                return json.loads(message['content'])
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                self.research.hold('judgment_review_invalid')
+                raise HttpError('judgment_review_invalid') from exc
 
     def model_call(self, payload):
         from project_watch.studio.recovery import dsh_model_continuation
@@ -295,8 +336,14 @@ class Gateway:
                 self.research.hold('dsh_tools_unavailable')
                 raise HttpError('dsh_tools_unavailable')
             self.advertised_tools.update(names)
+            from project_watch.studio.dsh_closeout import finish_saved_monitor
+            if 'pw_finish' in names and finish_saved_monitor(self.research):
+                return {"choices": [{"message": {"role": "assistant", "content": "结果已保存。"},
+                                     "finish_reason": "stop"}]}
             body = {k: payload[k] for k in ("model", "messages", "tools", "tool_choice",
                                            "temperature", "max_tokens") if k in payload}
+            from project_watch.studio.dsh_closeout import prepare_model
+            body = prepare_model(self.research, body)
             original = body.get("messages", [])
             body["messages"] = compact_context_messages(original)
             before = len(json.dumps(original, ensure_ascii=False))
@@ -317,6 +364,11 @@ class Gateway:
                 body["max_tokens"] = min(int(body.get("max_tokens") or self.model.max_output_tokens),
                                          self.model.max_output_tokens)
             self.research.store.set_stage(self.research.execution.job["id"], "DSH 研究中：选择下一步")
+            return self._send_model(body)
+
+    def _send_model(self, body):
+        """Both generation and independent review share journal/budget/unknown handling."""
+        with self.research.lock, self.research.store.write_scope(self.research.execution._guard):
             received = False
             try:
                 self.model_requests += 1
@@ -614,8 +666,12 @@ def recover_authorized_site(pipeline, execution):
 
 
 def run_bootstrap(pipeline, execution, runtime_root: Path):
+    from project_watch.studio import collection_host
+
+    admission = collection_host.admit(execution, mode='first')
+    if admission['enabled']:
+        collection_host.limit_budgets(execution, admission['mode'])
     recover_authorized_site(pipeline, execution)
-    execution.budgets.update(search=40, page=40)
     settings, http, _llm, collectors = pipeline.tools()
     research = PublicBootstrap(pipeline, execution, collectors, pipeline.reader())
     if research.state["finished"]:
@@ -624,23 +680,39 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
     http = guarded_http(research, http)
     collectors.http = http
     gateway = Gateway(research, settings.model, http)
+    collection_host.prepare(research)
     directory = session_directory(research)
     return run_dsh(research, gateway, runtime_root, directory)
 
 
 def run_monitor(pipeline, execution, runtime_root: Path, *, analysis_only=False):
+    from project_watch.studio import collection_host
     from project_watch.studio.dsh_monitor import PublicMonitor
 
+    research_class = PublicMonitor
+    if not analysis_only:
+        request = execution.read_checkpoint('collection_request_v1') or {}
+        mode = request.get('mode', 'incremental')
+        if mode not in ('incremental', 'refresh', 'topic'):
+            raise ValueError('invalid admitted collection mode')
+        if mode == 'topic':
+            from project_watch.studio.dsh_topic import PublicTopic
+
+            research_class = PublicTopic
+        admission = collection_host.admit(execution, mode=mode)
+        if admission['enabled']:
+            collection_host.limit_budgets(execution, admission['mode'])
     recover_authorized_site(pipeline, execution)
-    execution.budgets.update(search=40, page=40)
     settings, http, _llm, collectors = pipeline.tools()
-    research = PublicMonitor(pipeline, execution, collectors, pipeline.reader(), analysis_only=analysis_only)
+    research = research_class(pipeline, execution, collectors, pipeline.reader(), analysis_only=analysis_only)
     if research.state["finished"]:
         research.guard()
         return research.state["finished"]
     http = guarded_http(research, http)
     collectors.http = http
     gateway = Gateway(research, settings.model, http)
+    if not analysis_only:
+        collection_host.prepare(research)
     directory = session_directory(research)
     return run_dsh(research, gateway, runtime_root, directory)
 

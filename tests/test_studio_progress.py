@@ -86,6 +86,17 @@ def test_completed_observed_checks_allow_bounded_quiet_statement(app):
     assert TestClient(app).get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'observed'
 
 
+def test_successful_zero_in_one_channel_does_not_hide_incomplete_host_collection(app):
+    store, pid = seed(app)
+    complete(store, pid)
+    stored = store.get_plan(pid)
+    store.put_plan(pid, {**stored, 'round_id': 'synthetic-round', 'collection_report': {
+        'schema_version': 1, 'job_id': 'synthetic-round', 'status': 'partial', 'channels': {}}})
+    data = digest.build_digest(store)
+    assert data['quiet'] == [] and data['incomplete'][0]['state'] == 'partial'
+    assert TestClient(app).get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'partial'
+
+
 def test_failed_refresh_retains_saved_events_and_is_visible_in_digest(app):
     store, pid = seed(app)
     complete(store, pid)

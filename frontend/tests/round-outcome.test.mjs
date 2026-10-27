@@ -18,7 +18,7 @@ const round = {job_id:"synthetic", completed_at:"2026-01-01T10:00:00Z", coverage
 const render = props => renderToStaticMarkup(React.createElement(RoundOutcome,props));
 test("settled branch and incomplete coverage coexist without success/failure confusion",()=>{
   const html=render({round});
-  for(const text of ["最近一轮结果","本轮信息","判断方向未变","资料仍有缺口","长期关联继续保留","研究分支","省级原件未取得"])
+  for(const text of ["最近一轮结果","本轮信息","判断方向未变","部分完成","长期关联继续保留","研究分支","省级原件未取得"])
     assert.ok(html.includes(text),text);
   assert.ok(!html.includes("公司取得进展"));
   assert.ok(!html.includes("<details open"));
@@ -33,17 +33,19 @@ test("untrusted generated text is escaped",()=>{
   assert.ok(!html.includes("<script>"));
 });
 
-test("outputs and actual stop reason remain visible with unresolved coverage",()=>{
+test("outputs, stop reason and coverage remain available in closed click-to-open details",()=>{
   const html=render({round:{...round,stop_reason:"本轮评估已收口，仍有缺口。",
     stop_details:[{reason:"本次问题已回答",count:1}],
     outputs:{saved_entries:4,revision_applied:2,revision_added:1,revision_proposed:1,revision_dropped:1}}});
   for(const text of ["本轮保留 4 条记录","已执行 2","新增分支 1","待确认 1","未执行 1","本轮评估已收口","本次问题已回答"])
     assert.ok(html.includes(text),text);
-  assert.ok(html.indexOf("省级原件未取得") < html.indexOf("<details") || !html.includes("<details"));
+  assert.ok(html.indexOf("省级原件未取得") > html.indexOf('<details class="round-outcome-details"'));
+  assert.match(html, /<summary>查看本轮详情<\/summary>/);
+  assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
 });
 
 test("legacy receipts do not invent output counts or natural stop reasons",()=>{
   const html=render({round});
   assert.ok(!html.includes("本轮保留 0"));
-  assert.ok(html.includes("旧回执未记录具体收口原因"));
+  assert.match(html, /结束原因<\/strong><p>未记录<\/p>/);
 });

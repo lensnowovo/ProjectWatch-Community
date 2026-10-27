@@ -84,6 +84,8 @@ def test_real_tool_rejects_before_staging_then_accepts_explicit_correction(tmp_p
     pipeline.store.enqueue(project.id, "external")
     execution = JobExecution(pipeline.store, pipeline.store.claim())
     research = (PublicMonitor if monitor else PublicBootstrap)(pipeline, execution, Search(), None)
+    from test_studio_dsh_monitor import synthetic_review
+    research.record_reviewer = synthetic_review
     research.tool("pw_search", {"query": "合成公司订单", "category": "company"})
     args = {"kind": "business", "source_id": "S1", "quote": QUOTE, "text": QUOTE,
             "label": "订单超80套"}

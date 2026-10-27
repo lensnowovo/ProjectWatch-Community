@@ -1,20 +1,19 @@
 import { motion } from "motion/react";
 import { ChartHint } from "./chartHint";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { PositionJudgment } from "./judgment";
-import { focus } from "./relevance";
-import { api, type BriefEntry, type Item, type Landscape, type ProjectDetail, type RegistryOverlap, type ScopedRelationship } from "./api";
+import { ExternalNews, unmatchedReports, useExternalNews } from "./ExternalNews";
+import { api, type Category, type BriefEntry, type Item, type Landscape, type ProjectDetail, type RegistryOverlap, type ScopedRelationship } from "./api";
 import { ItemList } from "./items";
 import { Storylines, WatchBar } from "./monitor";
 import { EventStates, StoredEvidence } from "./MonitoringDetails";
 import { Commitments } from "./commitments";
 import { RedFlags } from "./flags";
 import { EASE, useToast } from "./motion";
-import { Empty, EvidenceLinks, byNewest, seenAt, errorMessage, relTime, useAsync } from "./ui";
-import { Seg } from "./widgets";
+import { Empty, ErrorNote, EvidenceLinks, byNewest, seenAt, errorMessage, relTime, useAsync } from "./ui";
 import { insightRevision, jobWorkState, monitoringRevision, WORK_LABEL } from "./workState";
 import { companyName, competitionIdentity } from "./peerNames";
-import { Block, Columns, Figure, Reference, Skeleton, VerdictBand } from "./frame";
+import { Block, Figure, Reference, Skeleton, VerdictBand } from "./frame";
 import { useStagedRead, WorkIndicator } from "./Operational";
 
 // ------------------------------------------------------------------ 公司动态
@@ -32,30 +31,7 @@ function OutlookColumn({ title, tone, entries }: { title: string; tone: string; 
   );
 }
 
-/** Week buckets for the news list: 本周 / 上周 / then by month. */
-function weekBucket(iso?: string | null): string {
-  const t = Date.parse(iso ?? "");
-  if (!Number.isFinite(t)) return "日期未知";
-  const days = (Date.now() - t) / 86400_000;
-  if (days < 7) return "本周";
-  if (days < 14) return "上周";
-  const d = new Date(t);
-  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
-}
-
-function NewsGroup({ label, items, onChange, watchLabels }: { label: string; items: Item[]; onChange: (i: Item) => void; watchLabels?: Record<string, string[]> }) {
-  const [limit, setLimit] = useState(8);
-  return (
-    <section className="news-group">
-      <h4 className="news-group-head">{label}<span className="tf-note">{items.length} 条</span></h4>
-      <ItemList items={items.slice(0, limit)} onChange={onChange} grouped={false} watchLabels={watchLabels} />
-      {items.length > limit && <button className="link small news-more" onClick={() => setLimit((n) => n + 20)}>再看 {Math.min(20, items.length - limit)} 条（共 {items.length}）</button>}
-    </section>
-  );
-}
-
-/** 公司动态: the company's own news by week; the reading of it beside; everything else folded. */
-/** 公司进展: how the company's own events move (stages, promises, warning signs), then its news by week.
+/** 公司进展: the company's own events followed by a continuous, stable reading list.
  * Clinical trials, papers and patents have their own pages. */
 export function NewsView({ detail, financing }: { detail: ProjectDetail; financing?: ReactNode }) {
   const [major, setMajor] = useState(false);
@@ -63,7 +39,7 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
   const projectId = detail.project.id;
   const revision = monitoringRevision(detail);
   const monitor = useAsync(() => api.monitor(projectId), [projectId, revision]);
-  const { data, loading, setData } = useAsync(
+  const { data, loading, error, reload, setData } = useAsync(
     () => (watch ? api.watchEvents(watch)
       : api.feed({ project_id: projectId, category: "company", importance: major ? "major" : undefined, limit: 200 })),
     [projectId, major, watch],
@@ -83,13 +59,13 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
   const month = own.filter((i) => Date.now() - Date.parse(i.published_at ?? i.collected_at) < 30 * 86400_000);
   const majors = month.filter((i) => i.importance === "major").length;
   const notable = month.filter((i) => i.importance === "notable").length;
-  const [older, setOlder] = useState(false);
-  const groups: [string, Item[]][] = [];
-  for (const item of own) {
-    const label = weekBucket(seenAt(item));
-    const last = groups[groups.length - 1];
-    if (last && last[0] === label) last[1].push(item); else groups.push([label, [item]]);
-  }
+  const [limit, setLimit] = useState(12);
+
+  if (error && !data) return <div className="tab-frame news-view">
+    <VerdictBand eyebrow="公司进展" title="暂时无法读取公司动态" />
+    <ErrorNote error={error} />
+    <button className="link small" onClick={reload}>重新读取已保存的公司动态</button>
+  </div>;
 
   return (
     <div className="tab-frame news-view">
@@ -103,49 +79,50 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
         </>} />
 
       <NewsStats items={own} counts={detail.counts} />
+      {!!error && <p role="alert" className="muted small">公司动态读取失败，已读取的内容保留。 <button className="link" onClick={reload}>重新读取</button></p>}
       {staged.failed && <p className="muted small">暂时无法检查更新，当前动态保留。</p>}
       {added > 0 && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); }}>新增 {added} 条 · 点击查看</button>}
       <Commitments projectId={projectId} revision={revision} progress={detail.monitoring_progress} />
       {detail.capabilities?.insight_projections === true && <RedFlags projectId={projectId} revision={revision} progress={detail.monitoring_progress} />}
 
-      <Columns
-        main={<>
+      <Block card title="本期解读">
+        {hasOutlook ? <div className="outlook-grid">
+          <OutlookColumn title="机会" tone="up" entries={outlook?.opportunities} />
+          <OutlookColumn title="威胁" tone="down" entries={outlook?.threats} />
+          <OutlookColumn title="值得追问" tone="verify" entries={outlook?.verify} />
+        </div> : !stale && detail.brief?.summary ? <p className="side-text">{detail.brief.summary}</p>
+          : <p className="muted small">{stale ? "资料或关系已更正，解读待更新。" : detail.brief ? "等待更新解读。" : "暂无本期解读，可先阅读已收录动态。"}</p>}
+      </Block>
+
+      <section className="company-news-stream" aria-label="公司新闻">
           <div className="filters">
             {activeWatch ? (
               <>
-                <span className="watch-filter">只看命中“{activeWatch.label}”的动态 <button className="link" onClick={() => setWatch(null)}>清除</button></span>
+                <span className="watch-filter">只看命中“{activeWatch.label}”的动态 <button className="link" onClick={() => {setWatch(null);setLimit(12);}}>清除</button></span>
                 <span className="spacer" />
                 <span className="muted small" title={activeWatch.criteria}>判断标准：{activeWatch.criteria}</span>
               </>
             ) : (
               <>
-                <label className="check check-inline"><input type="checkbox" checked={major} onChange={(e) => setMajor(e.target.checked)} />只看重大</label>
+                <label className="check check-inline"><input type="checkbox" checked={major} onChange={(e) => {setMajor(e.target.checked);setLimit(12);}} />只看重大</label>
+                <span className="muted small">{own.length} 条已读取 · 日期倒序</span>
               </>
             )}
           </div>
           {loading && !data && <Skeleton lines={6} />}
           {data && own.length === 0 && (watch
             ? <Empty title="这个关注点还没有命中" />
-            : <Empty title="暂无公司自身动态">公开信息覆盖有限，不代表公司没有变化。</Empty>)}
-          {groups.slice(0, older ? groups.length : 3).map(([label, items]) => <NewsGroup key={`${label}|${major}|${watch}`} label={label} items={items} onChange={update} watchLabels={monitor.data?.watch_labels} />)}
-          {groups.length > 3 && <button className="btn btn-ghost btn-sm news-older" onClick={() => setOlder((v) => !v)}>
-            {older ? "收起更早的动态" : `更早 ${groups.slice(3).reduce((n, [, items]) => n + items.length, 0)} 条（${groups.slice(3).map(([l]) => l).slice(0, 3).join("、")}${groups.length > 6 ? " 等" : ""}）`}</button>}
-        </>}
-        side={<Block title="本期解读">
-          {hasOutlook ? <div className="outlook-stack">
-            <OutlookColumn title="机会" tone="up" entries={outlook?.opportunities} />
-            <OutlookColumn title="威胁" tone="down" entries={outlook?.threats} />
-            <OutlookColumn title="值得追问" tone="verify" entries={outlook?.verify} />
-          </div> : !stale && detail.brief?.summary ? <p className="side-text">{detail.brief.summary}</p>
-            : <p className="muted small">{stale ? "资料或关系已更正，解读待更新。" : detail.brief ? "等待更新解读。" : "暂无。"}</p>}
-        </Block>} />
+            : <Empty title="暂无公司自身动态" />)}
+          {own.length>0 && <ItemList items={own.slice(0,limit)} onChange={update} grouped={false} watchLabels={monitor.data?.watch_labels} />}
+          {own.length>limit && <button className="btn btn-ghost btn-sm news-older" onClick={() => setLimit(n=>n+20)}>再看 {Math.min(20,own.length-limit)} 条（共 {own.length} 条）</button>}
+      </section>
 
       <Reference items={[
         { key: "financing", title: "融资记录（专业数据源）", body: financing ?? null },
         { key: "events", title: "事件进展", note: "融资、签约、交付等事件的最近有依据阶段", body: <EventStates detail={detail} /> },
         { key: "threads", title: "事件脉络", body: monitor.data ? <Storylines threads={monitor.data.threads} /> : null },
         { key: "watch", title: "按关注点筛选", note: watchpoints.length ? `${watchpoints.length} 个` : undefined,
-          body: monitor.data ? <WatchBar projectId={projectId} watchpoints={watchpoints} active={watch} onSelect={setWatch} onChanged={monitor.reload}
+          body: monitor.data ? <WatchBar projectId={projectId} watchpoints={watchpoints} active={watch} onSelect={value=>{setWatch(value);setLimit(12);}} onChanged={monitor.reload}
             suggestions={watchSuggestions(monitor.data.threads, detail.brief?.watch ?? [], watchpoints)} /> : null },
       ]} />
     </div>
@@ -414,17 +391,14 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
   const landscape = detail.landscape;
   const comp = landscape?.competition;
   const moves = landscape?.moves ?? [];
-  const [type, setType] = useState("全部");
-  const fallback = useAsync(() => (moves.length ? Promise.resolve(null) : api.feed({ project_id: detail.project.id, category: "competitor", limit: 60 })),
-    [detail.project.id, !!moves.length, detail.project.last_external_at]);
-  const reports = moves.length ? moves : (fallback.data ?? []).map((item) => {
+  const feed = useExternalNews(detail.project.id, monitoringRevision(detail), ['competitor']);
+  const news = feed.data?.items ?? [];
+  const reports = [...news.filter(i => i.status !== 'dismissed').map((item) => {
     const source = item.sources?.[0];
     return { id: item.id, title: source?.title || item.title, url: source?.url || item.url,
       date: (source?.published_at || item.published_at || item.collected_at).slice(0, 10),
       type: "其他", topic: "其他", importance: item.importance };
-  });
-  const types = useMemo(() => ["全部", ...new Set(reports.map((m) => m.topic || m.type))], [reports]);
-  const shownReports = focus(reports.filter((m) => type === "全部" || (m.topic || m.type) === type), 10);
+  }), ...unmatchedReports(news, moves)];
   // Defense in depth for an older API/cache. Legacy peer rows have no verified
   // relation contract; never show their threats or field assignments as facts.
   const candidates = competitionCandidates(detail);
@@ -511,9 +485,10 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
           <Figure label="产品对照" value={supported.length} unit="项" note="有依据的产品关系" />
         </>} />
       <LandscapeStatus detail={detail} landscape={landscape} what="竞争格局" />
-      <PositionJudgment view={deep.data ?? null} />
+      <PositionJudgment view={deep.data ?? null} compact />
       {race}
 
+      <details className="external-analysis-details" open={expandAll}><summary>竞对资料与跟踪管理 <span className="muted small">{peers.size} 家 · 定位、依据与最近报道</span></summary>
       <Block card title="竞对资料" label="竞争对手" note="一行一家；点开看定位、依据与最近报道">
         {cardViews.length > 0 && <ol className="rival-list">{cardViews.map((v) => {
           const { peer, selected, peerId, cells, peerFacts, latest, refs } = v;
@@ -562,6 +537,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
           <button className="btn btn-sm" disabled={saving || !companyName(peerName) || !detail.project.config_version}>添加</button>
         </form>
       </Block>
+      </details>
 
       <Reference items={[
         { open: expandAll, key: "compare", title: "竞对对照", note: supported.length ? `${supported.length} 项产品关系` : undefined,
@@ -569,20 +545,6 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
         { open: expandAll, key: "registry", title: "临床登记对照", body: detail.competition_research?.registry && detail.competition_research.registry.status !== 'not_applicable'
           && (registryRows(detail).length > 0 || detail.competition_research.registry.status === 'failed') ? <RegistryComparison detail={detail} /> : null },
         { open: expandAll, key: "financing", title: "同行融资", body: financing ?? null },
-        { open: expandAll, key: "reports", title: "相关报道", note: `${reports.length} 条`,
-          body: reports.length ? <>
-            <Seg id="move-type" value={type} onChange={setType} options={types.map((t) => ({ value: t, label: t }))} />
-            <ol className="moves competition-reports">
-              {shownReports.top.map((m) => (
-                <li key={m.id} className={`move move-${m.importance}`}>
-                  <time>{m.date || "—"}</time>
-                  <span className="cf-tag">{m.topic || m.type}</span>
-                  <div>{m.url ? <a href={m.url} target="_blank" rel="noreferrer noopener">{m.title}</a> : m.title}</div>
-                </li>
-              ))}
-            </ol>
-            <FoldedReports rest={shownReports.rest} duplicates={shownReports.duplicates} />
-          </> : fallback.loading ? <Skeleton lines={4} /> : null },
         { open: expandAll, key: "removed", title: "已移除", note: exclusions.length ? `${exclusions.length} 项` : undefined,
           body: exclusions.length ? <ul className="competition-candidates">{exclusions.map((r) => <li key={r.scope_key}><strong>{r.peer_name}</strong>
             <span className="muted small"> · {r.subject_product_name} / {r.peer_product_name}</span>
@@ -593,6 +555,8 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
           body: self && ownCells.length > 0 ? <div className="legacy-excerpts">{ownCells.map(dim => <div key={dim}><p className="muted small">摘录主题：{dim}</p>
             <p>{self.cells[dim].text} <EvidenceLinks refs={self.cells[dim].refs} /></p></div>)}</div> : null },
       ]} />
+      <ExternalNews key={detail.project.id} title="竞品新闻" items={news} legacy={moves} loading={feed.loading}
+        error={feed.error} failed={feed.data?.failed} onChange={feed.update} onRetry={feed.reload} />
     </div>
   );
 }
@@ -654,49 +618,27 @@ function IndustryFacts({ facts }: { facts: NonNullable<Landscape["industry"]>["f
   </div>)}</div>;
 }
 
-/** The few reports that bear on the company, in full; reposts merged and unrelated ones folded to one line each. */
-function IndustryReports({ items, loading }: { items: Item[]; loading: boolean }) {
-  if (loading && !items.length) return <Skeleton lines={4} />;
-  if (!items.length) return <p className="muted small">暂无相关报道。</p>;
-  const dated = items.map((i) => ({ ...i, date: (i.published_at || i.collected_at || "").slice(0, 10) }));
-  const { top, rest, duplicates } = focus(dated, 3);
-  return <>
-    <ItemList items={top} grouped={false} />
-    <FoldedReports rest={rest} duplicates={duplicates} />
-  </>;
-}
-
-/** One line per remaining report, behind a single toggle. */
-function FoldedReports({ rest, duplicates }: { rest: { id: string; title: string; url?: string; date?: string | null }[]; duplicates: number }) {
-  if (!rest.length && !duplicates) return null;
-  return <details className="folded-reports">
-    <summary>其余 {rest.length} 条{duplicates ? ` · 已合并 ${duplicates} 条重复报道` : ""}<span className="muted small">多为与本公司无直接关联或常规信息</span></summary>
-    <ol>{rest.map((m) => <li key={m.id}><time>{m.date || "—"}</time>
-      {m.url ? <a href={m.url} target="_blank" rel="noreferrer noopener">{m.title}</a> : <span>{m.title}</span>}</li>)}</ol>
-  </details>;
-}
-
-export function IndustryView({ detail }: { detail: ProjectDetail }) {
+export function IndustryView({ detail, compact = false, part = 'all' }: { detail: ProjectDetail; compact?: boolean; part?: 'all'|'industry'|'policy' }) {
   const landscape = detail.landscape;
   const ind = landscape?.industry;
-  const feed = useAsync(() => api.feed({ project_id: detail.project.id, days: 180, limit: 120 }), [detail.project.id, detail.project.last_external_at]);
-  const news = (feed.data ?? []).filter((i) => i.category === "industry" || i.category === "policy");
+  const categories: Category[] = part==='all'?['industry','policy']:[part];
+  const feed = useExternalNews(detail.project.id, monitoringRevision(detail), categories);
+  const news = feed.data?.items ?? [];
   const policyFacts = (ind?.facts ?? []).filter(f => /政策|监管|法规|医保|集采/.test(f.kind));
   const capitalFacts = (ind?.facts ?? []).filter(f => /融资|资本|并购|投资/.test(f.kind) && !policyFacts.includes(f));
   const marketFacts = (ind?.facts ?? []).filter(f => !policyFacts.includes(f) && !capitalFacts.includes(f));
   const anchor = `industry-${detail.project.id}`;
 
-  return (
-    <div className="landscape industry-view">
+  const analysis = <>
       <LandscapeStatus detail={detail} landscape={landscape} what="行业环境" />
-      {ind && <nav className="industry-nav" aria-label="行业章节"><a href={`#${anchor}-market`}>市场趋势</a>{ind && <a href={`#${anchor}-capital`}>资本动态</a>}<a href={`#${anchor}-policy`}>政策环境</a></nav>}
-      {ind ? (
+      {part==='all' && ind && <nav className="industry-nav" aria-label="行业章节"><a href={`#${anchor}-market`}>市场趋势</a>{ind && <a href={`#${anchor}-capital`}>资本动态</a>}<a href={`#${anchor}-policy`}>政策环境</a></nav>}
+      {part!=='policy' && (ind ? (
         <>
           <section className="card card-pad industry-market" id={`${anchor}-market`}>
             <div className="industry-section-head"><span className="industry-number">01</span><div><span className="eyebrow">{ind.industry || detail.project.industry || "所在赛道"}</span><h3>市场趋势</h3></div></div>
             <div className="industry-editorial">
               <div className="industry-abstract"><span className="muted small">{ind.overview ? "行业摘要 · AI 整理" : "资料摘录"}</span>
-                {ind.overview ? <><p>{ind.overview}</p><EvidenceLinks refs={ind.overview_refs} /></>
+                {ind.overview ? <><p>{ind.overview}</p><details className="chart-evidence"><summary>摘要依据</summary><EvidenceLinks refs={ind.overview_refs} /></details></>
                   : marketFacts.length ? <IndustryFacts facts={marketFacts} /> : <p>暂无市场趋势资料。</p>}
                 {!ind.overview && !!ind.overview_refs?.length && <details className="activity-method"><summary>摘要来源</summary><EvidenceLinks refs={ind.overview_refs} /></details>}
               </div><ActivityPanel ind={ind} />
@@ -709,7 +651,7 @@ export function IndustryView({ detail }: { detail: ProjectDetail }) {
                   <td><span className={`cf-tag ${m.basis === "forecast" ? "metric-forecast" : ""}`}>{m.basis === "forecast" ? "预测 / 估计" : "来源报告"}</span><EvidenceLinks refs={m.refs} /></td></tr>)}</tbody>
               </table></div>
             </div>}
-            {ind.overview && <IndustryFacts facts={marketFacts} />}
+            {ind.overview && marketFacts.length > 0 && <details className="chart-evidence"><summary>市场资料摘录 · {marketFacts.length} 条</summary><IndustryFacts facts={marketFacts} /></details>}
           </section>
           <section className="card card-pad industry-capital" id={`${anchor}-capital`}>
             <div className="industry-section-head"><span className="industry-number">02</span><div><span className="eyebrow">CAPITAL</span><h3>资本动态</h3></div></div>
@@ -720,22 +662,22 @@ export function IndustryView({ detail }: { detail: ProjectDetail }) {
             <IndustryFacts facts={capitalFacts} />
           </section>
         </>
-      ) : <p className="note industry-pending"><strong>行业摘要尚未整理。</strong>{detail.execution?.analysis === "stopped" ? "自动更新未运行，已有报道保留在下方。" : "已有报道保留在下方。"}</p>}
-      <section className="card card-pad industry-policy" id={`${anchor}-policy`}>
+      ) : <p className="note industry-pending"><strong>行业摘要尚未整理。</strong>{detail.execution?.analysis === "stopped" ? "自动更新未运行，已有报道保留在下方。" : "已有报道保留在下方。"}</p>)}
+      {part!=='industry' && <section className="card card-pad industry-policy" id={`${anchor}-policy`}>
         <div className="industry-section-head">{ind && <span className="industry-number">03</span>}<div>{ind && <span className="eyebrow">POLICY</span>}<h3>政策环境</h3></div></div>
         <IndustryFacts facts={policyFacts} />
-        <IndustryReports items={news.filter(i => i.category === "policy")} loading={feed.loading} />
-      </section>
-      {ind && (ind.implications.length > 0 || ind.heat_reason) && <details className="card card-pad industry-interpretation"><summary>AI 解读 <span className="muted small">本公司与行业的联系</span></summary>
+        {!policyFacts.length && <p className="muted small">尚无已整理的政策摘录，可先阅读下方新闻原文。</p>}
+      </section>}
+      {part!=='policy' && ind && (ind.implications.length > 0 || ind.heat_reason) && <details className="card card-pad industry-interpretation"><summary>AI 解读 <span className="muted small">本公司与行业的联系</span></summary>
         {ind.heat_reason && <p>{ind.heat_reason} <EvidenceLinks refs={ind.heat_refs} /></p>}
         <ul className="bullets">{ind.implications.map((x, i) => <li key={i}>{x.text} <EvidenceLinks refs={x.refs} /></li>)}</ul>
       </details>}
-      <section className="card card-pad industry-news" {...(!ind ? { id: `${anchor}-market` } : {})}>
-        <div className="card-head"><h3>赛道报道</h3><span className="muted small">近 180 天</span></div>
-        <IndustryReports items={news.filter(i => i.category === "industry")} loading={feed.loading} />
-      </section>
-    </div>
-  );
+    </>;
+  return <div className="landscape industry-view">
+    {compact ? <details className="external-analysis-details"><summary>{part==='policy'?'政策资料与分析依据':'行业资料与分析依据'} <span className="muted small">{part==='policy'?'已保存的政策摘录':part==='industry'?'市场指标与资本动态':'市场指标、资本动态与政策摘录'}</span></summary>{analysis}</details> : analysis}
+    <ExternalNews key={`${detail.project.id}-${part}`} title={part==='all'?'行业与政策新闻':part==='policy'?'政策新闻':'行业新闻'} categories={categories} items={news} loading={feed.loading}
+      error={feed.error} failed={feed.data?.failed} onChange={feed.update} onRetry={feed.reload} />
+  </div>;
 }
 
 /** System-picked watch points: the next step of open storylines and the brief's "接下来关注", minus ones already watched. */

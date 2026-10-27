@@ -1164,6 +1164,14 @@ class StudioStore:
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id, project_id, kind, status, created_at,input_version) "
                        "VALUES (?,?,?,'queued',?,?)", (job_id, project_id, kind, now(), input_version))
+            if kind in ('external', 'external_followup'):
+                # Persist intent with admission, not by guessing from a later
+                # empty input_version. Reusing an active job above never edits
+                # its frozen mode or turns a scheduled job into manual work.
+                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
+                           (job_id, 'collection_request_v1', json.dumps(dict(
+                               schema_version=1, mode='incremental' if automatic else 'refresh',
+                               origin='scheduler' if automatic else 'owner'))))
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
     def queue_external_followup(self, job: dict, data: dict) -> dict:

@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-test("监控范围 is the fourth section and reads as one relation table: why, object, question, latest, state; details on demand", () => {
+test("监控范围 separates runtime, relations and temporary research; details on demand", () => {
   const project = fs.readFileSync(new URL("../src/pages/Project.tsx", import.meta.url), "utf8");
   assert.match(project, /\{ id: "scope", label: "监控范围", pages: \[\{ id: "plan", label: "监控方案" \}\] \}/);
   assert.match(project, /tab === "plan" && <PlanView projectId=\{id\} company=/);
   const plan = fs.readFileSync(new URL("../src/plan.tsx", import.meta.url), "utf8");
-  for (const text of ["需要你看", "方案概要", "跟踪对象", "方向 / 纳入理由", "关系对象", "关注事项", "最新", "状态",
+  for (const text of ["需要你决定的范围变化", "长期关联", "临时研究", "方案概要", "跟踪对象", "方向 / 纳入理由", "关系对象", "关注事项", "最新", "状态",
     "出现什么就提醒", "何时关闭或降频", "方案变更", "撤销", "确认保留", "升为核心", "降频", "关闭", "已关闭"]) {
     assert.match(plan, new RegExp(text));
   }

@@ -115,7 +115,9 @@ class GuardedHTTPS:
         resolver: Callable[[str], list[str]] | None = None,
         connector: Callable[[str, str, str], tuple[int, dict[str, str], bytes]] | None = None,
         accept: str | None = None,
+        fatal_errors: tuple[type[Exception], ...] = (),
     ) -> None:
+        self.fatal_errors = fatal_errors
         self.resolver = resolver or _resolve_public
         self.connector = connector or (
             (lambda host, ip, path: _pinned_request(host, ip, path, accept=accept))
@@ -187,6 +189,9 @@ class GuardedHTTPS:
                     if index == len(candidates)-1:
                         raise
                 except FeedError:
+                    raise
+                except self.fatal_errors:
+                    # Job admission/lease errors must not become source failures.
                     raise
                 except Exception as exc:
                     # An arbitrary connector/read error may follow a sent GET.

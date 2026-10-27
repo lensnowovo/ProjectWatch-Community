@@ -438,7 +438,7 @@ def test_official_dsh_chooses_tools_and_saves_result(research, tmp_path, monkeyp
         (folder/'dsh_tools.mjs').write_bytes(original.read_bytes())
         monkeypatch.setattr(dsh_runtime, '__file__', str(folder/'dsh_runtime.py'))
         assert len(str(folder/'dsh_tools.mjs')) > 260
-    calls = []
+    calls, reviews = [], []
     operations = [
         ("pw_search", {"query": "Synthetic Optics 产品", "category": "company"}),
         ("pw_read", {"source_id": "S1"}),
@@ -449,12 +449,19 @@ def test_official_dsh_chooses_tools_and_saves_result(research, tmp_path, monkeyp
     ]
     def scripted(method, url, headers, raw, timeout):
         request = json.loads(raw)
+        if 'tools' not in request:
+            from test_studio_dsh_monitor import synthetic_review
+            payload = json.loads(request['messages'][-1]['content'])
+            assert payload['purpose'] == 'public_record_admission'
+            reviews.append(payload)
+            return Response(200, {}, json.dumps({'choices': [{'message': {'content': json.dumps(synthetic_review(payload))},
+                'finish_reason': 'stop'}]}).encode())
         index = len(calls)
         calls.append(request)
         assert index < len(operations), "scripted provider received unexpected extra model call"
         tool, arguments = operations[index]
         names = {t["function"]["name"] for t in request["tools"]}
-        assert names == {"pw_search", "pw_read", "pw_record", "pw_status", "pw_finish"}
+        assert names == {"pw_search", "pw_collect", "pw_read", "pw_record", "pw_status", "pw_finish"}
         message = {"role": "assistant", "content": None, "tool_calls": [{
             "id": f"synthetic-{index}", "type": "function",
             "function": {"name": tool, "arguments": json.dumps(arguments, ensure_ascii=False)}}]}
@@ -465,6 +472,7 @@ def test_official_dsh_chooses_tools_and_saves_result(research, tmp_path, monkeyp
                      Path(os.environ["PW_DSH_TEST_RUNTIME"]), tmp_path / "runtime", timeout=120)
     assert result["status"] == "partial"
     assert len(calls) == 4
-    assert research.execution.usage()["model"]["completed"] == 4
+    assert [r['phase'] for r in reviews] == ['fields']
+    assert research.execution.usage()["model"]["completed"] == 5
     assert research.execution.read_checkpoint("dsh_runtime")["initialized"]
     assert research.store.get_public_profile(research.project_id)["facts"]

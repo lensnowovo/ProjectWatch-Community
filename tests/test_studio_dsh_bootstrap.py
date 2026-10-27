@@ -30,7 +30,10 @@ def research(tmp_path):
     pipeline.store.upsert_project(project.id, {"legal_name": "Synthetic Optics"}, consent=True)
     pipeline.store.enqueue(project.id, "external")
     execution = JobExecution(pipeline.store, pipeline.store.claim())
-    return PublicBootstrap(pipeline, execution, Search(), Reader())
+    from test_studio_dsh_monitor import synthetic_review
+    result = PublicBootstrap(pipeline, execution, Search(), Reader())
+    result.record_reviewer = synthetic_review
+    return result
 
 
 def call(research, name, **args):
@@ -55,6 +58,8 @@ def test_source_linked_relation_is_not_a_question_and_replays_once(research):
     plan = research.pipeline.monitoring_plan
     [watch] = plan.items(research.project_id)
     assert watch["scope_kind"] == "relation" and watch["relation_target"] == "激光模组"
+    assert watch["status"] == "trial" and watch["cadence"] == "medium"
+    assert watch["id"] in {w['id'] for w in plan.due(research.project_id)}
     assert watch["exit_rule"] == "" and not plan.explorations.managed(watch)
     assert plan.view(research.project_id)["changes"][0]["evidence"][0]["quote"]
     assert research.pipeline.questions.view(research.project_id) == []
@@ -140,6 +145,7 @@ def test_same_source_multiple_categories_and_later_runs_keep_one_event(research)
     search.web_search = lambda *a, **k: [{**Search().web_search("")[0],
         "url": "https://example.com/company#new-section", "published_at": "2020-01-01"}]
     newer = PublicBootstrap(p, JobExecution(p.store, p.store.claim()), search, Reader())
+    newer.record_reviewer = research.record_reviewer
     call(newer, "pw_search", query="synthetic", category="policy")
     record(newer, kind="policy")
     call(newer, "pw_finish", gaps={})
@@ -257,13 +263,16 @@ def test_pause_and_stale_lease_reject_writes(research):
 
 
 def test_existing_data_not_replaced(research):
-    research.store.put_public_profile(research.project_id, {"facts": [{"kind": "business",
-        "label": "Existing", "text": "Existing public fact", "refs": []}]})
+    legacy = {"kind": "business", "label": "Existing", "text": "Existing public fact", "refs": []}
+    research.store.put_public_profile(research.project_id, {"facts": [legacy]})
     call(research, "pw_search", query="Synthetic Optics", category="company")
     record(research)
     call(research, "pw_finish", gaps={})
-    facts = research.store.get_public_profile(research.project_id)["facts"]
-    assert len(facts) == 2 and facts[0]["label"] == "Existing"
+    profile = research.store.get_public_profile(research.project_id)
+    # Unversioned history survives verbatim, without claiming it is current evidence.
+    assert profile['historical_facts'] == [legacy]
+    assert len(profile['facts']) == 1 and profile['facts'][0]['refs'][0]['evidence_version_id']
+    assert profile['dependency']['status'] == 'current'
     assert json.loads(research.store.get_state("dsh-bootstrap:" + research.project_id))["status"] == "partial"
 
 
@@ -397,3 +406,101 @@ def test_same_news_source_retains_both_findings(research):
     assert "激光模组" in items[0]["summary"] and "意向订单" in items[0]["summary"]
     assert len(items[0]["extra"]["dsh_claims"]) == 2
     assert items[0]["body_status"] == "search_summary"
+
+
+def capacity_records(research, count):
+    call(research, "pw_search", query="Synthetic Optics", category="company")
+    names = [f"合成产品{chr(0x7532 + i)}" for i in range(count)]
+    quote = "Synthetic Optics 的产品包括" + "、".join(names) + "。"
+    research.reader.read = lambda _url: {"status": "article_body", "text": quote}
+    call(research, "pw_read", source_id="S1")
+    for name in names:
+        call(research, "pw_record", kind="relation", label=name, text=quote, source_id="S1", quote=quote,
+             relation_type="product", relation_target=name, axis="asset", query=name, reason="公司产品")
+    return names
+
+
+def test_scope_capacity_preserves_records_and_partial_finish(research):
+    from project_watch.studio.monitoring_plan import MAX_ITEMS
+    names = capacity_records(research, MAX_ITEMS + 3)
+    quote = research.state["records"][0]["text"]
+    for kind in ("product", "company"):
+        call(research, "pw_record", kind=kind, label=names[0], source_id="S1", quote=quote, text=quote)
+    before = list(research.state["records"])
+    result = call(research, "pw_finish", gaps={})
+    assert result["status"] == "partial"
+    assert result["monitoring_scope"]["admitted_count"] == MAX_ITEMS
+    assert result["monitoring_scope"]["deferred_count"] == 3
+    assert all(d["record_key"] in {r["key"] for r in before}
+               and d["reason"] == "capacity_limit" for d in result["monitoring_scope"]["deferred"])
+    assert research.state["records"] == before
+    assert len(research.pipeline.monitoring_plan.items(research.project_id)) == MAX_ITEMS
+    assert research.store.get_public_profile(research.project_id)["facts"]
+    assert research.store.list_events(project_id=research.project_id)
+    assert call(research, "pw_finish", gaps={}) == result
+    assert research.execution.read_checkpoint("dsh_coverage")["partial"] is True
+
+
+def test_scope_at_capacity_preserves_human_and_retired_items(research):
+    from project_watch.studio.monitoring_plan import MAX_ITEMS
+    names = capacity_records(research, 2)
+    plan = research.pipeline.monitoring_plan
+    common = dict(axis="asset", cadence="medium", tier="background", reason="人工设置")
+    for i in range(MAX_ITEMS):
+        plan.add(research.project_id, {**common, "text": f"人工方向{i}"}, actor="human", origin="human")
+    before = plan.items(research.project_id)
+    result = call(research, "pw_finish", gaps={})
+    assert result["monitoring_scope"]["admitted_count"] == 0
+    assert result["monitoring_scope"]["deferred_count"] == 2
+    assert plan.items(research.project_id) == before
+    # A retired relation with the same target stays closed on a fresh projection.
+    plan.update(before[0]["id"], {"status": "retired"}, actor="human")
+    relation = plan.add(research.project_id, {**common, "text": names[0], "scope_kind": "relation",
+        "relation_type": "product", "relation_target": names[0], "queries": [names[0]],
+        "sources": "https://example.com/company"}, actor="human", origin="human")
+    plan.update(relation["id"], {"status": "retired"}, actor="human")
+    projected = research.project_monitoring_scope(research.state["records"])
+    assert projected["admitted_count"] == 1
+    assert next(w for w in plan.items(research.project_id) if w["id"] == relation["id"])["status"] == "retired"
+
+
+def test_scope_section_capacity_and_duplicate_candidates(research):
+    from project_watch.studio.monitoring_plan import MAX_PER_SECTION
+    capacity_records(research, 1)
+    row = research.state["records"][0]
+    scopes = [{**row, "kind": "watch", "key": str(i), "label": f"合成研究问题{i}",
+               "exit_rule": "取得公开结果"} for i in range(MAX_PER_SECTION + 2)]
+    for scope in scopes:
+        scope.pop("relation_target", None)
+        scope.pop("relation_type", None)
+    scopes += [scopes[-1]]
+    result = research.project_monitoring_scope(scopes)
+    assert result["admitted_count"] == MAX_PER_SECTION
+    assert result["deferred_count"] == 2
+    assert len(research.pipeline.monitoring_plan.items(research.project_id)) == MAX_PER_SECTION
+
+
+def test_scope_projection_does_not_swallow_unrelated_validation(research, monkeypatch):
+    capacity_records(research, 1)
+    def invalid(*args, **kwargs):
+        raise ValueError("unrelated validation")
+    monkeypatch.setattr(type(research.pipeline.monitoring_plan), "add", invalid)
+    with pytest.raises(ValueError, match="unrelated validation"):
+        call(research, "pw_finish", gaps={})
+    assert research.state["finished"] is None
+
+
+def test_scope_capacity_rechecked_after_another_writer_allocates(research, monkeypatch):
+    from project_watch.studio.monitoring_plan import MAX_ITEMS
+    capacity_records(research, 1)
+    plan = research.pipeline.monitoring_plan
+    original = type(plan).add
+    def raced(self, pid, fields, **kwargs):
+        for i in range(MAX_ITEMS):
+            original(self, pid, {"text": f"并发人工方向{i}", "axis": "asset"}, actor="human", origin="human")
+        return original(self, pid, fields, **kwargs)
+    monkeypatch.setattr(type(plan), "add", raced)
+    result = call(research, "pw_finish", gaps={})
+    assert result["status"] == "partial"
+    assert result["monitoring_scope"]["deferred_count"] == 1
+    assert len(plan.items(research.project_id)) == MAX_ITEMS

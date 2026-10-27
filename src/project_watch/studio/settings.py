@@ -7,6 +7,7 @@ in Git or the browser. The API returns masked values only.
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import tempfile
@@ -47,6 +48,9 @@ MODEL_PRESETS = (
      "hint": "专用端点；能否抵扣套餐以智谱费用明细为准。官方要求自建应用使用标准 API。"},
     {"id": "kimi", "label": "Kimi (Moonshot)", "protocol": "openai",
      "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2-turbo-preview"},
+    {"id": "gemini", "label": "Gemini", "protocol": "openai",
+     "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-3.8-flash",
+     "hint": "标准 API · 与 Gemini CLI / Code Assist 订阅分开；模型可用性与费用以账号为准，尚未做真实联网验收。"},
     {"id": "qwen", "label": "通义千问", "protocol": "openai",
      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen-plus"},
     {"id": "openai", "label": "OpenAI", "protocol": "openai",
@@ -135,12 +139,25 @@ class NotifyConfig:
 class StudioSettings:
     preferred_mode: str = "api"
     model: ModelConfig = field(default_factory=ModelConfig)
+    model_profiles: dict[str, ModelConfig] = field(default_factory=dict)
+    active_model_profile: str = 'default'
     search: SearchConfig = field(default_factory=SearchConfig)
     registry: RegistryConfig = field(default_factory=RegistryConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     commercial: CommercialConfig = field(default_factory=CommercialConfig)
     proxy_url: str = ""
     refresh_hours: int = 24
+    collection_overlap_days: int = 7
+    collection_baseline_days: int = 30
+
+
+def research_binding_settings(settings: StudioSettings) -> dict:
+    """Keep default-only additions compatible with existing DSH checkpoints."""
+    value = asdict(settings)
+    for name, default in (("collection_overlap_days", 7), ("collection_baseline_days", 30)):
+        if value[name] == default:
+            value.pop(name)
+    return value
 
 
 def mask(secret: str) -> str:
@@ -202,6 +219,20 @@ def _validate_structure(raw: dict) -> None:
     if not isinstance(raw, dict):
         raise ValueError("配置应为对象")
     defaults = StudioSettings()
+    if 'model_profiles' in raw:
+        profiles = raw['model_profiles']
+        if not isinstance(profiles, dict) or len(profiles) > 20:
+            raise ValueError('最多保存20个模型配置')
+        for key, value in profiles.items():
+            if not isinstance(key, str) or not key or len(key) > 80 or not key.isascii() or not all(c.isalnum() or c in '-_' for c in key):
+                raise ValueError('模型配置标识无效')
+            if not isinstance(value, dict):
+                raise ValueError('模型配置应为对象')
+            _validate_structure({'model': value})
+    if 'active_model_profile' in raw:
+        key = raw['active_model_profile']
+        if not isinstance(key, str) or not key or len(key) > 80 or not key.isascii() or not all(c.isalnum() or c in '-_' for c in key):
+            raise ValueError('模型配置标识无效')
     for section in ("model", "search", "registry", "notify", "commercial"):
         value = raw.get(section)
         if value is None:
@@ -229,6 +260,9 @@ def _validate_structure(raw: dict) -> None:
             raise ValueError("配置字段类型不正确")
     if raw.get('preferred_mode', 'api') not in ('api', 'agent'):
         raise ValueError('不支持的运行模式')
+    for name, minimum, maximum in (("collection_overlap_days", 0, 90), ("collection_baseline_days", 1, 365)):
+        if name in raw and (type(raw[name]) is not int or not minimum <= raw[name] <= maximum):
+            raise ValueError('增量回看天数应为0至90的整数，完整范围回查间隔应为1至365的整数')
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -273,16 +307,23 @@ class SettingsStore:
             names = {f.name for f in fields(cls)}
             return cls(**{k: v for k, v in (data or {}).items() if k in names})
 
-        return StudioSettings(
+        settings = StudioSettings(
             preferred_mode=raw.get('preferred_mode', 'api'),
             model=pick(ModelConfig, raw.get("model")),
+            model_profiles={k: pick(ModelConfig, v) for k, v in raw.get('model_profiles', {}).items()},
+            active_model_profile=raw.get('active_model_profile', 'default'),
             search=pick(SearchConfig, raw.get("search")),
             registry=pick(RegistryConfig, raw.get("registry")),
             notify=pick(NotifyConfig, raw.get("notify")),
             commercial=pick(CommercialConfig, raw.get("commercial")),
             proxy_url=str(raw.get("proxy_url", "")),
             refresh_hours=int(raw.get("refresh_hours", 24) or 24),
+            collection_overlap_days=raw.get("collection_overlap_days", 7),
+            collection_baseline_days=raw.get("collection_baseline_days", 30),
         )
+        if settings.model.base_url:
+            settings.model_profiles[settings.active_model_profile] = copy.deepcopy(settings.model)
+        return settings
 
     def save(self, settings: StudioSettings) -> None:
         with self._lock:
@@ -312,6 +353,21 @@ class SettingsStore:
         with self._lock:
             _validate_structure(patch)
             current = self._load()
+            if 'model_profiles' in patch:
+                raise ValueError('请通过当前模型配置保存，不直接替换配置列表')
+            selected = patch.get('active_model_profile', current.active_model_profile)
+            if selected != current.active_model_profile:
+                if selected == 'new':
+                    import uuid
+                    selected = uuid.uuid4().hex
+                    if len(current.model_profiles) >= 20:
+                        raise ValueError('最多保存20个模型配置')
+                    current.model = ModelConfig()
+                elif selected in current.model_profiles:
+                    current.model = copy.deepcopy(current.model_profiles[selected])
+                else:
+                    raise ValueError('模型配置不存在')
+                current.active_model_profile = selected
             if 'preferred_mode' in patch:
                 current.preferred_mode = patch['preferred_mode']
             model = patch.get("model")
@@ -337,6 +393,8 @@ class SettingsStore:
                     current.model.api_key = _clean_secret(model["api_key"])
                 elif previous_endpoint != (current.model.protocol, current.model.base_url.rstrip("/")):
                     current.model.api_key = ""
+            if model is not None or 'active_model_profile' in patch:
+                current.model_profiles[current.active_model_profile] = copy.deepcopy(current.model)
             search = patch.get("search")
             if search is not None:
                 if "providers" in search or "keys" in search:
@@ -438,6 +496,9 @@ class SettingsStore:
                 if hours not in (6, 12, 24, 72, 168):
                     raise ValueError("更新频率只支持 6/12/24/72/168 小时")
                 current.refresh_hours = hours
+            for name in ("collection_overlap_days", "collection_baseline_days"):
+                if name in patch:
+                    setattr(current, name, patch[name])
             self._save(current)
             return current
 
@@ -454,6 +515,9 @@ class SettingsStore:
     @staticmethod
     def public_view(settings: StudioSettings) -> dict:
         return {
+            "active_model_profile": settings.active_model_profile,
+            "model_profiles": [{"id": key, **asdict(value), "api_key": mask(value.api_key), "ready": value.ready}
+                               for key, value in settings.model_profiles.items()],
             "model": {
                 "protocol": settings.model.protocol,
                 "base_url": settings.model.base_url,
@@ -493,5 +557,7 @@ class SettingsStore:
             "preferred_mode": settings.preferred_mode,
             "proxy_url": settings.proxy_url,
             "refresh_hours": settings.refresh_hours,
+            "collection_overlap_days": settings.collection_overlap_days,
+            "collection_baseline_days": settings.collection_baseline_days,
             "presets": list(MODEL_PRESETS),
         }

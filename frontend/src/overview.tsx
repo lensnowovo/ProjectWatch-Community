@@ -16,7 +16,7 @@ import { DossierRail, type DossierMotionState } from './DossierMotion';
 import { businessIntro, stageLabel } from './companyDossier';
 import { CATEGORY_LABEL, Drawer, ErrorNote, IMPORTANCE_LABEL, RefChips, locatorLabel, TONE_LABEL, formatAmount, relTime, useAsync, useOpenSource } from "./ui";
 
-export type Tab = "overview" | "brief" | "plan" | "ops" | "business" | "fin" | "risks" | "numbers" | "external" | "trials" | "papers" | "patents" | "competition" | "industry" | "documents";
+export type Tab = "overview" | "brief" | "plan" | "ops" | "business" | "fin" | "risks" | "numbers" | "external" | "trials" | "papers" | "patents" | "competition" | "chain" | "industry" | "documents";
 
 /** Categories that are about the company itself; competitors, industry and policy have their own tabs. */
 export const OWN_CATEGORIES = new Set(["company", "trial", "paper", "patent"]);
@@ -494,7 +494,7 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
         </>} />
 
       <Reference items={[
-        { key: "evidence", title: "AI 判断的依据与缺口", note: record ? `引用 ${record.analysis.cited.length} 条 · 缺 ${record.analysis.gaps.length} 项` : undefined,
+        { key: "evidence", title: "判断依据", note: record ? `引用 ${record.analysis.cited.length} 条` : undefined,
           body: record ? <EvidenceGaps view={deep.data ?? null} /> : null },
         { key: "questions", title: "跟踪问题与你的判断", note: "问题本身在监控方案里维护",
           body: <QuestionsCard projectId={project.id} revision={`${project.last_external_at ?? ""}|${brief?.updated_at ?? ""}`} /> },

@@ -205,19 +205,21 @@ test("five sections (8945) group the original pages; old ?tab= links still land 
   const { CompanyOverview } = load("../src/overview.tsx");
   const html = render(CompanyOverview, { detail: { ...detail, profile: { one_liner: "合成公司做什么", sections: [], highlights: [], milestones: [] },
     brief: { headline: "合成判断标题", tone: "watch", summary: "合成判断", updated_at: "2026-10-01" } }, onReload() {} });
-  assert.doesNotMatch(html, /合成公司做什么/); // introduction belongs to the shared company header
+  assert.match(html, /id="dossier-intro" aria-labelledby="cd-intro-title"/);
+  assert.equal((html.match(/合成公司做什么/g) || []).length, 1); // Fixed company template shows the introduction once.
   assert.match(html, /公司档案/); assert.match(html, /业务与产品/);
   assert.doesNotMatch(html, /合成判断标题|本期变化|跟踪问题/);
 });
 
-test("overview keeps the full company summary in an expandable section", () => {
+test("overview keeps the full company summary in its fixed reading chapter", () => {
   const { CompanyOverview } = load("../src/overview.tsx");
   const overview = (summary) => render(CompanyOverview, { detail: { ...detail,
     profile: { one_liner: "合成公司介绍", summary, sections: [], highlights: [], milestones: [] } }, onReload() {} });
   const short = overview("合成摘要".repeat(25));
   assert.doesNotMatch(short, /class="clamp-3"/);
   const long = overview("合成摘要".repeat(40));
-  assert.match(long, /<details class="cd-abstract"><summary>完整公司介绍<\/summary>/);
+  assert.match(long, /<p class="cd-introduction">/);
+  assert.doesNotMatch(long, /class="clamp-3"|<details class="cd-abstract"/);
   assert.ok(long.includes("合成摘要".repeat(40)));
 });
 
@@ -241,7 +243,8 @@ test("工商档案 folds below the dossier and distinguishes registration from h
 
 test("外部信息 is navigated by its count strip: one cell per page, research pages read structured fields", () => {
   const project = readFileSync(new URL("../src/pages/Project.tsx", import.meta.url), "utf8");
-  assert.match(project, /\{ page: "industry", label: "行业与政策", cats: \["industry", "policy"\], always: true \}/);
+  assert.match(project, /\{ page: "industry", label: "宏观环境", cats: \["industry", "policy"\], always: true \}/);
+  for (const label of ['行业监控', '政策监控', '技术监控']) assert.ok(project.includes(label));
   // 内部信息 and 外部信息 use the same count strip, so their sub-navigation looks and works alike
   assert.match(project, /section\.id !== "external" && section\.id !== "internal" && <nav className="subtabs"/);
   assert.match(project, /<PageStrip label="内部信息分区"/);

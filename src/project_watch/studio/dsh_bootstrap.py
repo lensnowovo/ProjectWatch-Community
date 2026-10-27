@@ -7,15 +7,14 @@ import json
 import re
 import threading
 from contextlib import closing
-from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from urllib.parse import urldefrag, urlsplit
 
-from project_watch.studio import events
+from project_watch.studio import collection_dsh, dsh_closeout, events
 from project_watch.studio.http import HttpError
 from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePart
-from project_watch.studio.monitoring_plan import RELATION_TYPES, _norm
+from project_watch.studio.monitoring_plan import RELATION_TYPES, PlanCapacityError, _norm
 from project_watch.studio.peer_names import company_core, company_name
 from project_watch.studio.public_profile import (
     _CALENDAR,
@@ -29,10 +28,11 @@ from project_watch.studio.public_profile import (
     safe_url,
 )
 from project_watch.studio.public_reading import read_page
+from project_watch.studio.settings import research_binding_settings
 
 CATEGORIES = ("company", "competitor", "industry", "policy")
 COVERAGE = ("company", "products", "people", "competitor", "industry", "policy")
-TOOLS = ("pw_search", "pw_read", "pw_record", "pw_status", "pw_finish")
+TOOLS = ("pw_search", "pw_collect", "pw_read", "pw_record", "pw_status", "pw_finish")
 HALTS = {"request_outcome_unknown", "request_budget", "provider_backoff", "project_paused"}
 
 PROMPT = """你是 ProjectWatch 的公开信息研究 Agent，研究用户确认的公司主体。
@@ -335,6 +335,7 @@ class PublicBootstrap:
     prompt = PROMPT
     task = "完成公开项目档案与监控范围补全。"
     bootstrap_projection = True
+    topic_projection = False
 
     def __init__(self, pipeline, execution, collectors, reader):
         self.pipeline, self.execution = pipeline, execution
@@ -343,14 +344,28 @@ class PublicBootstrap:
         self.collectors, self.reader = collectors, reader
         self.recovery_admission = False
         self.lock = threading.RLock()
-        self.state = execution.read_checkpoint("dsh_state") or {
+        saved_state = execution.read_checkpoint("dsh_state")
+        self.state = saved_state or {
             "sources": [], "records": [], "searches": [], "errors": [], "events": [], "finished": None}
         self.binding = digest({"entity": self.project["legal_name"],
-                               "settings": asdict(pipeline.settings_store.load())})
+                               "settings": research_binding_settings(pipeline.settings_store.load())})
         saved = execution.read_checkpoint("dsh_binding")
         if saved and saved != self.binding:
             raise ValueError("dsh_input_changed")
         execution.checkpoint("dsh_binding", self.binding)
+        # Preparing the supplied context is reading. Never infer a resumed job's
+        # phase from its kind or replay successful tools to reconstruct it.
+        if saved_state is None and execution.read_checkpoint("dsh_runtime_phase") is None:
+            execution.checkpoint("dsh_runtime_phase", {"phase": "read"})
+
+    def report_tool_phase(self, name):
+        # Business phase is independent of model/transport activity. A model
+        # response may choose another phase; switch only when its tool starts.
+        phases = {"pw_search": "collect", "pw_collect": "collect", "pw_read": "read", "pw_record": "read",
+                  "pw_finish": "read"}
+        phases.update(getattr(self, "tool_phases", {}))
+        if name in phases:
+            self.execution.checkpoint("dsh_runtime_phase", {"phase": phases[name]})
 
     def guard(self):
         with closing(self.store._connect()) as db:
@@ -359,7 +374,7 @@ class PublicBootstrap:
         if not current or current["status"] != "active":
             raise HttpError("project_paused")
         if digest({"entity": current["legal_name"],
-                   "settings": asdict(self.pipeline.settings_store.load())}) != self.binding:
+                   "settings": research_binding_settings(self.pipeline.settings_store.load())}) != self.binding:
             raise ValueError("dsh_input_changed")
         if self.recovery_admission:
             from project_watch.studio.recovery import dsh_model_continuation
@@ -388,10 +403,12 @@ class PublicBootstrap:
                 if name in ("pw_status", "pw_finish"):
                     return self.state["finished"]
                 raise ValueError("research already finished")
-            labels = {"pw_search": "DSH 检索公开信息", "pw_read": "DSH 阅读来源",
+            dsh_closeout.guard_tool(self, name)
+            labels = {"pw_search": "DSH 检索公开信息", "pw_collect": "DSH 查询专业来源", "pw_read": "DSH 阅读来源",
                       "pw_record": "DSH 整理证据", "pw_status": "DSH 检查覆盖",
                       "pw_finish": "DSH 保存公开档案"}
             labels.update(getattr(self, "labels", {}))
+            self.report_tool_phase(name)
             self.store.set_stage(self.execution.job["id"], labels[name])
             try:
                 result = getattr(self, name)(args)
@@ -408,6 +425,10 @@ class PublicBootstrap:
             return result
 
     def source(self, sid):
+        if sid.startswith('C'):
+            return collection_dsh.source(self, sid)
+        if sid.startswith('P'):
+            return collection_dsh.page_source(self, sid)
         if sid not in self.state["sources"]:
             raise ValueError("unknown source_id; search first")
         return self.execution.read_checkpoint("dsh_source_" + sid)
@@ -430,6 +451,8 @@ class PublicBootstrap:
         category = text_arg(args, "category", 20)
         if category not in CATEGORIES:
             raise ValueError("invalid category")
+        if collection_dsh.current_round(self) is not None:
+            return collection_dsh.search(self, query, category)
         hits = self.collectors.web_search(query, count=10)
         existing = {urldefrag(self.source(sid)["url"])[0]: sid for sid in self.state["sources"]}
         results = []
@@ -473,6 +496,11 @@ class PublicBootstrap:
         self.state["searches"].append({"query": query, "category": category, "results": len(results)})
         return {"sources": results, "untrusted_data": True}
 
+    def pw_collect(self, args):
+        return collection_dsh.collect_specialist(self, adapter=text_arg(args, 'adapter', 40),
+            query=text_arg(args, 'query', 300), source_id=text_arg(args, 'source_id', 20),
+            quote=text_arg(args, 'quote', 1500), reason=text_arg(args, 'reason', 600))
+
     def cache_body(self, source, content):
         """Retain all returned text outside the model context and bounded checkpoints."""
         chunks = [content[i:i + 30000] for i in range(0, len(content), 30000)]
@@ -494,13 +522,26 @@ class PublicBootstrap:
         # Search/Fetch extraction does not certify completeness of the origin.
         source.update(excerpt=excerpt, read_scope="partial", read_status="partial_body",
                       read_attempted=True, window_offset=offset)
+        if source.get('collection_parent'):
+            source['source_type'] = 'public_page'
         source["evidence_version_id"] = self.evidence(source, excerpt, "partial")
         self.execution.checkpoint("dsh_source_" + source["id"], source)
         return {**source, "next_offset": offset + len(excerpt) if offset + len(excerpt) < source["body_chars"] else None,
                 "untrusted_data": True}
 
     def pw_read(self, args):
-        source = self.source(text_arg(args, "source_id", 20))
+        sid = text_arg(args, 'source_id', 20)
+        view = args.get('view', 'record')
+        if view not in ('record', 'page'):
+            raise ValueError('invalid source view')
+        if sid.startswith('C'):
+            if view == 'record':
+                return collection_dsh.source(self, sid, offset=args.get('offset', 0))
+            source = collection_dsh.page_source(self, sid)
+        else:
+            source = self.source(sid)
+        if not public_url(source['url']):
+            raise ValueError('invalid public source URL')
         if source.get("body_chunks"):
             return self.body_window(source, args)
         if source.get("read_attempted"):
@@ -517,10 +558,15 @@ class PublicBootstrap:
             if fetched and fetched.get("text"):
                 self.cache_body(source, fetched["text"])
                 return self.body_window(source, args)
+        if source.get('collection_parent'):
+            from project_watch.studio.collection_host import guard_scope
+            guard_scope(self)
         result = read_page(self.execution, self.reader, source["url"])
         if result["status"] in ("read", "article_body", "partial_body") and result.get("text"):
             scope = "partial" if result["status"] == "partial_body" or len(result["text"]) >= 24000 else "full"
             source.update(excerpt=result["text"], read_scope=scope)
+            if source.get('collection_parent'):
+                source['source_type'] = 'public_page'
             source["evidence_version_id"] = self.evidence(source, source["excerpt"], scope)
             if scope == "partial":
                 self.state["errors"].append({"tool": "pw_read", "code": "partial_body"})
@@ -578,6 +624,8 @@ class PublicBootstrap:
                                if span["start"] <= offset and offset + len(quote) <= span["start"] + span["length"])
         offset -= span["start"]
         ref = {k: source[k] for k in ("url", "title", "source", "published_at", "read_scope", "evidence_version_id")}
+        if source.get('source_type'):
+            ref['source_type'] = source['source_type']
         ref.update(quote=quote, part_index=part_index, start=offset, end=offset + len(quote))
         key = digest([kind, source["url"], label])
         record = {"key": key, "kind": kind, "label": label, "text": text, "date": "",
@@ -596,16 +644,113 @@ class PublicBootstrap:
                   for kind in sorted(KINDS | set(CATEGORIES) | {"peer", "watch", "relation"})}
         return {"sources": len(self.state["sources"]), "records": counts,
                 "searches": len(self.state["searches"]), "source_errors": self.state["errors"],
-                "required_coverage": list(COVERAGE)}
+                "collection": collection_dsh.coverage(self),
+                "collected_sources": collection_dsh.catalog(self, offset=args.get('collection_offset', 0)),
+                "required_coverage": list(COVERAGE), "budget": dsh_closeout.budget(self)}
+
+    def partition_public_facts(self, facts):
+        """Separate current exact public references from retained historical facts.
+
+        Validate every reference in one read snapshot. The caller must still use
+        put_compiled_profile's atomic generation/version fence when persisting.
+        """
+        from project_watch.studio.dependencies import semantic
+        from project_watch.studio.monitoring_contracts import LocatedRef
+
+        current, historical = {}, []
+        with closing(self.store._connect()) as db:
+            db.execute("BEGIN")
+            for fact in facts:
+                refs = fact.get("refs") or []
+                valid = bool(refs)
+                for ref in refs:
+                    row = db.execute("SELECT v.record,n.record,l.status,hl.status FROM studio_evidence_versions v "
+                        "JOIN studio_evidence_heads h ON h.project_id=v.project_id AND h.source_key=v.source_key "
+                        "JOIN studio_evidence_versions n ON n.id=h.evidence_version_id AND n.project_id=v.project_id "
+                        "LEFT JOIN studio_evidence_lifecycle l ON l.project_id=v.project_id AND l.evidence_version_id=v.id "
+                        "LEFT JOIN studio_evidence_lifecycle hl ON hl.project_id=n.project_id AND hl.evidence_version_id=n.id "
+                        "WHERE v.project_id=? AND v.id=? AND v.visibility='public' AND n.visibility='public'",
+                        (self.project_id, ref.get("evidence_version_id"))).fetchone()
+                    if not row or "withdrawn" in (row[2], row[3]) or not ref.get("url"):
+                        valid = False
+                        break
+                    version, head = json.loads(row[0]), json.loads(row[1])
+                    if semantic(version) != semantic(head):
+                        valid = False
+                        break
+                    try:
+                        located = LocatedRef.model_validate({k: ref[k] for k in LocatedRef.model_fields})
+                        text = version["parts"][located.part_index]["text"]
+                        if located.end > len(text) or text[located.start:located.end] != located.quote:
+                            valid = False
+                            break
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        valid = False
+                        break
+                if valid:
+                    # A refreshed valid reference may replace the same fact text.
+                    current[(fact.get("kind"), fact.get("label"), fact.get("text"))] = fact
+                elif fact not in historical:
+                    historical.append(fact)
+        return list(current.values()), historical
+
+    def project_monitoring_scope(self, scope_records):
+        """Keep research durable when the standing scope has no available capacity."""
+        admitted = []
+        deferred = {}
+        existing = {w["text"] for w in self.pipeline.monitoring_plan.items(self.project_id)}
+        for row in scope_records:
+            try:
+                if row["kind"] == "watch" and row["label"] not in existing:
+                    # Older checkpoints remain readable, but cannot silently create
+                    # another unbounded topic or invent its completion condition.
+                    if not row.get("exit_rule", "").strip():
+                        continue
+                    self.pipeline.monitoring_plan.add(self.project_id, {
+                        "text": row["label"], "axis": row["axis"], "queries": [row["query"]],
+                        "reason": row["reason"], "cadence": "low", "tier": "topic", "exit_rule": row["exit_rule"]},
+                        actor="system", origin="system", reason=row["reason"], visibility="public",
+                        evidence=[{"url": ref["url"], "quote": ref["quote"]} for ref in row["refs"]])
+                    existing.add(row["label"])
+                    admitted.append(row["key"])
+                elif row["kind"] == "relation":
+                    # Replays and differently worded labels retain one standing target.
+                    plan = self.pipeline.monitoring_plan
+                    if any(w.get("scope_kind") == "relation"
+                           and w["relation_type"] == row["relation_type"]
+                           and _norm(w["relation_target"]) == _norm(row["relation_target"])
+                           for w in plan.items(self.project_id)):
+                        continue
+                    plan.add(self.project_id, {
+                        "text": row["label"], "scope_kind": "relation",
+                        "relation_type": row["relation_type"], "relation_target": row["relation_target"],
+                        "relation_aliases": row.get("relation_aliases", []),
+                        "axis": row["axis"], "queries": [row["query"]], "reason": row["reason"],
+                        "sources": "\n".join(dict.fromkeys(ref["url"] for ref in row["refs"])),
+                        "cadence": "medium", "tier": "background"},
+                        actor="system", origin="system", reason=row["reason"], visibility="public",
+                        evidence=row["refs"])
+                    admitted.append(row["key"])
+            except PlanCapacityError:
+                key = (row["kind"], row.get("relation_type", ""),
+                       _norm(row.get("relation_target") or row["label"]))
+                deferred.setdefault(key, {"record_key": row["key"], "reason": "capacity_limit"})
+        return {"admitted_count": len(admitted), "deferred_count": len(deferred),
+                "deferred": list(deferred.values())}
 
     def pw_finish(self, args):
-        if not self.state["searches"] or not self.state["records"]:
+        from project_watch.studio.dsh_record_review import admit
+
+        collected = collection_dsh.coverage(self)
+        if collected is None and (not self.state["searches"] or not self.state["records"]):
             raise ValueError("no evidence-backed results; cannot report completed")
         gaps = args.get("gaps", {})
         if not isinstance(gaps, dict) or any(k not in COVERAGE or not isinstance(v, str) or len(v) > 500
                                              for k, v in gaps.items()):
             raise ValueError("invalid coverage gaps")
-        records = self.state["records"]
+        old = self.store.get_public_profile(self.project_id) or {}
+        records, admitted_previous, admission = admit(self, self.state["records"],
+            [] if self.topic_projection else old.get('facts') or [])
         mapped = {"company": {"business", "company"}, "products": {"product"}, "people": {"person"},
                   "competitor": {"peer", "competitor"}, "industry": {"industry"}, "policy": {"policy"}}
         coverage = {}
@@ -620,16 +765,17 @@ class PublicBootstrap:
         missing_exit_rules = [r["label"] for r in records if r["kind"] == "watch" and not r.get("exit_rule", "").strip()]
         status = "complete" if (all(v["status"] == "covered" for v in coverage.values())
                                 and scope_count and not self.state["errors"] and not missing_exit_rules) else "partial"
+        if collected is not None and collected['status'] != 'complete':
+            status = 'partial'
+        if admission['rejected']:
+            status = 'partial'
         # Projections are idempotent, and all writes retain the job lease fence.
-        old = self.store.get_public_profile(self.project_id) or {}
-        facts = list(old.get("facts") or [])
-        fact_keys = {(f["kind"], f["label"], f["text"]) for f in facts}
+        new_facts = []
         news = {}
         news_items = []
         for row in records:
-            if row["kind"] in KINDS and (row["kind"], row["label"], row["text"]) not in fact_keys:
-                facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs")})
-                fact_keys.add((row["kind"], row["label"], row["text"]))
+            if row["kind"] in KINDS:
+                new_facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs")})
             if row["kind"] in CATEGORIES:
                 source = self.source(row["source_id"])
                 news.setdefault(urldefrag(source["url"])[0], []).append(row)
@@ -645,6 +791,13 @@ class PublicBootstrap:
             source = self.source(claims[0]["source_id"])
             category = claims[0]["kind"]
             key = source_keys.get(url, "dsh:" + digest(["source-v2", url]))
+            if source.get('collection_matches'):
+                with closing(self.store._connect()) as db:
+                    retained_item = db.execute('SELECT key FROM studio_items WHERE project_id=? AND id=?',
+                        (self.project_id, source['collection_matches'][0]['item_id'])).fetchone()
+                if retained_item is None:
+                    raise ValueError('collected item missing from project')
+                key = retained_item['key']
             # One source may support several findings. Keep all claim/ref pairs,
             # and build the short preview from whole statements, never cut off
             # the qualification at a character boundary or overwrite earlier facts.
@@ -673,7 +826,8 @@ class PublicBootstrap:
             self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
             body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
-            self.store.save_body(item["id"], body_status, body)
+            if not source.get('collection_matches') or source.get('source_type') == 'public_page':
+                self.store.save_body(item["id"], body_status, body)
             saved = self.store.item_by_key(self.project_id, key)
             if not saved.get("event_id"):
                 news_items.append(saved)
@@ -691,13 +845,40 @@ class PublicBootstrap:
                                            summary=event["summary"], impact=event["impact"])
             else:
                 self.store.create_event(self.project_id, event, ids)
+        if self.topic_projection:
+            # A bounded question may append evidenced news, but it cannot
+            # overwrite the company's profile, full-round report or clock.
+            return {"status": status, "collection": collected, "records": len(records),
+                    "record_admission": admission}
+        scope_projection = self.project_monitoring_scope(scope_records)
+        if scope_projection["deferred_count"]:
+            status = "partial"
+        generation = self.pipeline.evidence.dependencies.generation(self.project_id)
+        old_current, old_historical = self.partition_public_facts(admitted_previous)
+        new_current, rejected = self.partition_public_facts(new_facts)
+        rejected_count = len(rejected) + sum(r['kind'] in KINDS and r not in records for r in self.state['records'])
+        facts = list({(f["kind"], f["label"], f["text"]): f for f in old_current + new_current}.values())
+        historical = list(old.get("historical_facts") or [])
+        for fact in old_historical + [f for f in old.get('facts', []) if f not in facts]:
+            if fact not in historical:
+                historical.append(fact)
+        if rejected:
+            status = "partial"
         evidence_ids = sorted({ref["evidence_version_id"] for f in facts for ref in f.get("refs", [])
                                if ref.get("evidence_version_id")})
-        self.store.put_compiled_profile(self.project_id, {**old, "facts": facts, "basis": "dsh_public_evidence",
+        dependency = self.store.put_compiled_profile(self.project_id, {**old, "facts": facts,
+            "historical_facts": historical, "basis": "dsh_public_evidence",
             "sources": len(self.state["sources"]), "errors": self.state["errors"],
             "coverage": coverage if self.bootstrap_projection else old.get("coverage", coverage),
-            "outcome": {"status": status, "retained_count": len(facts), "semantic_verification": "not_proven"}},
-            evidence_ids, expected_generation=self.pipeline.evidence.dependencies.generation(self.project_id), public=True)
+            "outcome": {"status": status, "retained_count": len(facts),
+                        "semantic_verification": admission['version'], "record_admission": admission}},
+            evidence_ids, expected_generation=generation, public=True)
+        profile_projection = {"status": dependency["status"], "reason": dependency.get("stale_reason", ""),
+                              "rejected_count": rejected_count}
+        if rejected_count and dependency["status"] == "current":
+            profile_projection.update(status="partial", reason="current_round_records_not_admitted")
+        if dependency["status"] != "current":
+            status = "partial"
         peers = [{"name": peer_label(row["label"]), "reason": row["reason"], "evidence": row["refs"]}
                  for row in records if row["kind"] == "peer"]
         report = {category: {
@@ -707,41 +888,23 @@ class PublicBootstrap:
         } for category in CATEGORIES}
         bootstrap_fields = ({"bootstrap_executor": "dsh", "bootstrap_coverage": coverage,
                              "bootstrap_status": status} if self.bootstrap_projection else {})
+        collection_fields = {'collection_report': None}
+        if collected is not None:
+            snapshot = collection_dsh.report(self, collected)
+            report = snapshot['channels']
+            collection_fields = {'collection_report': snapshot,
+                                 'round_id': self.execution.job['id']}
         self.store.merge_public_plan(self.project_id, {**bootstrap_fields,
-            "collection_phase": "complete", "last_report": report, "has_search": True}, peers)
-        existing = {w["text"] for w in self.pipeline.monitoring_plan.items(self.project_id)}
-        for row in scope_records:
-            if row["kind"] == "watch" and row["label"] not in existing:
-                # Older checkpoints remain readable, but cannot silently create
-                # another unbounded topic or invent its completion condition.
-                if not row.get("exit_rule", "").strip():
-                    continue
-                self.pipeline.monitoring_plan.add(self.project_id, {
-                    "text": row["label"], "axis": row["axis"], "queries": [row["query"]],
-                    "reason": row["reason"], "cadence": "low", "tier": "topic", "exit_rule": row["exit_rule"]},
-                    actor="system", origin="system", reason=row["reason"], visibility="public",
-                    evidence=[{"url": ref["url"], "quote": ref["quote"]} for ref in row["refs"]])
-                existing.add(row["label"])
-            elif row["kind"] == "relation":
-                # Replays and differently worded labels retain one standing target.
-                plan = self.pipeline.monitoring_plan
-                if any(w.get("scope_kind") == "relation"
-                       and w["relation_type"] == row["relation_type"]
-                       and _norm(w["relation_target"]) == _norm(row["relation_target"])
-                       for w in plan.items(self.project_id)):
-                    continue
-                plan.add(self.project_id, {
-                    "text": row["label"], "scope_kind": "relation",
-                    "relation_type": row["relation_type"], "relation_target": row["relation_target"],
-                    "relation_aliases": row.get("relation_aliases", []),
-                    "axis": row["axis"], "queries": [row["query"]], "reason": row["reason"],
-                    "sources": "\n".join(dict.fromkeys(ref["url"] for ref in row["refs"])),
-                    "cadence": "low", "tier": "background"},
-                    actor="system", origin="system", reason=row["reason"], visibility="public",
-                    evidence=row["refs"])
+            **collection_fields,
+            "collection_phase": collected['status'] if collected is not None else "complete",
+            "last_report": report, "has_search": (any(r['source'] == 'search' and r['capability'] == 'available'
+                                                       for r in collected['rows']) if collected is not None else True)}, peers)
         result = {"status": status, "coverage": coverage, "records": len(records),
+                  "retained_records": len(self.state['records']), "record_admission": admission,
+                  "profile_projection": profile_projection,
+                  "collection": collected,
                   "executor": "dsh", "source_errors": self.state["errors"],
-                  "monitoring_scope": {"count": scope_count,
+                  "monitoring_scope": {"count": scope_count, **scope_projection,
                                        "missing_exit_rules": missing_exit_rules,
                                        "reason": "" if scope_count else "本轮未生成有依据的后续关注点"}}
         key = "dsh-bootstrap:" if self.bootstrap_projection else "dsh-monitor-collection:"

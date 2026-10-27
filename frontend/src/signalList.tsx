@@ -43,7 +43,7 @@ function SignalListBody({ projectId, cell }: { projectId: string; cell: TrackCel
       <h4>{feed.what}{items.length > 0 && <span className="muted small"> · 已收录 {items.length} 条</span>}</h4>
       {loading && !data ? <Skeleton lines={5} />
         : items.length ? <ItemList items={items} onChange={update} grouped={false} />
-        : <Empty title={`暂无${feed.what}`}>公开信息覆盖有限，不代表没有发生。</Empty>}
+        : <Empty title={`暂无${feed.what}`} />}
     </section>
   </div>;
 }

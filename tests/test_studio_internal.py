@@ -246,6 +246,8 @@ def test_second_document_produces_change_set(tmp_path):
     store = app.state.studio_store
     # Only internal analysis matters here: drop the queued external job.
     with store._connect() as db:
+        # Remove only admission metadata in this synthetic queue-reset fixture.
+        db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute("DELETE FROM studio_jobs")
 
     client.post(f"/api/studio/projects/{project['id']}/files", files={"file": ("bp-v1.txt", BP_V1.encode(), "text/plain")})

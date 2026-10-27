@@ -62,6 +62,7 @@ function SoftwareUpdates() {
 }
 type SectionId = "model" | "search" | "data" | "notify" | "network";
 type Form = {
+  profile: string;
   model: { protocol: string; base_url: string; model: string; api_key: string; max_output_tokens: number };
   search: { providers: string[]; keys: Record<string, string>; mode: string; google_news: boolean };
   registry: { provider: string; api_key: string };
@@ -69,6 +70,8 @@ type Form = {
   notify: NotifyView;
   proxy: string;
   hours: number;
+  overlap: number;
+  baseline: number;
 };
 
 const SECTIONS: { id: SectionId | "overview" | "executor" | "interface" | "usage"; label: string }[] = [
@@ -89,6 +92,7 @@ const SEARCH_DEFAULT: Form["search"] = { providers: [], keys: {}, mode: "auto", 
 // Saved values as an editable form; secrets always start empty (empty keeps the stored key).
 function fromSaved(data: SettingsView): Form {
   return {
+    profile: data.active_model_profile ?? 'default',
     model: { protocol: data.model.protocol, base_url: data.model.base_url, model: data.model.model, api_key: "",
       max_output_tokens: data.model.max_output_tokens ?? 1000000 },
     search: { ...SEARCH_DEFAULT, providers: data.search.providers ?? (data.search.provider === "none" ? [] : [data.search.provider]),
@@ -99,19 +103,22 @@ function fromSaved(data: SettingsView): Form {
     notify: data.notify ? { ...data.notify, webhook_url: "" } : { kind: "none", webhook_url: "", weekly: true, weekday: 1, hour: 9, instant_major: false },
     proxy: data.proxy_url,
     hours: data.refresh_hours,
+    overlap: data.collection_overlap_days ?? 7,
+    baseline: data.collection_baseline_days ?? 30,
   };
 }
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 const typed = (keys: Record<string, string>) => Object.values(keys).some((v) => v.trim());
 const endpoint = (url: string) => url.trim().replace(/\/+$/, "");
+const hostLabel = (url: string) => { try { return new URL(url).hostname; } catch { return '待配置地址'; } };
 
 function changedSections(form: Form, saved: Form): SectionId[] {
   const m = form.model, sm = saved.model;
   const s = form.search, ss = saved.search;
   const n = form.notify, sn = saved.notify;
   const changed: Record<SectionId, boolean> = {
-    model: m.protocol !== sm.protocol || endpoint(m.base_url) !== endpoint(sm.base_url) || m.model !== sm.model
+    model: form.profile !== saved.profile || m.protocol !== sm.protocol || endpoint(m.base_url) !== endpoint(sm.base_url) || m.model !== sm.model
       || m.max_output_tokens !== sm.max_output_tokens || !!m.api_key,
     search: !sameSet(s.providers, ss.providers) || s.mode !== ss.mode || s.google_news !== ss.google_news || typed(s.keys),
     data: form.registry.provider !== saved.registry.provider || !!form.registry.api_key
@@ -120,7 +127,8 @@ function changedSections(form: Form, saved: Form): SectionId[] {
       || typed(form.commercial.keys) || form.commercial.clear.length > 0,
     notify: n.kind !== sn.kind || n.weekly !== sn.weekly || n.weekday !== sn.weekday || n.hour !== sn.hour
       || n.instant_major !== sn.instant_major || !!n.webhook_url,
-    network: form.proxy.trim() !== saved.proxy.trim() || form.hours !== saved.hours,
+    network: form.proxy.trim() !== saved.proxy.trim() || form.hours !== saved.hours
+      || form.overlap !== saved.overlap || form.baseline !== saved.baseline,
   };
   return (Object.keys(changed) as SectionId[]).filter((k) => changed[k]);
 }
@@ -154,14 +162,21 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm({ ...form, [key]: value });
   const save = async () => {
+    if (!Number.isInteger(form.overlap) || form.overlap < 0 || form.overlap > 90
+      || !Number.isInteger(form.baseline) || form.baseline < 1 || form.baseline > 365) {
+      setSaveError(new Error("增量回看天数应为 0–90 的整数，完整范围回查间隔应为 1–365 的整数。"));
+      return false;
+    }
     setSaving(true);
     setSaveError(null);
     try {
       const { clear, ...commercial } = form.commercial;
       const next: SettingsView = await api.saveSettings({
+        active_model_profile: form.profile,
         model: form.model, search: form.search, registry: form.registry, notify: form.notify,
         commercial: clear.length ? { ...commercial, clear_keys: clear } : commercial,
         proxy_url: form.proxy, refresh_hours: form.hours,
+        collection_overlap_days: form.overlap, collection_baseline_days: form.baseline,
       });
       setData(next);
       toast("设置已保存");
@@ -202,7 +217,9 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
             const row = status.find((r) => r.id === s.id);
             return <a key={s.id} href={`#settings-${s.id}`} onClick={(e) => {
               e.preventDefault();
-              document.getElementById(`settings-${s.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+              const target = document.getElementById(`settings-${s.id}`);
+              if (target instanceof HTMLDetailsElement) target.open = true;
+              target?.scrollIntoView({ behavior: "smooth", block: "start" });
             }}>
               <span>{s.label}</span>
               {dirty.includes(s.id as SectionId) ? <i className="settings-dot dirty" title="未保存" />
@@ -212,7 +229,9 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
         </nav>
 
         <div className="settings-main">
-          <section className="card card-pad settings-section" id="settings-overview">
+          <details className="card card-pad settings-section settings-secondary" id="settings-overview">
+            <summary><strong>配置概况</strong><span className="tag">{data.model.ready ? '模型已配置' : '模型待配置'}</span></summary>
+            <div className="settings-secondary-body">
             <div className="card-head">
               <h2>配置概况</h2>
               <button className="btn btn-sm" disabled={saving || testing} onClick={test}>
@@ -232,16 +251,43 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
               </tbody>
             </table>
             <p className="muted small">测试会向 AI 模型发送一条短消息，并对每个已启用的搜索服务各检索一次；不查询工商与专业数据。</p>
-          </section>
+            </div>
+          </details>
 
           <Section id="model" title="AI 模型" badge={<span className="tag tag-warn">必填</span>} dirty={dirty.includes("model")}
             state={data.model.ready ? "已配置" : "待配置"} ok={data.model.ready}>
-            <ModelFields form={form} data={data} onChange={(model) => set("model", model)} />
+            <div className="provider-current">
+              <label className="field"><span>当前运转模型</span>
+                <select value={form.profile} onChange={e => {
+                  const profile = data.model_profiles?.find(p => p.id === e.target.value);
+                  setForm({ ...form, profile: e.target.value, model: profile ? { ...profile, api_key: '', max_output_tokens: profile.max_output_tokens ?? 1000000 }
+                    : { protocol: 'openai', base_url: '', model: '', api_key: '', max_output_tokens: 1000000 } });
+                }}>
+                  {!data.model_profiles?.length && <option value="default">尚未配置模型</option>}
+                  {data.model_profiles?.map(p => <option value={p.id} key={p.id}>{p.model || '未命名模型'} · {hostLabel(p.base_url)}{p.ready ? '' : '（待配置）'}</option>)}
+                  <option value="new">＋ 添加模型配置</option>
+                </select>
+              </label>
+              <p className="muted small">选择后点击保存生效。不会中断正在执行的请求，也不会自动发起连接测试。</p>
+            </div>
+            <details className="provider-editor" key={form.profile} open={form.profile === 'new' || !data.model.ready ? true : undefined}>
+              <summary>配置模型 <span className="muted small">服务商、密钥与高级参数</span></summary>
+              <ModelFields form={form} data={data} onChange={(model) => set("model", model)} />
+            </details>
             <TestRows tests={tests} keys={["model"]} />
           </Section>
 
           <Section id="search" title="新闻与搜索" badge={<span className="tag">可选</span>} dirty={dirty.includes("search")}
             state={data.search.ready ? "已配置搜索服务" : "仅免费来源"} ok={!!data.search.ready}>
+            <div className="provider-current">
+              <span className="muted small">当前搜索来源</span>
+              <div className="provider-choices">{SEARCH.map(source => <label key={source.id} className={form.search.providers.includes(source.id) ? 'selected' : ''}>
+                <input type="checkbox" checked={form.search.providers.includes(source.id)} onChange={e => set('search', { ...form.search,
+                  providers: e.target.checked ? [...form.search.providers, source.id] : form.search.providers.filter(id => id !== source.id) })} />{source.label}
+              </label>)}</div>
+              <p className="muted small">{form.search.providers.length ? '保存后使用所选来源；可在下方配置各自的密钥。' : '未选择付费来源，使用免费新闻源。'}</p>
+            </div>
+            <details className="provider-editor"><summary>配置搜索 <span className="muted small">密钥、自动搭配与联合检索</span></summary>
             <p className="muted small">服务商分别计费。未启用时使用免费来源；相同检索缓存 1 小时，重启清空。</p>
             <p className="small"><a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">获取 DeepSeek Key ↗</a>
               {" · "}<a href="https://open.bochaai.com/dashboard" target="_blank" rel="noopener noreferrer">获取博查 Key ↗</a>
@@ -278,6 +324,7 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
               <small className="muted">默认关闭。新闻默认用必应（原文直链）和已配置的搜索服务；Google News 只有标题，链接读不到正文。</small>
             </label>
             <TestRows tests={tests} keys={Object.keys(tests ?? {}).filter((k) => k !== "model")} />
+            </details>
           </Section>
 
           <Section id="data" title="工商与专业数据" badge={<span className="tag">可选 · 付费</span>} dirty={dirty.includes("data")}
@@ -408,6 +455,23 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
                 <small className="muted">留空使用系统代理；海外服务可能需要代理。</small>
               </label>
             </div>
+            <details>
+              <summary>增量采集范围</summary>
+              <div className="grid-2">
+                <label className="field">
+                  <span>增量回看天数</span>
+                  <input type="number" min={0} max={90} step={1} value={Number.isNaN(form.overlap) ? "" : form.overlap}
+                    onChange={(e) => set("overlap", e.target.valueAsNumber)} />
+                  <small className="muted">从各查询上次成功的窗口向前回看，补充迟到收录的信息。默认 7 天。</small>
+                </label>
+                <label className="field">
+                  <span>完整范围回查间隔（天）</span>
+                  <input type="number" min={1} max={365} step={1} value={Number.isNaN(form.baseline) ? "" : form.baseline}
+                    onChange={(e) => set("baseline", e.target.valueAsNumber)} />
+                  <small className="muted">定期按原查询范围回查，发现较早记录的变化。默认 30 天，仍受来源能力与调用预算限制。</small>
+                </label>
+              </div>
+            </details>
           </Section>
 
           <ExecutorCard />
@@ -461,6 +525,10 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
 function Section({ id, title, badge, state, ok, dirty, children }: {
   id: SectionId; title: string; badge?: ReactNode; state: string; ok: boolean; dirty: boolean; children: ReactNode;
 }) {
+  if (id !== 'model' && id !== 'search') return <details className="card card-pad settings-section settings-secondary" id={`settings-${id}`}>
+    <summary><strong>{title}</strong> <span className={`tag ${dirty ? 'tag-warn' : ok ? 'tag-ok' : ''}`}>{dirty ? '未保存' : state}</span></summary>
+    <div className="settings-secondary-body">{children}</div>
+  </details>;
   return (
     <section className="card card-pad settings-section" id={`settings-${id}`}>
       <div className="card-head">
@@ -474,20 +542,29 @@ function Section({ id, title, badge, state, ok, dirty, children }: {
 
 function ModelFields({ form, data, onChange }: { form: Form; data: SettingsView; onChange: (model: Form["model"]) => void }) {
   const model = form.model;
-  const sameEndpoint = model.protocol === data.model.protocol && endpoint(model.base_url) === endpoint(data.model.base_url);
+  const stored = data.model_profiles?.find(p => p.id === form.profile) ?? (form.profile !== 'new' ? data.model : undefined);
+  const sameEndpoint = !!stored && model.protocol === stored.protocol && endpoint(model.base_url) === endpoint(stored.base_url);
   const preset = data.presets.find((p) => p.protocol === model.protocol && endpoint(p.base_url) === endpoint(model.base_url));
+  const choose = (id: string) => {
+    if (id === 'custom') { onChange({ ...model, base_url: '', model: '', api_key: '' }); return; }
+    const p = data.presets.find(item => item.id === id);
+    if (p) onChange({ ...model, protocol: p.protocol, base_url: p.base_url, model: p.model,
+      api_key: p.protocol === model.protocol && endpoint(p.base_url) === endpoint(model.base_url) ? model.api_key : '' });
+  };
   return <>
-    <div className="presets" role="group" aria-label="常用服务">
-      {data.presets.map((p) => (
-        <button key={p.id} type="button" className={`preset ${preset?.id === p.id ? "on" : ""}`} aria-pressed={preset?.id === p.id}
-          onClick={() => onChange({ ...model, protocol: p.protocol, base_url: p.base_url, model: p.model,
-            api_key: p.protocol === model.protocol && endpoint(p.base_url) === endpoint(model.base_url) ? model.api_key : "" })}>
-          {p.label}
-        </button>
-      ))}
+    <div className="grid-2 provider-brand">
+      <label className="field"><span>服务商</span><select value={preset?.id.startsWith('glm') ? 'glm' : preset?.id ?? 'custom'} onChange={e => choose(e.target.value)}>
+        {data.presets.filter(p => p.id !== 'glm-coding').map(p => <option key={p.id} value={p.id}>{p.id === 'glm' ? 'GLM · 智谱' : p.label}</option>)}
+        <option value="custom">自定义兼容服务</option>
+      </select></label>
+      {preset?.id.startsWith('glm') && <label className="field"><span>接入方式</span><select value={preset.id} onChange={e => choose(e.target.value)}>
+        <option value="glm">标准 API · 后台监控</option><option value="glm-coding">Coding Plan · 需符合套餐适用范围</option>
+      </select></label>}
     </div>
+    {(preset?.id === 'kimi' || preset?.id === 'gemini') && <p className="note small">
+      {preset.id === 'kimi' ? 'Kimi Code' : 'Gemini CLI / Code Assist'} 的订阅与标准 API 分开。当前后台研究使用标准 API；订阅型 Agent 接入尚未适配，不能在这里复用登录凭据或承诺抵扣套餐。</p>}
     {preset?.hint && <p className="muted small">{preset.hint}</p>}
-    {!sameEndpoint && data.model.api_key && <p className="note small">更换服务地址后，原 Key 不会发给新服务；请填写新服务的 Key。</p>}
+    {!sameEndpoint && stored?.api_key && <p className="note small">更换服务地址后，原 Key 不会发给新服务；请填写新服务的 Key。</p>}
     <div className="grid-2">
       <label className="field">
         <span>接口地址</span>
@@ -507,7 +584,7 @@ function ModelFields({ form, data, onChange }: { form: Form; data: SettingsView;
       <label className="field">
         <span>API Key</span>
         <input type="password" value={model.api_key} autoComplete="off"
-          placeholder={sameEndpoint && data.model.api_key ? `已保存 ${data.model.api_key}，留空保留` : "填入当前服务的 API Key"}
+          placeholder={sameEndpoint && stored?.api_key ? `已保存 ${stored.api_key}，留空保留` : "填入当前服务的 API Key"}
           onChange={(e) => onChange({ ...model, api_key: e.target.value })} />
       </label>
     </div>

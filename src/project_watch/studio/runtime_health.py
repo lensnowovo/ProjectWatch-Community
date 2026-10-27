@@ -31,6 +31,21 @@ def stage_phase(stage):
     return next((phase for phase, prefixes in groups.items() if (stage or '').startswith(prefixes)), None)
 
 
+def job_phase(db, job):
+    """Job-bound business phase; transport labels cannot erase it."""
+    checkpoint = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? "
+                            "AND stage='dsh_runtime_phase'", (job['id'],)).fetchone()
+    try:
+        value = json.loads(checkpoint[0]) if checkpoint else None
+    except (ValueError, TypeError):
+        value = None
+    phase = value.get('phase') if isinstance(value, dict) else None
+    if isinstance(phase, str) and phase in ('collect', 'read', 'judge', 'revise'):
+        return phase
+    # Older DSH receipts and classic jobs keep the existing display contract.
+    return stage_phase(job['stage'])
+
+
 def project_jobs(store, project_id, *, worker='running'):
     """All active jobs and the last terminal job per kind, without lease secrets.
 
@@ -129,6 +144,66 @@ def tick(store, job, *, at=None):
         return 'held' if held else 'recovering'
 
 
+def activity(db, job_id, at):
+    """Receipt-only progress. Never return evidence, prompts or provider errors."""
+    from project_watch.studio.recovery import UNRESOLVED
+
+    calls = db.execute('SELECT kind,status,response_status,created_at,input_tokens,output_tokens,'
+                       'cache_read_tokens,cache_creation_tokens FROM studio_job_calls WHERE job_id=?',
+                       (job_id,)).fetchall()
+    models = [c for c in calls if c['kind'] == 'model']
+    pending = db.execute(f"SELECT kind,created_at FROM studio_job_calls c WHERE job_id=? "
+                         f"AND c.status='started' AND {UNRESOLVED} ORDER BY created_at LIMIT 1",
+                         (job_id,)).fetchall()
+    def completed(kind):
+        return sum(c['kind'] == kind and c['status'] == 'completed'
+                   and 200 <= (c['response_status'] or 0) < 300 for c in calls)
+    def known_sum(field):
+        values = [c[field] for c in models if c[field] is not None]
+        return sum(values) if values else None
+    checkpoint = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? "
+                            "AND stage='dsh_validation_errors'", (job_id,)).fetchone()
+    try:
+        errors = json.loads(checkpoint[0]) if checkpoint else []
+    except (ValueError, TypeError):
+        errors = []
+    errors = errors[-100:] if isinstance(errors, list) else []
+    # Display categories only; unknown validator codes stay generic, not hidden.
+    safe_codes = {'unsupported_numbers', 'missing_qualifications', 'invalid_field', 'missing_citation', 'quote_not_verbatim',
+                  'quote_not_found', 'source_not_found', 'invalid_date', 'record_validation'}
+    reasons = set()
+    for error in errors[-3:]:
+        if not isinstance(error, dict):
+            continue
+        issues = error.get('issues')
+        issues = issues if isinstance(issues, list) else []
+        for issue in issues[:20]:
+            if isinstance(issue, dict):
+                code = issue.get('code')
+                reasons.add(code if isinstance(code, str) and code in safe_codes else 'record_validation')
+        if not issues:
+            reasons.add('record_validation')
+    # Saved, job-bound bootstrap records; never substitute provider calls or project-wide totals.
+    saved = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_state'",
+                       (job_id,)).fetchone()
+    try:
+        snapshot = json.loads(saved[0]) if saved else None
+    except (ValueError, TypeError):
+        snapshot = None
+    records = snapshot.get('records') if isinstance(snapshot, dict) else None
+    records_saved = None
+    if isinstance(records, list) and all(isinstance(r, dict) and isinstance(r.get('key'), str)
+                                         and r['key'] for r in records):
+        records_saved = len({r['key'] for r in records})
+    return {'records_saved': records_saved, 'model_requests': len(models), 'model_completed': completed('model'),
+            'search_completed': completed('search'),
+            'pending_kind': pending[0]['kind'] if pending else None,
+            'pending_seconds': seconds_since(pending[0]['created_at'], at) if pending else None,
+            'validation_attempts': len(errors), 'validation_reasons': sorted(reasons),
+            'usage_missing_calls': sum(c['input_tokens'] is None or c['output_tokens'] is None for c in models),
+            **{f: known_sum(f) for f in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens')}}
+
+
 def projection(db, job, *, worker='running', at=None):
     """Do not expose prompts, provider URLs, credentials or lease tokens."""
     at = at or datetime.now(UTC)
@@ -145,7 +220,7 @@ def projection(db, job, *, worker='running', at=None):
         elif worker != 'running' or not job['lease_until'] or job['lease_until'] <= at.isoformat():
             state, label = 'recovering', '后台中断，等待恢复'
         elif pending:
-            state, label = 'waiting_response', '等待模型响应' if pending[0] == 'model' else '等待来源响应'
+            state, label = 'waiting_response', '正在研究 · 模型处理中' if pending[0] == 'model' else '正在获取来源响应'
     elif state == 'queued':
         project = db.execute('SELECT status FROM studio_projects WHERE project_id=?', (job['project_id'],)).fetchone()
         if project and project[0] == 'paused' and job['kind'] != 'internal':
@@ -173,6 +248,7 @@ def projection(db, job, *, worker='running', at=None):
             coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='commercial_coverage'", (job['id'],)).fetchone()
             if coverage and json.loads(coverage[0]).get('partial'):
                 state, label = 'partial', '部分来源已更新，其余暂不可用'
-    return {'state': state, 'label': label, 'phase': stage_phase(job['stage']), 'progress_at': job['progress_at'],
+    return {'state': state, 'label': label, 'phase': job_phase(db, job), 'progress_at': job['progress_at'],
             'heartbeat_at': job['heartbeat_at'], 'progress_age_seconds': seconds_since(job['progress_at'], at),
-            'yield_count': job['yield_count'], 'recovery_attempts': max(0, job['attempts'] - 1)}
+            'yield_count': job['yield_count'], 'recovery_attempts': max(0, job['attempts'] - 1),
+            'activity': activity(db, job['id'], at)}

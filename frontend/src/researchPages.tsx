@@ -4,8 +4,16 @@ import { api, type Item, type ProjectDetail } from "./api";
 import { Block, Figure, Skeleton, VerdictBand } from "./frame";
 import { ItemList } from "./items";
 import { EASE } from "./motion";
-import { Empty, byNewest, useAsync } from "./ui";
+import { Empty, ErrorNote, byNewest, useAsync } from "./ui";
 import { monitoringRevision } from "./workState";
+import { externalCollection } from './externalCollection';
+
+export function ResearchEmpty({detail,label}: {detail:ProjectDetail;label:string}) {
+  const channel = ({'临床':'trial', '论文':'paper', '专利与注册':'patent'} as Record<string,string>)[label];
+  const state=externalCollection(detail, channel ? [channel] : undefined);
+  return <div className="tab-frame research-view"><VerdictBand eyebrow={label} meta={state.label} title={`${label} · 暂无收录`} />
+    <Empty title={state.label}>{state.description}{label==='专利与注册' && <p>本栏目来自通用网页检索，不是完整的专利数据库。</p>}</Empty></div>;
+}
 
 /**
  * 外部信息 › 临床 / 论文 / 专利: the company's own research record, read from the structured fields the sources carry
@@ -33,7 +41,7 @@ const STATUS: Record<string, [string, "on" | "done" | "stop" | ""]> = {
 interface Trial { id: string; title: string; phase: string; status: string; sponsor: string; collaborators: string[]; conditions: string[]; url: string; date: string; news: number }
 
 export function ClinicalView({ detail }: { detail: ProjectDetail }) {
-  const { data, loading, setData } = useCategory(detail, "trial");
+  const { data, loading, error, reload, setData } = useCategory(detail, "trial");
   const items = (data ?? []).slice().sort(byNewest);
   const trials = new Map<string, Trial>();
   for (const t of detail.trials ?? []) trials.set(t.id, { id: t.id, title: t.title, phase: t.phase, status: t.status, sponsor: t.sponsor,
@@ -48,6 +56,8 @@ export function ClinicalView({ detail }: { detail: ProjectDetail }) {
       news: (known?.news ?? 0) + 1 });
   }
   const rows = [...trials.values()];
+  if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的临床信息</button></div>;
+  if(!loading && !rows.length && !items.length)return <ResearchEmpty detail={detail} label="临床"/>;
   const rank = (p: string) => Math.max(-1, ...p.split("/").map((x) => PHASES.findIndex(([k]) => k === x)));
   const top = rows.reduce((m, r) => Math.max(m, rank(r.phase)), -1);
   const active = rows.filter((r) => STATUS[r.status]?.[1] === "on").length;
@@ -81,7 +91,7 @@ export function ClinicalView({ detail }: { detail: ProjectDetail }) {
     </Block>}
     <Block title="临床相关报道" note="按时间">
       {loading && !data ? <Skeleton lines={4} /> : items.length ? <ItemList items={items} onChange={update} grouped={false} />
-        : <Empty title="暂无临床相关报道">公开信息覆盖有限，不代表没有临床进展。</Empty>}
+        : <Empty title="暂无临床相关报道" />}
     </Block>
   </div>;
 }
@@ -96,8 +106,10 @@ function quarterOf(iso: string): string {
 }
 
 export function PapersView({ detail }: { detail: ProjectDetail }) {
-  const { data, loading, setData } = useCategory(detail, "paper");
+  const { data, loading, error, reload, setData } = useCategory(detail, "paper");
   const [all, setAll] = useState(false);
+  if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的论文信息</button></div>;
+  if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="论文"/>;
   const items = (data ?? []).slice().sort(byNewest);
   const papers: Paper[] = items.map((item) => {
     const x = extras(item).find((e) => e.openalex_id) ?? {};
@@ -147,7 +159,7 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
     </Block>}
     <Block title="全部论文" note={`${papers.length} 篇`} action={papers.length > 8 ? <button className="link small" onClick={() => setAll((v) => !v)}>{all ? "收起" : `展开全部 ${papers.length} 篇`}</button> : undefined}>
       {loading && !data ? <Skeleton lines={4} /> : items.length ? <ItemList items={all ? items : items.slice(0, 8)} onChange={update} grouped={false} />
-        : <Empty title="暂无相关论文">检索范围有限，不代表没有学术进展。</Empty>}
+        : <Empty title="暂无相关论文" />}
     </Block>
   </div>;
 }
@@ -163,7 +175,9 @@ function lastQuarters(n: number): string[] {
 // ------------------------------------------------------------------ 专利
 
 export function PatentsView({ detail }: { detail: ProjectDetail }) {
-  const { data, loading, setData } = useCategory(detail, "patent");
+  const { data, loading, error, reload, setData } = useCategory(detail, "patent");
+  if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的专利信息</button></div>;
+  if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="专利与注册"/>;
   const items = (data ?? []).slice().sort(byNewest);
   const own = companyNames(detail);
   // Patent search returns sector news by keyword, so most records are other companies' patents. Say whose they are.
@@ -182,9 +196,9 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
       <p className="tf-sub">专利只来自通用网页检索，没有接入国家知识产权局或专利数据库，<b>既不能代表本公司的专利布局，也不是完整的同行专利清单</b>。下方按是否提到本公司分开列出。</p>
     </VerdictBand>
     {!items.length ? <Block title="专利与注册信息"><Empty title="暂无专利或注册信息">需要接入专利数据库才能做专利布局分析。</Empty></Block> : <>
-      <Block card title="提到本公司的专利动态" note={mine.length ? "仍需到专利库核实权利人与法律状态" : "检索未命中"}>
+      <Block title="提到本公司的专利动态" note={mine.length ? "仍需到专利库核实权利人与法律状态" : "检索未命中"}>
         {mine.length ? <ItemList items={mine} onChange={update} grouped={false} />
-          : <p className="muted small">检索没有命中本公司的专利记录。这不代表公司没有专利，只说明通用检索读不到。</p>}
+          : <p className="muted small">暂无收录的公司专利记录。</p>}
       </Block>
       {others.length > 0 && <Block title="其他专利与注册线索" note={`${others.length} 条 · 未匹配到本公司名称`}>
         <ItemList items={others} onChange={update} grouped={false} />

@@ -91,20 +91,30 @@ function ChangeIf({ items }: { items: string[] }) {
 }
 
 /** Shared body: scale on top, for/against side by side, then what would change it. */
-export function JudgmentBody({ scale, verdict, labels, summary, pro, con, proTitle = "支持这个判断", conTitle = "相反的依据", changeIf = [], children }: {
+export function JudgmentBody({ scale, verdict, labels, summary, pro, con, proTitle = "支持这个判断", conTitle = "相反的依据", changeIf = [], children, compact = false }: {
   scale: ScaleKey; verdict: string; labels: Record<string, string>; summary?: string;
-  pro: InsightPoint[]; con: InsightPoint[]; proTitle?: string; conTitle?: string; changeIf?: string[]; children?: ReactNode;
+  pro: InsightPoint[]; con: InsightPoint[]; proTitle?: string; conTitle?: string; changeIf?: string[]; children?: ReactNode; compact?: boolean;
 }) {
-  return <div className="jd-body">
+  return <div className={`jd-body${compact ? ' jd-body-compact' : ''}`}>
+    <div className={`jd-overview${summary || children ? ' jd-overview-split' : ''}`}>
     <Scale scale={scale} value={verdict} labels={labels} />
+    {(summary || children) && <div className="jd-reading">
     {summary && <p className="jd-summary">{summary}</p>}
     {children}
+    </div>}
+    </div>
+    <JudgmentEvidence compact={compact}>
     <div className="jd-cols">
       <Points title={proTitle} points={pro} tone="plus" empty="没有带出处的依据。" />
       <Points title={conTitle} points={con} tone="minus" empty="没有带出处的相反依据。" />
     </div>
     <ChangeIf items={changeIf} />
+    </JudgmentEvidence>
   </div>;
+}
+
+function JudgmentEvidence({compact,children}:{compact:boolean;children:ReactNode}) {
+  return compact ? <details className="chart-evidence"><summary>判断依据、反向信号与风险</summary>{children}</details> : <>{children}</>;
 }
 
 function Provenance({ view }: { view: InsightView }) {
@@ -114,28 +124,36 @@ function Provenance({ view }: { view: InsightView }) {
 }
 
 /** 竞争对手: where the company stands against its peers. */
-export function PositionJudgment({ view }: { view: InsightView | null }) {
+export function PositionJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const p = view?.record?.analysis.position;
   if (!view?.record || !p) return null;
   return <Block card title="竞争位置判断" note={<Provenance view={view} />} action={<Confidence value={p.confidence} />}>
-    <JudgmentBody scale="position" verdict={p.verdict} labels={view.labels.position} pro={p.for} con={p.against} changeIf={p.change_if}>
+    <JudgmentBody compact={compact} scale="position" verdict={p.verdict} labels={view.labels.position} pro={p.for} con={p.against} changeIf={p.change_if}>
       {p.peers.length > 0 && <p className="jd-peers"><span>对比对象</span>{p.peers.map((n) => <b key={n}>{n}</b>)}</p>}
     </JudgmentBody>
   </Block>;
 }
 
 /** 行业环境: whether the industry is expanding or cooling, with drivers and headwinds. */
-export function IndustryJudgment({ view }: { view: InsightView | null }) {
+export function ChainJudgment({view}:{view:InsightView}) {
+  const d=view.record?.analysis.chain;
+  if(!d)return null;
+  return <Block card title="产业链影响判断" note={<Provenance view={view}/>} action={<Confidence value={d.confidence}/>}>
+    <JudgmentBody compact scale="chain" verdict={d.verdict} labels={view.labels.chain} summary={d.summary} pro={d.for} con={d.against} changeIf={d.change_if}/>
+  </Block>;
+}
+
+export function IndustryJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const d = view?.record?.analysis.industry;
   if (!view?.record || !d) return null;
   return <Block card title="行业发展判断" note={<Provenance view={view} />} action={<Confidence value={d.confidence} />}>
-    <JudgmentBody scale="industry" verdict={d.verdict} labels={view.labels.industry} summary={d.summary}
+    <JudgmentBody compact={compact} scale="industry" verdict={d.verdict} labels={view.labels.industry} summary={d.summary}
       pro={d.drivers} con={d.headwinds} proTitle="驱动" conTitle="阻力" />
   </Block>;
 }
 
 /** 行业环境: the company's technical bet placed on consensus × maturity, with academic and industry signals. */
-export function TechnologyJudgment({ view }: { view: InsightView | null }) {
+export function TechnologyJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const t = view?.record?.analysis.technology;
   if (!view?.record || !t) return null;
   return <Block card title="技术方向判断" note={<Provenance view={view} />} action={<Confidence value={t.confidence} />}>
@@ -148,11 +166,12 @@ export function TechnologyJudgment({ view }: { view: InsightView | null }) {
       </div>
       <TechMap maturity={t.maturity} consensus={t.consensus} labels={view.labels} />
     </div>
-    <div className="jd-cols">
+    <JudgmentEvidence compact={compact}><div className="jd-cols">
       <Points title="学术界信号（论文）" points={t.academic} empty="素材中没有可引用的论文信号。" />
       <Points title="产业界信号（融资、竞品、产品）" points={t.industry} empty="素材中没有可引用的产业信号。" />
     </div>
     <Points title="技术路线风险" points={t.risks} tone="minus" />
+    </JudgmentEvidence>
   </Block>;
 }
 
@@ -201,7 +220,7 @@ export function EvidenceGaps({ view }: { view: InsightView | null }) {
           <b>{n}</b></li>)}</ul>
         <p className="jd-empty">深色表示该类素材被判断引用；共引用 {a.cited.length} 条。</p>
       </div>
-      <Points title="还缺什么信息" points={a.gaps.map((g) => ({ text: g, refs: [] }))} empty="模型未列出信息缺口。" />
+      <Points title="还缺什么信息" points={a.gaps.map((g) => ({ text: g, refs: [] }))} empty="暂无补充事项。" />
     </div>
     {a.cited.length > 0 && <div className="jd-points">
       <h4>被引用的素材</h4>

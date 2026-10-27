@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
+import { collectionChannelExecution, collectionExecutionLabel } from "../externalCollection";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
@@ -18,15 +19,17 @@ import { RaceBoard } from "../race";
 import { raceRevision } from '../raceData';
 import { TrackBoard } from "../track";
 import { TechRoutes } from "../tech";
-import { projectWork, needsAttention } from "../workState";
+import { projectWork, needsAttention, isMoving } from "../workState";
 import { ProjectActivity, useVisiblePoll } from "../Operational";
 import { RecoveryDialog } from '../RecoveryDialog';
-import { IndustryJudgment, TechnologyJudgment, useInsight } from "../judgment";
-import { insightRevision } from "../workState";
+import { IndustryJudgment, TechnologyJudgment } from "../judgment";
+import { insightRevision, workRevision } from "../workState";
 import { ClinicalView, PapersView, PatentsView } from "../researchPages";
 import { BusinessView, OperationsView, RisksView, internalCounts } from "../internalPages";
 import { FinanceAnalysisView } from "../financeAnalysis";
 import { useDossierMotion } from '../DossierMotion';
+import { ScopeReading, scopeRelations, scopeReports } from '../ScopeReading';
+import { externalCollection } from '../externalCollection';
 
 /** Five sections (8945); each holds one or more of the original pages, which stay the URL's ?tab= values so every
  * existing link keeps working. */
@@ -34,10 +37,10 @@ type Section = "home" | "internal" | "external" | "scope" | "analysis";
 const SECTIONS: { id: Section; label: string; pages: { id: Tab; label: string }[] }[] = [
   { id: "analysis", label: "当前判断", pages: [{ id: "brief", label: "按问题看判断" }] },
   { id: "home", label: "项目总览", pages: [{ id: "overview", label: "公司概览" }] },
+  { id: "external", label: "外部信息", pages: [{ id: "external", label: "公司进展" }, { id: "trials", label: "临床" }, { id: "papers", label: "论文" },
+    { id: "patents", label: "专利与注册" }, { id: "competition", label: "竞争对手" }, { id: "chain", label: "产业链动态" }, { id: "industry", label: "宏观环境" }] },
   { id: "internal", label: "内部信息", pages: [{ id: "ops", label: "经营概览" }, { id: "business", label: "业务与研发" }, { id: "numbers", label: "财务报表" },
     { id: "fin", label: "财务分析" }, { id: "risks", label: "风险与核对" }, { id: "documents", label: "资料与版本" }] },
-  { id: "external", label: "外部信息", pages: [{ id: "external", label: "公司进展" }, { id: "trials", label: "临床" }, { id: "papers", label: "论文" },
-    { id: "patents", label: "专利与注册" }, { id: "competition", label: "竞争对手" }, { id: "industry", label: "行业环境" }] },
   { id: "scope", label: "监控范围", pages: [{ id: "plan", label: "监控方案" }] },
 ];
 const sectionOf = (t: Tab) => SECTIONS.find((s) => s.pages.some((p) => p.id === t)) ?? SECTIONS[0];
@@ -75,6 +78,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
     return next;
   });
   const section = sectionOf(tab);
+  const scopeMoving = !data.status_stale && data.jobs.some(j => ['external', 'external_followup', 'public_profile'].includes(j.kind) && j.status === 'running'
+    && isMoving(j.runtime?.state ?? 'unknown'));
 
   return (
     <Page className="page-wide page-project">
@@ -87,13 +92,14 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
             onClick={() => section.id !== sec.id && setTab(sec.pages[0].id)}>
             {section.id === sec.id && <motion.span layoutId="tab-underline" className="tab-underline" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
             <span className="tab-no">0{i + 1}</span>{sec.label}
+            {sec.id === 'scope' && scopeMoving && <span className="scope-running" role="status" aria-label="监控范围正在运行" />}
             {sec.id === "external" && ownCount(data) > 0 && <span className="count">{ownCount(data)}</span>}
             {sec.id === "internal" && data.documents.length > 0 && <span className="count">{data.documents.length}</span>}
           </button>
         ))}
       </nav>
       </div>
-      {section.id === "external" && <CategoryStrip detail={data} page={tab} go={setTab} />}
+      {section.id === "external" && <CategoryStrip key={data.project.id} detail={data} page={tab} go={setTab} />}
       {section.id === "internal" && <PageStrip label="内部信息分区" page={tab} go={setTab} cells={internalCounts(data)} />}
       {section.pages.length > 1 && section.id !== "external" && section.id !== "internal" && <nav className="subtabs" aria-label={`${section.label}分区`}>
         {section.pages.map((p) => <button key={p.id} className={tab === p.id ? "on" : ""} aria-current={tab === p.id ? "page" : undefined} onClick={() => setTab(p.id)}>
@@ -119,8 +125,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
           {tab === "competition" && <CompetitionView detail={data} onReload={reload}
             race={data.capabilities?.insight_projections === true && <RaceBoard projectId={id} revision={raceRevision(data)} />}
             financing={<CommercialSources projectId={id} revision={commercialRevision} peers onChanged={reload} />} />}
-          {tab === "industry" && (data.capabilities?.insight_projections === true ? <IndustryFrame projectId={id} revision={`${commercialRevision}|${project.last_external_at ?? ""}`}
-            insightRevision={insightRevision(data)} details={<IndustryView detail={data} />} /> : <IndustryView detail={data} />)}
+          {tab === "chain" && <ScopeReading key={id} detail={data} />}
+          {tab === "industry" && <MacroEnvironment key={id} detail={data} />}
           {tab === "documents" && <DocumentsTab detail={data} onUploaded={reload} />}
         </motion.div>
       </AnimatePresence>
@@ -233,7 +239,7 @@ function Note({ projectId, initial, onSaved }: { projectId: string; initial: str
   );
 }
 
-type CoverageKey = Category | "filing" | "registry" | "cn_trial" | "site" | "watch" | "thread" | "tender" | "license";
+type CoverageKey = Category | "chain" | "technology" | "filing" | "registry" | "cn_trial" | "site" | "watch" | "thread" | "tender" | "license";
 const COVERAGE_ROWS: { key: CoverageKey; label: string; free: boolean }[] = [
   { key: "company", label: "公司新闻", free: true },
   { key: "site", label: "公司官网页面", free: true },
@@ -242,8 +248,10 @@ const COVERAGE_ROWS: { key: CoverageKey; label: string; free: boolean }[] = [
   { key: "tender", label: "招投标（政府采购平台）", free: false },
   { key: "license", label: "资质与许可（监管部门网站）", free: false },
   { key: "competitor", label: "竞品动态", free: true },
+  { key: "chain", label: "产业链动态", free: true },
   { key: "industry", label: "赛道动态", free: true },
   { key: "policy", label: "政策监管", free: true },
+  { key: "technology", label: "技术动态", free: true },
   { key: "paper", label: "论文（OpenAlex）", free: true },
   { key: "trial", label: "临床试验（ClinicalTrials.gov）", free: true },
   { key: "patent", label: "专利", free: false },
@@ -252,7 +260,14 @@ const COVERAGE_ROWS: { key: CoverageKey; label: string; free: boolean }[] = [
   { key: "registry", label: "工商变更", free: false },
 ];
 
-function Coverage({ detail }: { detail: ProjectDetail }) {
+export function Coverage({ detail }: { detail: ProjectDetail }) {
+  const current = detail.collection_report;
+  if (current?.schema_version === 1) return <section className="coverage-block">
+    <p className="muted small">{current.job_status === 'running' || current.job_status === 'queued' ? '本轮采集' : '最近一轮采集'}</p>
+    <table className="coverage"><tbody>{COVERAGE_ROWS.map(row => <tr key={row.key}>
+      <td>{row.label}</td><td>{collectionExecutionLabel(collectionChannelExecution(current, row.key), current.active)}
+        {(current.channels[row.key]?.added ?? 0) > 0 ? ` · 新收录 ${current.channels[row.key].added} 条来源` : null}
+      </td></tr>)}</tbody></table></section>;
   const plan = detail.plan;
   const report = plan?.last_report ?? {};
   // Judge “needs configuring” by today's settings; the round's own flags only say what that round could use.
@@ -268,7 +283,11 @@ function Coverage({ detail }: { detail: ProjectDetail }) {
               {COVERAGE_ROWS.map((row) => {
                 const r = report[row.key];
                 let status: React.ReactNode;
-                if (row.key === "trial" && !plan.is_biomed) status = <span className="muted">不适用</span>;
+                if (r?.execution) status = <span>{collectionExecutionLabel(r.execution)}
+                  {r.added > 0 ? ` · 新收录 ${r.added} 条来源` : null}</span>;
+                else if (plan.collection_report?.schema_version === 1 && plan.collection_report.job_id === plan.round_id)
+                  status = <span className="muted">本轮未纳入</span>;
+                else if (row.key === "trial" && !plan.is_biomed) status = <span className="muted">不适用</span>;
                 else if (row.key === "cn_trial" && !plan.is_biomed) status = <span className="muted">不适用</span>;
                 else if ((row.key === "patent" || row.key === "cn_trial" || row.key === "tender" || row.key === "license") && !hasSearch) status = <Link to="/settings" className="muted">需配置搜索服务</Link>;
                 else if (row.key === "registry" && !hasRegistry) status = <Link to="/settings" className="muted">需配置工商数据服务</Link>;
@@ -283,7 +302,6 @@ function Coverage({ detail }: { detail: ProjectDetail }) {
             </tbody>
           </table>
         )}
-        <p className="muted small">未检索到不代表未发生；覆盖受网络与来源限制。</p>
       </section>
     </>
   );
@@ -473,48 +491,74 @@ function MonitorCadence({ detail }: { detail: ProjectDetail }) {
 
 /** 行业环境 reads the same AI cross-analysis as the cover; each part renders nothing until it exists. */
 function IndustryInsight({ projectId, revision, part, onSettled }: { projectId: string; revision: string; part: "industry" | "technology"; onSettled?: () => void }) {
-  const { data, loading } = useInsight(projectId, revision);
+  const { data, loading, error, reload } = useAsync(() => api.insight(projectId), [projectId, revision]);
   const settled = !loading || !!data;
   useEffect(() => { if (settled) onSettled?.(); }, [settled]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!settled) return null;  // the frame shows nothing below until this settles, so there is nothing to push
-  return part === "industry" ? <IndustryJudgment view={data} /> : <TechnologyJudgment view={data} />;
+  if (!settled) return null; // Analysis sections settle in order; the independent news list stays available.
+  if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存判断</button></div>;
+  if(!data?.record)return <p className="scope-quiet">暂无分析判断。</p>;
+  return part === "industry" ? <IndustryJudgment view={data} compact /> : <TechnologyJudgment view={data} compact />;
 }
 
 /** 外部信息 at a glance (8945) and its navigation: one cell per page with the count of what was collected for it. */
-const STRIP: { page: Tab; label: string; cats: Category[]; always?: boolean }[] = [
+const STRIP: { page: Tab; label: string; cats: Category[]; always: true }[] = [
   { page: "external", label: "公司进展", cats: ["company"], always: true },
-  { page: "trials", label: "临床", cats: ["trial"] },
-  { page: "papers", label: "论文", cats: ["paper"] },
-  { page: "patents", label: "专利与注册", cats: ["patent"] },
+  { page: "trials", label: "临床", cats: ["trial"], always: true },
+  { page: "papers", label: "论文", cats: ["paper"], always: true },
+  { page: "patents", label: "专利与注册", cats: ["patent"], always: true },
   { page: "competition", label: "竞品动态", cats: ["competitor"], always: true },
-  { page: "industry", label: "行业与政策", cats: ["industry", "policy"], always: true },
+  { page: "chain", label: "产业链动态", cats: [], always: true },
+  { page: "industry", label: "宏观环境", cats: ["industry", "policy"], always: true },
 ];
 
-function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
-  const cells = STRIP.map((s) => ({ ...s, n: s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0) })).filter((s) => s.always || s.n > 0 || s.page === page);
+export function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
+  const {data:plan,error,loading}=useAsync(()=>api.monitoringPlan(detail.project.id),[detail.project.id,workRevision(detail)]);
+  const chainCount=plan&&!error&&!loading?scopeReports(plan,scopeRelations(plan,detail.project.id,'chain')).length:null;
+  const cells = STRIP.map((s) => {
+    const collection=externalCollection(detail, s.page==='chain'?['chain']:s.page==='industry'?['industry','policy','technology']:s.cats);
+    return ({ ...s,
+    n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0),
+    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):s.cats.every(c => !(detail.counts[c]??0))?collection.label:undefined,
+    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':s.cats.every(c => !(detail.counts[c]??0))?`本栏目暂无收录。${collection.description}`:undefined,
+  }); });
   return <PageStrip label="外部信息分区" page={page} go={go} cells={cells} />;
 }
 
 /** One strip for every multi-page section: each cell is a page and the count of what it reads. */
-function PageStrip({ label, page, go, cells }: { label: string; page: Tab; go: (page: Tab) => void; cells: { page: Tab; label: string; n: number }[] }) {
+export function PageStrip({ label, page, go, cells }: { label: string; page: Tab; go: (page: Tab) => void; cells: { page: Tab; label: string; n: number|null; note?:string; hint?:string }[] }) {
   return <nav className="cat-strip" aria-label={label}>
     {cells.map((c) => <button key={c.page} className={page === c.page ? "on" : ""} aria-current={page === c.page ? "page" : undefined}
-      onClick={() => go(c.page)}><span>{c.label}</span><b>{c.n}</b></button>)}
+      title={c.hint} onClick={() => go(c.page)}><span>{c.label}</span><b>{c.n??'—'}{c.note && <small className="cat-count-note">{c.note}</small>}</b></button>)}
   </nav>;
 }
 
-/** 行业环境 reveals top to bottom: a block appears only once the one above has settled, so nothing already on screen
- * is pushed down by a slower block arriving above it. */
-function IndustryFrame({ projectId, revision, insightRevision, details }: { projectId: string; revision: string; insightRevision: string; details: ReactNode }) {
-  const [track, setTrack] = useState(false);
-  const [judged, setJudged] = useState(false);
-  const [tech, setTech] = useState(false);
-  useEffect(() => { setTrack(false); setJudged(false); setTech(false); }, [projectId]);
-  return <div className="tab-frame industry-frame">
-    <TrackBoard projectId={projectId} revision={revision} onSettled={() => setTrack(true)} />
-    {track && <IndustryInsight projectId={projectId} revision={insightRevision} part="industry" onSettled={() => setJudged(true)} />}
-    {track && judged && <TechRoutes projectId={projectId} revision={insightRevision} onSettled={() => setTech(true)} />}
-    {track && judged && tech && <IndustryInsight projectId={projectId} revision={insightRevision} part="technology" />}
-    {track && judged && tech && <Reference items={[{ key: "industry", title: "行业细节：市场指标、资本动态、政策与赛道报道", note: "上方结论的依据", body: details }]} />}
+export const MACRO_TABS = [{id:'industry',label:'行业监控'},{id:'policy',label:'政策监控'},{id:'technology',label:'技术监控'}] as const;
+export type MacroTab = typeof MACRO_TABS[number]['id'];
+export const macroTab = (value:string|null):MacroTab => MACRO_TABS.find(t=>t.id===value)?.id??'industry';
+export function MacroEnvironment({detail}: {detail:ProjectDetail}) {
+  const [params,setParams]=useSearchParams();
+  const selected=macroTab(params.get('macro'));
+  const select=(id:MacroTab)=>setParams(previous=>{const next=new URLSearchParams(previous);next.set('tab','industry');next.set('macro',id);return next;});
+  const projections=detail.capabilities?.insight_projections===true;
+  const details=selected==='technology'?<ScopeReading key={detail.project.id} detail={detail} scope="science"/>:<IndustryView key={`${detail.project.id}-${selected}`} detail={detail} part={selected} compact={projections}/>;
+  return <section aria-label="宏观环境">
+    <nav className="macro-navigation" role="tablist" aria-label="宏观环境分区">{MACRO_TABS.map((t,i)=><button key={t.id} id={`macro-${t.id}`} role="tab" aria-selected={t.id===selected} aria-controls="macro-panel" tabIndex={t.id===selected?0:-1} onClick={()=>select(t.id)} onKeyDown={e=>{
+      const index=e.key==='Home'?0:e.key==='End'?2:e.key==='ArrowRight'?(i+1)%3:e.key==='ArrowLeft'?(i+2)%3:-1;
+      if(index<0)return;e.preventDefault();select(MACRO_TABS[index].id);document.getElementById(`macro-${MACRO_TABS[index].id}`)?.focus();
+    }}>{t.label}</button>)}</nav>
+    <div id="macro-panel" role="tabpanel" aria-labelledby={`macro-${selected}`} key={selected}>
+      <header className="scope-reading-head macro-reading-head"><div><span className="eyebrow">宏观环境 · 已收录信息</span><h2>{MACRO_TABS.find(t=>t.id===selected)?.label}</h2><p>{selected==='industry'?'从需求、价格与资本变化，理解公司的外部环境。':selected==='policy'?'先看政策记录与适用影响，再核对文件和报道。':'结合技术路线判断与材料提及趋势，观察研究和产业信号。'}</p></div></header>
+      {projections?<IndustryFrame projectId={detail.project.id} revision={`${detail.project.last_external_at??''}|${detail.jobs.map(j=>`${j.id}:${j.status}`).join('|')}`} insightRevision={insightRevision(detail)} part={selected} details={details}/>:<div className="macro-reading">{selected==='technology' && <p className="muted small">当前版本尚无技术路线分析；以下保留已纳入的技术关联报道。</p>}{details}</div>}
+    </div>
+  </section>;
+}
+
+/** Only the selected subject mounts. Stored news never waits for analysis to finish. */
+export function IndustryFrame({ projectId, revision, insightRevision, details, part='industry' }: { projectId: string; revision: string; insightRevision: string; details: ReactNode; part?:MacroTab }) {
+  return <div className="tab-frame industry-frame macro-reading">
+    {part==='industry' && <><IndustryInsight projectId={projectId} revision={insightRevision} part="industry"/><TrackBoard projectId={projectId} revision={revision} keys={['demand','capital','price']}/></>}
+    {part==='policy' && <TrackBoard projectId={projectId} revision={revision} keys={['policy']}/>}
+    {part==='technology' && <><IndustryInsight projectId={projectId} revision={insightRevision} part="technology"/><TechRoutes projectId={projectId} revision={insightRevision}/></>}
+    {details}
   </div>;
 }

@@ -27,7 +27,9 @@ def loop(tmp_path):
         actor="system", origin="system", visibility="public")
     pipeline.store.enqueue(p.id, "external")
     execution = JobExecution(pipeline.store, pipeline.store.claim())
-    return PublicMonitor(pipeline, execution, Search(), None)
+    result = PublicMonitor(pipeline, execution, Search(), None)
+    result.record_reviewer = synthetic_review
+    return result
 
 
 def test_monitor_context_exposes_only_public_scope(loop):
@@ -176,6 +178,7 @@ def test_collection_job_does_not_reuse_judgment_before_search(loop):
     loop.store.finish(loop.execution.job["id"], lease_token=loop.execution.job["lease_token"])
     loop.store.enqueue(loop.project_id, "external")
     fresh = PublicMonitor(loop.pipeline, JobExecution(loop.store, loop.store.claim()), Search(), None)
+    fresh.record_reviewer = synthetic_review
     assert fresh.tool("pw_context", {})["judgment"]["reused"] is False
     fresh.collecting()  # Context cannot prematurely lock collection.
     result = fresh.tool("pw_judge", {"analysis_json": "{}"})
@@ -349,6 +352,10 @@ def test_empty_relation_routing_explains_defer_not_retry(loop):
 
 
 def judge(loop, ref):
+    # These lifecycle tests use a synthetic reviewer; semantic behavior is tested
+    # separately with the real review contract and journalled gateway.
+    if not getattr(loop, 'judgment_reviewer', None):
+        loop.judgment_reviewer = synthetic_review
     for row in loop.pending_assessments(loop.frozen()):
         loop.tool("pw_assess", {"watch_id": row["watch_id"], "refs": row["refs"],
                                "status": "insufficient", "note": "合成测试：仍需后续公开材料"})
@@ -356,6 +363,21 @@ def judge(loop, ref):
         "headline": "取得许可，量产仍在计划中", "operations": {
             "verdict": "improving", "summary": "取得许可，量产仍在计划中",
             "for": [{"text": "取得许可，量产仍在计划中", "refs": [ref]}]}})})
+
+
+def synthetic_review(payload):
+    if payload.get('phase') == 'consistency':
+        return {'consistent': True, 'reason': 'Synthetic consistency fixture', 'conflicts': []}
+    if not payload['evidence']:
+        return {'checks': [{'field': path, 'status': 'not_factual', 'reason': 'Synthetic unknown-only fixture',
+                            'evidence': []} for path in payload['fields']]}
+    checks = []
+    for path in payload['fields']:
+        allowed = payload.get('bound_evidence', {}).get(path, payload['evidence'])
+        ref = next(r for r in allowed if payload['evidence'][r].get('context'))
+        checks.append({'field': path, 'status': 'supported', 'reason': 'Synthetic contract fixture',
+                       'evidence': [{'ref': ref, 'quote': payload['evidence'][ref]['context']}]})
+    return {'checks': checks}
 
 
 def test_judgment_cannot_skip_pending_public_assessments(loop):
@@ -494,6 +516,7 @@ def test_stopped_round_new_publication_wakes_then_naturally_stops_again(loop):
         assert not ctx["due_ids"]
         assert ctx["explorations"][watch["id"]]["generation"] == first["generation"]
     # Ordinary incremental collection, not forcing a sleeping topic to explore.
+    fresh.record_reviewer = synthetic_review
     fresh.collectors.web_search = lambda *a, **kw: [{
         "url": "https://example.com/new-permit", "title": "合成公司激光模组许可范围扩大",
         "snippet": "合成公司激光模组许可范围扩大，覆盖新增适用场景。",
@@ -764,6 +787,7 @@ def test_official_dsh_monitor_tool_loop(loop, tmp_path, repair_missing_text):
 
     calls = []
     searches = []
+    reviews = []
     def search_transport(*args):
         searches.append(1)
         return Response(200, {}, json.dumps({"results": [{"title": "激光模组取得许可",
@@ -774,6 +798,13 @@ def test_official_dsh_monitor_tool_loop(loop, tmp_path, repair_missing_text):
     watch = loop.watches()[0]
     def scripted(method, url, headers, raw, timeout):
         payload = json.loads(raw)
+        if 'tools' not in payload:
+            review_payload = json.loads(payload['messages'][-1]['content'])
+            reviews.append(review_payload)
+            review = synthetic_review(review_payload)
+            return Response(200, {}, json.dumps({'choices': [{'message': {'role': 'assistant',
+                'content': json.dumps(review)}, 'finish_reason': 'stop'}],
+                'usage': {'prompt_tokens': 10, 'completion_tokens': 5}}).encode())
         assert {t["function"]["name"] for t in payload["tools"]} == set(loop.tools)
         record_schema = next(t["function"]["parameters"] for t in payload["tools"]
                              if t["function"]["name"] == "pw_record")
@@ -818,5 +849,19 @@ def test_official_dsh_monitor_tool_loop(loop, tmp_path, repair_missing_text):
     result = run_dsh(loop, gateway, Path(os.environ["PW_DSH_TEST_RUNTIME"]), tmp_path / "sdk", timeout=120)
     assert len(calls) == 9 + int(repair_missing_text) and len(searches) == 1
     assert result["explorations"][watch["id"]]["state"] == "stopped"
-    assert loop.execution.usage()["model"]["completed"] == len(calls)
+    assert [r['phase'] for r in reviews if r.get('purpose') != 'public_record_admission'] == ['fields', 'fields', 'consistency']
+    assert all(r['phase'] == 'fields' for r in reviews if r.get('purpose') == 'public_record_admission')
+    assert loop.execution.usage()["model"]["completed"] == len(calls) + len(reviews)
     assert sum(e["tool"] == "pw_judge" for e in loop.state["events"]) == 1
+
+
+def test_monitor_finish_reports_deferred_scope_as_partial(loop):
+    _, _, ref = collect(loop)
+    judge(loop, ref)
+    loop.tool("pw_revise", {"changes_json": "[]", "reason": "保持范围"})
+    loop.state["scope_projection"] = {"admitted_count": 0, "deferred_count": 1,
+                                      "deferred": [{"record_key": "synthetic", "reason": "capacity_limit"}]}
+    result = loop.tool("pw_finish", {"reason": "本轮完成"})
+    assert result["status"] == "partial"
+    assert result["monitoring_scope"]["deferred_count"] == 1
+    assert loop.execution.read_checkpoint("dsh_coverage")["partial"] is True

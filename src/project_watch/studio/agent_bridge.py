@@ -228,12 +228,80 @@ class AgentClient:
             'expected_version': expected_version, 'idempotency_key': idempotency_key})
 
 
-def client_from_env() -> AgentClient:
+class InstanceAgentClient:
+    """An unprivileged connection until the owner binds project grants in the UI."""
+
+    def __init__(self, path, *, transport=None):
+        from pathlib import Path
+
+        self.path = Path(path)
+        self.selected = None
+        self.transport = transport or _transport
+
+    def _config(self):
+        try:
+            config = json.loads(self.path.read_text(encoding='utf-8'))
+            if config['mode'] != 'instance' or not isinstance(config['projects'], dict):
+                raise ValueError('invalid connection')
+            if config.get('desktop_marker'):
+                from pathlib import Path
+
+                from project_watch.studio.desktop import existing_url
+
+                config['url'] = existing_url(Path(config['desktop_marker']))
+            # Validate origin before any network access; check identity before sending grants.
+            AgentClient(config['url'], config['instance_id'], 'validation', 'pwa_validation')
+            status, raw = self.transport('GET', config['url'].rstrip('/') + '/api/studio/agent/runtime', {}, None)
+            runtime = json.loads(raw)
+            if status != 200 or runtime.get('instance_id') != config['instance_id'] or runtime.get('schema_version') != 1:
+                raise ValueError('changed instance')
+            return config, runtime
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise AgentClientError('连接不可用或实例身份改变；请打开 ProjectWatch 并重新核对连接') from exc
+
+    def runtime(self):
+        return self._config()[1]
+
+    def _client(self, config, project_id):
+        grant = config['projects'].get(project_id)
+        if not grant:
+            raise AgentClientError('请先在 ProjectWatch 授权项目，再调用 select_project；未读取任何项目资料')
+        return AgentClient(config['url'], config['instance_id'], project_id, grant['token'], transport=self.transport)
+
+    def authorized_projects(self):
+        config, _ = self._config()
+        result = []
+        for project_id in config['projects']:
+            try:
+                self._client(config, project_id).project()
+            except AgentClientError:
+                continue
+            result.append({'project_id': project_id, 'name': config['projects'][project_id]['name']})
+        return {'projects': result, 'selected_project_id': self.selected if any(p['project_id'] == self.selected for p in result) else None}
+
+    def select_project(self, project_id):
+        config, _ = self._config()
+        result = self._client(config, project_id).project()
+        self.selected = project_id
+        return result
+
+    def __getattr__(self, name):
+        if name.startswith('_') or not callable(getattr(AgentClient, name, None)):
+            raise AttributeError(name)
+        def invoke(*args, **kwargs):
+            config, _ = self._config()
+            return getattr(self._client(config, self.selected), name)(*args, **kwargs)
+        return invoke
+
+
+def client_from_env() -> AgentClient | InstanceAgentClient:
     if os.environ.get('PROJECT_WATCH_AGENT_CONFIG'):
         from pathlib import Path
 
         try:
             config = json.loads(Path(os.environ['PROJECT_WATCH_AGENT_CONFIG']).read_text(encoding='utf-8'))
+            if config.get('mode') == 'instance':
+                return InstanceAgentClient(os.environ['PROJECT_WATCH_AGENT_CONFIG'])
             if config.get('desktop_marker'):
                 from project_watch.studio.desktop import existing_url
 
@@ -263,7 +331,8 @@ def build_studio_mcp_server(client: AgentClient):
         raise RuntimeError('Install the optional "mcp" extra for the Studio bridge') from exc
 
     server = MCPServer("ProjectWatch Studio", instructions=(
-        "Bound to one local Studio instance and project. Read configuration version before writing. "
+        "Bound to one local Studio instance. If available, use authorized_projects and select_project first. "
+        "Project access requires owner approval in ProjectWatch. Read configuration version before writing. "
         "Status changes are saved, not searches or completed collection. No arbitrary HTTP or SQL tools."
     ))
 
@@ -277,6 +346,17 @@ def build_studio_mcp_server(client: AgentClient):
     def studio_runtime() -> dict[str, object]:
         """Read this instance's implemented capabilities. No network search."""
         return invoke(client.runtime)
+
+    if isinstance(client, InstanceAgentClient):
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+        def authorized_projects() -> dict[str, object]:
+            """List only owner-approved, still-valid project grants. No global project discovery."""
+            return invoke(client.authorized_projects)
+
+        @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+        def select_project(project_id: str) -> dict[str, object]:
+            """Select an already authorized project for subsequent tools; grants no new permissions."""
+            return invoke(client.select_project, project_id)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def monitor_health() -> dict[str, object]:

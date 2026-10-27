@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import xml.etree.ElementTree as ET
+from datetime import UTC
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -741,6 +742,8 @@ def test_different_amounts_rounds_or_far_apart_dates_never_merge():
 
 
 def test_new_report_joins_existing_event_and_upgrades_importance(tmp_path):
+    from datetime import datetime, timedelta
+
     from project_watch.repository import ProjectRepository
     from project_watch.studio.pipeline import Pipeline
     from project_watch.studio.settings import SettingsStore
@@ -759,11 +762,13 @@ def test_new_report_joins_existing_event_and_upgrades_importance(tmp_path):
         store.save_triage([{"id": item["id"], "relevant": True, "importance": importance,
                             "summary": title, "impact": "影响" if importance == "major" else ""}])
 
-    add("a", "光启视界获某车企量产定点", "notable", "2026-10-05T08:00:00+00:00")
+    # Keep both reports inside the production lookback window as the calendar advances.
+    today = datetime.now(UTC)
+    add("a", "光启视界获某车企量产定点", "notable", (today - timedelta(days=2)).isoformat())
     pipeline.cluster(project.id, llm, lambda _s: None)
     [event] = store.list_events(project_id=project.id)
     store.set_event_status(event["id"], "read")
-    add("b", "光启视界获某车企量产定点，首年订单可期", "major", "2026-10-06T08:00:00+00:00")
+    add("b", "光启视界获某车企量产定点，首年订单可期", "major", (today - timedelta(days=1)).isoformat())
     pipeline.cluster(project.id, llm, lambda _s: None)
     [event] = store.list_events(project_id=project.id)
     assert event["source_count"] == 2 and event["importance"] == "major"

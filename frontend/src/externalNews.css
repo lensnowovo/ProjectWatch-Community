@@ -1,0 +1,32 @@
+/* External information: quiet analysis above, the shared news stream below. */
+.external-news { min-width:0; margin-top:var(--s5); padding-top:var(--s5); border-top:1px solid var(--line-strong); }
+.external-news-head { display:flex; justify-content:space-between; align-items:baseline; gap:16px; }
+.external-news-head h3 { margin:0; font:600 18px/1.5 var(--serif); color:var(--ink); }
+.external-news-head p { margin:6px 0 0; color:var(--muted); font-size:12px; }
+.external-news-filters { justify-content:space-between; margin:18px 0 24px; }
+.external-news-tabs { display:flex; gap:6px; }
+.external-news-tabs button { padding:6px 14px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--muted); font:inherit; font-size:13px; cursor:pointer; }
+.external-news-tabs button:hover { background:var(--paper-2); color:var(--ink); }
+.external-news-tabs button.on { color:var(--ink); background:var(--paper-2); border-color:var(--line); }
+.external-news .item-body { min-width:0; }
+.scope-reports > .items { margin-top:20px; }
+/* Match rows use the same stable reading surface, without inventing ratings or actions. */
+.scope-report-evidence { line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+.external-news-legacy { margin-top:var(--s5); padding-top:var(--s4); border-top:1px solid var(--line); }
+.external-news-legacy h4 { margin:0; font-size:14px; }
+.external-news-legacy .item { display:block; }
+.external-news-error { padding:12px 0; color:var(--warn); font-size:13px; }
+.external-analysis-details { margin:16px 0; padding:14px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.external-analysis-details > summary { cursor:pointer; font-size:14px; color:var(--ink-2); }
+.external-analysis-details > summary > span { margin-left:10px; }
+.external-analysis-details[open] > summary { margin-bottom:20px; }
+.chart-evidence { margin-top:14px; font-size:12px; color:var(--muted); }
+.chart-evidence > summary { cursor:pointer; width:fit-content; }
+.chart-evidence[open] > summary { margin-bottom:14px; }
+.chart-evidence .jd-cols { color:var(--ink-2); }
+.external-news button:focus-visible, .chart-evidence > summary:focus-visible, .external-analysis-details > summary:focus-visible { outline:2px solid var(--brass); outline-offset:4px; }
+@media(max-width:600px) {
+  .external-news-head { align-items:flex-start; flex-wrap:wrap; gap:8px; }
+  .external-news-filters { gap:12px; flex-wrap:wrap; }
+  .external-analysis-details > summary > span { display:block; margin:5px 0 0 16px; }
+}

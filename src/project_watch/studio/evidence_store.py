@@ -80,7 +80,7 @@ class EvidenceStore:
 
         self.dependencies = DependencyStore(store)
 
-    def save(self, evidence: EvidenceInput, *, db=None) -> dict:
+    def save(self, evidence: EvidenceInput, *, db=None, advance_head: bool = True) -> dict:
         # Hash stored text/coordinates and disclosure/provenance together. A new
         # OCR method or changed metadata never silently mutates an old quote.
         record = evidence.model_dump(mode="json")
@@ -95,7 +95,7 @@ class EvidenceStore:
                              (evidence.project_id, evidence.source_key, digest, evidence.extraction_version)).fetchone()
             if row:
                 stored = json.loads(row[0])
-                if previous is None or json.loads(previous[0])["id"] != stored["id"]:
+                if advance_head and (previous is None or json.loads(previous[0])["id"] != stored["id"]):
                     self._head(connection, stored)
                     self.dependencies.on_saved(stored, json.loads(previous[0]) if previous else None, db=connection)
                 return stored
@@ -105,8 +105,9 @@ class EvidenceStore:
                        "VALUES (?,?,?,?,?,?,?,?)",
                        (record["id"], evidence.project_id, evidence.source_key, digest, evidence.extraction_version,
                         evidence.visibility, _json(record), record["created_at"]))
-            self._head(connection, record)
-            self.dependencies.on_saved(record, json.loads(previous[0]) if previous else None, db=connection)
+            if advance_head:
+                self._head(connection, record)
+                self.dependencies.on_saved(record, json.loads(previous[0]) if previous else None, db=connection)
             return record
         if db is not None:
             return write(db)

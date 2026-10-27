@@ -160,7 +160,7 @@ def advice(job: dict) -> dict:
                 "todo": "点“查看并重发”，确认只重发这几次请求；也可收起提醒，任务仍保留为未完成。", "action": "recover"}
     if job.get('runtime', {}).get('state') == 'partial':
         return {'why': job['runtime'].get('label') or '部分内容已完成，其余暂未取得结果。',
-                'todo': '已有结果可继续查看。请查看来源状态，确认缺口后再决定是否补全；不会自动重跑。',
+                'todo': '无需操作即可查看已有结果；未覆盖的信息仍保留说明，可按需查看，不会自动重跑。',
                 'action': 'none'}
     if error.startswith(("dsh_model_timeout", "dsh_interrupted_or_deadline")):
         return {"why": "研究执行器等待超时，本轮没有完成。已收到的请求结果和用量记录保留。",

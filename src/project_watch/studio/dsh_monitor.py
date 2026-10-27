@@ -7,7 +7,7 @@ from contextlib import closing
 from itertools import zip_longest
 from typing import ClassVar
 
-from project_watch.studio import insight
+from project_watch.studio import dsh_judgment_review, insight
 from project_watch.studio.dsh_bootstrap import (
     PublicBootstrap,
     ToolValidationError,
@@ -65,6 +65,7 @@ numbered_same_as/same_as/context_same_as/excerpt_same_as/suggested_quote_same_as
 补充官方佐证或明确旧事件日期不等于公司业务推进；没有新业务阶段用 unchanged。
 context.judgment.reused=true 时已有判断仍适用，直接 pw_revise，不重写 analysis_json。
 pw_judge 提交 analysis_json（JSON 字符串），引用 context 的 numbered 编号，应用下列综合判断格式。
+提交的判断会单独复核与证据的一致性。按返回的字段和证据修正；每轮最多复核两个不同草稿，复核同样计入模型预算。
 pw_revise 提交 changes_json（JSON 数组）和 reason。没有必要改范围时提交 [] 并说明理由。
 允许动作 note/finish/explore/reduce/set_exit；每项必须有 watch_id、why、refs（事件编号）。
 note/finish 的 text 是有来源的回答；finish 仅用于有明确 exit_rule 且已回答的专题。
@@ -86,12 +87,18 @@ class PublicMonitor(PublicBootstrap):
     tools = (*PublicBootstrap.tools, "pw_context", "pw_explore", "pw_assess", "pw_judge", "pw_revise")
     task = "完成持续公开探索、判断、监控范围修订与本轮收口。先查看 pw_context。"
     bootstrap_projection = False
+    tool_phases: ClassVar = {"pw_context": "read", "pw_explore": "collect",
+                            "pw_assess": "judge", "pw_judge": "judge",
+                            "pw_revise": "revise", "pw_finish": "revise"}
     labels: ClassVar = {"pw_context": "DSH 整理公开证据", "pw_explore": "DSH 检索公开信息：专题",
               "pw_assess": "更新跟踪问题：DSH", "pw_judge": "深度分析：DSH 综合判断",
               "pw_revise": "修订监控方案：DSH", "pw_finish": "DSH 结束本轮探索"}
 
     def __init__(self, *args, analysis_only=False, **kwargs):
         super().__init__(*args, **kwargs)
+        if (self.state.get('judged') and
+                self.state.get('judgment_review_version') != dsh_judgment_review.VERSION):
+            raise HttpError('judgment_review_required')
         self.analysis_only = analysis_only
         generator = self.pipeline.insight_generator
         if generator is None:
@@ -196,6 +203,10 @@ class PublicMonitor(PublicBootstrap):
         self.collecting()
         return super().pw_search(args)
 
+    def pw_collect(self, args):
+        self.collecting()
+        return super().pw_collect(args)
+
     def pw_read(self, args):
         self.collecting()
         return super().pw_read(args)
@@ -208,9 +219,22 @@ class PublicMonitor(PublicBootstrap):
 
     def pw_explore(self, args):
         self.collecting()
+        from project_watch.studio import collection_dsh
+
         wid, query = text_arg(args, "watch_id"), text_arg(args, "query", 300)
         due = {w["id"]: w for w in self.plan.due(self.project_id, cycle=self.execution.job["id"])
                if w["visibility"] == "public"}
+        collection = collection_dsh.current_round(self)
+        receipt_scheduled = bool(collection and collection['plan'].get('history_binding'))
+        if receipt_scheduled:
+            # Host success may already have advanced cadence. Its admitted
+            # watch remains readable this round without another dispatch.
+            for watch in self.plan.items(self.project_id):
+                if (watch['visibility'] == 'public' and watch['status'] != 'retired'
+                        and any(u['target_id'] == 'watch:' + watch['id'] and u['source'] == 'search'
+                                and u['query_version'] == 'watch:' + str(watch['lifecycle_version'])
+                                and u['disposition'] == 'pending' for u in collection['plan']['units'])):
+                    due[watch['id']] = watch
         if wid not in due or query not in due[wid]["queries"]:
             raise ValueError("topic not due or query outside scope")
         watch = due[wid]
@@ -218,14 +242,28 @@ class PublicMonitor(PublicBootstrap):
         if key in self.state.get("explored", {}):
             return self.state["explored"][key]
         managed = self.plan.explorations.managed(watch)
-        if managed and not self.plan.explorations.start(watch, self.execution.job["id"]):
+        host_scheduled = receipt_scheduled and any(
+            u['target_id'] == 'watch:' + wid and u['query'] == query and u['source'] == 'search'
+            and u['query_version'] == 'watch:' + str(watch['lifecycle_version'])
+            and u['disposition'] == 'pending' for u in collection['plan']['units'])
+        if managed and not host_scheduled and not self.plan.explorations.start(watch, self.execution.job["id"]):
             raise ValueError("topic not due")
         try:
-            result = super().pw_search({"query": query, "category": "company"})
+            from project_watch.studio.collection_scope import watch_direction
+
+            result = (collection_dsh.search(self, query, watch_direction(watch), target_id='watch:' + wid)
+                      if collection_dsh.current_round(self) is not None
+                      else super().pw_search({"query": query, "category": "company"}))
         except Exception:
             self.plan.explorations.hold_cycle(self.project_id, self.execution.job["id"], "source_failure")
             raise
-        if self.plan.mark_query(wid, query, success=True, lifecycle_version=str(watch["lifecycle_version"])) and managed:
+        if result.get('error'):
+            reason = 'request_budget' if result['error'] == 'request_budget' else 'source_failure'
+            self.plan.explorations.hold_cycle(self.project_id, self.execution.job['id'], reason)
+            return result
+        complete = (self.plan.mark_query(wid, query, success=True, lifecycle_version=str(watch["lifecycle_version"]))
+                    if (not receipt_scheduled or (not host_scheduled and watch.get('scope_kind') != 'relation')) else False)
+        if complete and managed:
             self.plan.explorations.collected(wid, self.execution.job["id"])
         self.state.setdefault("explored", {})[key] = result
         return result
@@ -235,23 +273,37 @@ class PublicMonitor(PublicBootstrap):
         if not self.state["records"] or self.state.get("published") == stamp:
             return
         # Reuse only deterministic projections, not bootstrap orchestration.
-        super().pw_finish({"gaps": {k: "持续监控本轮仅补充新增信息" for k in
+        result = super().pw_finish({"gaps": {k: "持续监控本轮仅补充新增信息" for k in
                                    ("company", "products", "people", "competitor", "industry", "policy")}})
+        self.state["profile_projection"] = result.get("profile_projection")
+        self.state["scope_projection"] = result.get("monitoring_scope")
+        self.state["record_admission"] = result.get("record_admission")
         self.state["finished"] = None
         self.state["published"] = stamp
         self.save()
 
+    def public_fact_entries(self):
+        """Number current public facts; historical facts are not judgment inputs."""
+        profile = self.store.get_public_profile(self.project_id) or {}
+        # Retained raw records may have failed admission. Only the reviewed
+        # projection is a current company fact; original sources stay available.
+        facts = list(profile.get("facts") or [])
+        current, _historical = self.partition_public_facts(facts)
+        entries = []
+        for fact in current:
+            ref = fact["refs"][0]
+            version = self.store.evidence.get(self.project_id, ref["evidence_version_id"], include_internal=False)
+            entries.append({"kind": "public", "text": fact["text"], "title": ref.get("title", ""),
+                "context": ref["quote"], "url": ref["url"], "source": ref.get("source", ""),
+                "date": ref.get("published_at", ""), "read_scope": version["read_scope"],
+                "evidence_version_id": ref["evidence_version_id"]})
+        return entries
+
     def context(self, *, event_ids=None):
         numbered = {}
         watches = self.watches()
-        for fact in (self.store.get_public_profile(self.project_id) or {}).get("facts", []):
-            for ref in fact.get("refs", []):
-                if not ref.get("url"):
-                    continue
-                numbered[f"W{len(numbered) + 1}"] = {"kind": "public", "text": fact["text"],
-                    "title": ref.get("title", ""), "context": ref.get("quote", ""),
-                    "url": ref["url"], "source": ref.get("source", ""), "date": ref.get("published_at", "")}
-                break
+        for entry in self.public_fact_entries():
+            numbered[f"W{len(numbered) + 1}"] = entry
         recent = self.store.list_events(project_id=self.project_id, limit=200)
         rows_by_event = self.source_rows()
         if event_ids is None:
@@ -301,6 +353,8 @@ class PublicMonitor(PublicBootstrap):
                 "event_ids": [e["id"] for e in events], "recent_versions": recent_versions}
 
     def pw_context(self, args):
+        from project_watch.studio import collection_dsh
+
         self.publish()
         self._source_rows = self.source_rows()
         self.refresh()
@@ -320,6 +374,10 @@ class PublicMonitor(PublicBootstrap):
         omitted = {wid: sum(e["id"] not in visible for e in events)
                    for wid, events in pending_snapshot.items()}
         return {**ctx, "pending_evidence_omitted": {wid: count for wid, count in omitted.items() if count},
+                "profile_projection": self.state.get("profile_projection"),
+                "record_admission": self.state.get("record_admission"),
+                "collection": collection_dsh.coverage(self),
+                "collected_sources": collection_dsh.catalog(self, offset=args.get('collection_offset', 0)),
                 "batch_complete": not any(omitted.values()),
                 "scope": self.plan.scope_groups(ctx["watches"]),
                 "assessable_question_ids": [w["id"] for w in ctx["watches"]
@@ -343,7 +401,8 @@ class PublicMonitor(PublicBootstrap):
     def judgment_signature(self, ctx):
         # Exact inputs/config/policy only. A broader semantic cache could hide
         # new evidence or a human edit. No keys or raw settings are persisted.
-        return digest([self.binding, self.prompt, ctx["fingerprint"]])
+        return digest([self.binding, self.prompt, ctx["fingerprint"],
+                       dsh_judgment_review.VERSION, dsh_judgment_review.SYSTEM])
 
     def reuse_judgment(self, ctx):
         if self.state.get("judged") or self.pending_assessments(ctx):
@@ -356,6 +415,7 @@ class PublicMonitor(PublicBootstrap):
             return False
         self.state["judged"] = ctx["fingerprint"]
         self.state["judged_numbered"] = digest(ctx["numbered"])
+        self.state['judgment_review_version'] = dsh_judgment_review.VERSION
         self.state["judgment_gaps"] = previous["analysis"].get("gaps", [])
         return True
 
@@ -511,6 +571,7 @@ class PublicMonitor(PublicBootstrap):
         analysis = self.pipeline.insight_generator.normalize(raw, ctx["numbered"])
         if not analysis["cited"]:
             raise ValueError("judgment needs valid citations")
+        review = dsh_judgment_review.verify(self, analysis, ctx)
         previous = insight.load(self.store, self.project_id) or {}
         if previous.get("fingerprint") != ctx["fingerprint"] or previous.get("analysis") != analysis:
             insight.save(self.store, self.project_id, analysis, ctx, model="dsh-public")
@@ -519,7 +580,9 @@ class PublicMonitor(PublicBootstrap):
         self.state["judged"] = ctx["fingerprint"]
         self.state["judged_numbered"] = digest(ctx["numbered"])
         self.state["judgment_gaps"] = analysis["gaps"]
+        self.state['judgment_review_version'] = dsh_judgment_review.VERSION
         return {"saved": True, "fingerprint": ctx["fingerprint"], "gaps": analysis["gaps"],
+                "evidence_review": review,
                 "next_tool": "pw_revise"}
 
     def validate_revisions(self, rows, ctx):
@@ -672,10 +735,14 @@ class PublicMonitor(PublicBootstrap):
         return self.state["reviewed"]
 
     def pw_finish(self, args):
+        from project_watch.studio import collection_dsh
+
+        collected = collection_dsh.coverage(self)
         if not self.state.get("judged") or not self.state.get("reviewed"):
             raise ValueError("judgment and revision review required")
         reason = text_arg(args, "reason", 500)
-        self.plan.explorations.finish(self.project_id, self.execution.job["id"], event_filter=self.matches)
+        self.plan.explorations.finish(self.project_id, self.execution.job["id"], event_filter=self.matches,
+            watch_ids={w['id'] for w in self.watches()} if self.topic_projection else None)
         states = self.plan.explorations.view(self.project_id)
         topics = [w["id"] for w in self.watches() if self.plan.explorations.managed(w)]
         stopped = [wid for wid in topics if states.get(wid, {}).get("state") == "stopped"]
@@ -692,6 +759,13 @@ class PublicMonitor(PublicBootstrap):
                  or frozen.get("recent_versions") != current_context["recent_versions"])
         partial = bool(self.state["errors"] or self.state["reviewed"]["counts"]["dropped"]
                        or self.state.get("judgment_gaps") or pending or stale or missing_exit or unfulfilled or unresolved)
+        partial = partial or (collected is not None and collected['status'] != 'complete')
+        scope_projection = self.state.get("scope_projection") or {}
+        partial = partial or bool(scope_projection.get("deferred_count"))
+        admission = self.state.get("record_admission") or {}
+        partial = partial or bool(admission.get("rejected"))
+        projection = self.state.get("profile_projection")
+        partial = partial or bool(projection and projection["status"] != "current")
         summary = (f"本轮{'部分完成' if partial else '完成'}；专题已停止 {len(stopped)} 个，"
                    f"活跃 {len(active)} 个，等待 {len(waiting)} 个。")
         if unresolved:
@@ -699,6 +773,9 @@ class PublicMonitor(PublicBootstrap):
         if unfulfilled:
             summary += f" {len(unfulfilled)} 个结束修订尚未落实。"
         result = {"executor": "dsh", "status": "partial" if partial else "complete",
+                  "profile_projection": projection, "monitoring_scope": scope_projection,
+                  "record_admission": admission,
+                  "collection": collected,
                   "reason": summary, "agent_reason": reason, "revision": self.state["reviewed"],
                   "active_topic_ids": active, "stopped_topic_ids": stopped,
                   "waiting_topic_ids": waiting, "unresolved_topic_ids": unresolved,
@@ -711,6 +788,11 @@ class PublicMonitor(PublicBootstrap):
                   "explorations": {k: v for k, v in states.items() if k in {w["id"] for w in self.watches()}},
                   "coverage_note": "本轮执行完成不代表公开资料完整或所有专题已结束"}
         self.execution.checkpoint("dsh_coverage", {"partial": partial})
+        if self.topic_projection:
+            result.update(mode='topic', topic_judgment=self.state.get('topic_judgment'))
+            self.store.set_state('dsh-topic:' + self.execution.job['id'], json.dumps(result, ensure_ascii=False))
+            self.state['finished'] = result
+            return result
         from project_watch.studio.store import now
 
         previous = (self.execution.read_checkpoint("dsh_previous_judgment") or {}).get("analysis")
@@ -735,6 +817,8 @@ class PublicMonitor(PublicBootstrap):
                 gaps.append(f"{count} {description}")
         if stale:
             gaps.append("判断后证据发生变化，新增内容尚未纳入本轮判断")
+        if projection and projection["status"] != "current":
+            gaps.append("公司档案引用的来源版本已变化，旧档案保留待更新；本轮有效资料单独用于判断")
         gaps = list(dict.fromkeys(gaps))
         stop_reason = "本轮评估与修订已收口。"
         if partial:

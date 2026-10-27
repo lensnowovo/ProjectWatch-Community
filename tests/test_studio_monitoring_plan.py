@@ -42,11 +42,11 @@ def test_import_view_edit_and_revert_keep_a_change_log(tmp_path):
     assert client.patch(f"/api/studio/monitoring-plan/items/{item['id']}", json={"axis": "nonsense"}).status_code == 422
 
 
-def test_system_additions_are_low_cadence_trials_and_cannot_overrule_people(tmp_path):
+def test_system_additions_are_trials_with_explicit_cadence_and_cannot_overrule_people(tmp_path):
     _, client, pid, plan = _app(tmp_path)
     added = plan.add(pid, {**ITEM, "text": "系统发现的新竞品读出", "cadence": "high"}, actor="system", origin="system",
                      reason="竞品读出后新出现")
-    assert added["status"] == "trial" and added["cadence"] == "low"
+    assert added["status"] == "trial" and added["cadence"] == "high"
     background = plan.add(pid, {**ITEM, "text": "系统建议的背景对象", "tier": "background"}, actor="system", origin="system")
     with pytest.raises(PermissionError):
         plan.update(background["id"], {"tier": "core"}, actor="system")  # promotion needs a person
@@ -153,7 +153,7 @@ def test_one_off_ai_suggestions_become_trials_and_skip_projects_with_a_plan(tmp_
     llm = type("L", (), {"ready": True})()
     assert ledger.suggest(Advisor(), llm, pid, {"name": "合成药业"}, {}, None) == 1
     [item] = plan.items(pid)
-    assert item["status"] == "trial" and item["plan_origin"] == "system" and item["cadence"] == "low"
+    assert item["status"] == "trial" and item["plan_origin"] == "system" and item["cadence"] == "medium"
     assert plan.view(pid)["changes"][0]["actor"] == "system"
     # A project that already has a reviewed plan does not get a one-off suggestion round.
     _app2, _c2, pid2, plan2 = _app(tmp_path / "second")
@@ -297,6 +297,11 @@ def test_each_focus_point_has_one_latest_line(tmp_path):
 def test_routine_collection_is_shown_per_section_beside_the_focus_points(tmp_path):
     app, client, pid, _plan = _app(tmp_path)
     store = app.state.studio_store
+    # This fixture represents a historical legacy round, before admission intent
+    # existed. New queued rounds instead override old reports (live-view tests).
+    with store._connect() as db, db:
+        db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1' "
+                   "AND job_id IN (SELECT id FROM studio_jobs WHERE project_id=?)", (pid,))
     store.put_plan(pid, {"company_queries": ["合成药业"], "has_search": False, "has_registry": False,
                          "last_report": {"company": {"checked": 2, "added": 3, "errors": []},
                                          "competitor": {"checked": 0, "added": 0, "errors": ["bing: http_failure"]}}})

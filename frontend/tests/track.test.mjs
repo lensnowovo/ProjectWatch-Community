@@ -12,7 +12,7 @@ test("track board reads stored projection, shows evidence and an accessible char
   assert.match(track, /<title>/);
   assert.match(track, /还没有这类记录/);
   assert.doesNotMatch(track, /核实|核验|dangerouslySetInnerHTML/);
-  assert.match(project, /<TrackBoard projectId=\{projectId\} revision=\{revision\} onSettled=/);
-  // blocks below wait for the ones above to settle, so a slower block never pushes visible content down
-  assert.match(project, /\{track && judged && <TechRoutes/);
+  assert.match(project, /part==='industry' && [^\n]*<TrackBoard projectId=\{projectId\} revision=\{revision\} keys=\{\['demand','capital','price'\]\}/);
+  assert.match(project, /part==='policy' && <TrackBoard[^\n]*keys=\{\['policy'\]\}/);
+  assert.match(project, /part==='technology' && [^\n]*<TechRoutes/); // Each chart mounts only in its own macro tab.
 });

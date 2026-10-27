@@ -5,9 +5,12 @@ import { Figure, Reference, TabSkeleton, VerdictBand } from "./frame";
 import { useToast } from "./motion";
 import { MonitorLoop } from "./monitorLoop";
 import { ErrorNote, relTime, useAsync } from "./ui";
-import { workRevision } from "./workState";
-import { publicLink, RelationScope } from "./relationScope";
-import { MonitorReach } from "./monitorReach";
+import { workRevision, projectWork } from "./workState";
+import { publicLink } from "./relationScope";
+import { MonitorScope } from "./monitorScope";
+import { CollectionSources } from "./CollectionSources";
+import { TopicResearch } from "./TopicResearch";
+import { collectionExecutionLabel } from "./externalCollection";
 
 /** 监控方案: a complete plan grown from a fixed framework — four rings around the company, nine dimensions by
  * whom we watch, each with the default baseline, what is known for this project, and its focus points. */
@@ -25,20 +28,13 @@ type Latest = NonNullable<MonitoringPlanView["latest"]>[string];
 
 /** The project's plan read top to bottom: what we watch, what is new, where it is thin, what needs a decision. */
 export function PlanView({ projectId, company = "", detail }: { projectId: string; company?: string; detail: ProjectDetail }) {
-  const { data, error, loading, reload } = useAsync<MonitoringPlanView>(() => api.monitoringPlan(projectId), [projectId, workRevision(detail)]);
+  const { data, error, loading, reload } = useAsync<MonitoringPlanView>(() => api.monitoringPlan(projectId), [projectId, workRevision(detail), detail.collection_report?.observed_at]);
   const [showSummary, setShowSummary] = useState(false);
   if (loading && !data) return <TabSkeleton label="读取监控方案" />;
   if (!data) return <ErrorNote error={error} />;
   const live = data.items.filter((i) => i.status !== "retired");
   const relations = live.filter((i) => i.scope_kind === "relation");
-  const linked = new Set(relations.map((i) => i.id));
-  // Include nested branches, while keeping orphaned/legacy rows accessible.
-  for (let depth = 0; depth < data.items.length; depth++) {
-    const before = linked.size;
-    data.items.filter((i) => i.scope_kind === "question" && linked.has(i.parent_id ?? "")).forEach((i) => linked.add(i.id));
-    if (before === linked.size) break;
-  }
-  const remaining = live.filter((i) => !linked.has(i.id));
+  const remaining = live.filter((i) => i.scope_kind !== 'relation' && i.scope_kind !== 'question');
   const closed = data.items.filter((i) => i.status === "retired");
   const open = data.changes.filter((c) => !c.reverted_at);
   const meta = data.meta ?? {};
@@ -50,8 +46,11 @@ export function PlanView({ projectId, company = "", detail }: { projectId: strin
   const allChannels = Object.values(data.coverage ?? {}).flat();
   const channels = { on: allChannels.filter((c) => c.state === "on" || c.state === "error").length,
     off: allChannels.filter((c) => c.state === "off").length };
+  const work = projectWork(detail);
+  const itemDetail = (item: PlanItem) => <ItemDetail item={item} latest={data.latest?.[item.id]} module={data.modules[item.id]}
+    moduleLabel={data.module_labels[item.view] ?? ""} labels={data.labels} dims={data.framework} onChanged={reload} />;
   return (
-    <div className="plan-view outline tab-frame">
+    <div className="plan-view outline tab-frame monitor-scope">
       <VerdictBand
         eyebrow={<>监控方案{data.state && data.state.phase !== "empty" && <span className={`plan-phase phase-${data.state.phase}`}
           title={data.state.phase === "stable" ? "连续几轮没有新增或建议；有重大消息或新资料时会自动重新修订" : "每轮更新或新资料后自动修订"}>{data.state.label}</span>}</>}
@@ -62,8 +61,8 @@ export function PlanView({ projectId, company = "", detail }: { projectId: strin
           <Figure label="常规采集" value={channels.on} unit="个来源" note={channels.off ? `${channels.off} 个未开启` : "每轮自动"} />
           <Figure label={relations.length ? "长期关注" : "专项问题"} value={relations.length || live.length} unit="个"
             note={relations.length ? `${live.filter((i) => i.scope_kind === "question").length} 个研究分支` : `核心 ${live.filter((i) => i.tier === "core").length} 个`} />
-          <Figure label="本周新增" value={added} unit="个" note="方案首版之后" />
-          <Figure label="近 7 日有收录" value={data.week?.fresh ?? 0} unit="个" note="已有匹配证据的关注点" />
+          <Figure label="本周新增" value={added} unit="个"  />
+          <Figure label="近 7 日有收录" value={data.week?.fresh ?? 0} unit="个"  />
         </>}>
         {showSummary && <dl className="po-summary">
           {meta.understanding && <div><dt>项目理解</dt><dd>{meta.understanding}</dd></div>}
@@ -73,21 +72,22 @@ export function PlanView({ projectId, company = "", detail }: { projectId: strin
         </dl>}
       </VerdictBand>
 
-      {needs && <section className="po-needs" aria-label="需要你看">
-        <h3>需要你看</h3>
-        {meta.review === "pending" && <ReviewBanner projectId={projectId} count={live.length} onChanged={reload} />}
-        {(data.proposals?.length ?? 0) > 0 && <Proposals proposals={data.proposals} labels={data.labels} onChanged={reload} />}
-      </section>}
-
-      <MonitorLoop detail={detail} plan={data} />
+      <nav className="sd-jumps" aria-label="监控范围页内导航"><a href="#scope-runtime">运行概览</a><a href="#scope-relations">长期关联 · {relations.length}</a><a href="#scope-research">临时研究 · {data.items.filter(i=>i.scope_kind==='question').length}</a><a href="#scope-review">方案审阅 · {(data.proposals?.length??0)+Number(meta.review==='pending')}</a></nav>
+      <section id="scope-runtime" className="sd-runtime">
+        <header className="sd-section-head"><div><span className="eyebrow">运行概览</span><h2>监控循环</h2></div><span className="sd-current" role="status">{work.moving&&<i className="sd-activity-ring" aria-hidden="true"/>}{work.label}</span></header>
+        <MonitorLoop detail={detail} plan={data} inline />
+      </section>
 
       {!!error && <ErrorNote error={error} />}
-      <MonitorReach company={company} plan={data} paused={detail.project.status === "paused"} />
+      <MonitorScope key={projectId} plan={data} company={company || detail.project.name}
+        renderState={(item) => <StateSwitch item={item} onChanged={reload} />} renderDetail={itemDetail} />
 
-      {!!relations.length && <RelationScope items={data.items} updates={data.relation_updates} explorations={data.explorations}
-        renderState={(item) => <StateSwitch item={item} onChanged={reload} />}
-        renderDetail={(item) => <ItemDetail item={item} latest={data.latest?.[item.id]} module={data.modules[item.id]}
-          moduleLabel={data.module_labels[item.view] ?? ""} labels={data.labels} dims={data.framework} onChanged={reload} />} />}
+      <section id="scope-review" className="sd-section" aria-label="方案审阅">
+        <header className="sd-section-head"><div><span className="eyebrow">人工决定</span><h2>需要你决定的范围变化</h2></div><span className="muted">{(data.proposals?.length??0)+Number(meta.review==='pending')} 项</span></header>
+        {meta.review === "pending" && <details className="sd-review"><summary><strong>首版方案 · 一次整体审阅</strong><span>待你审阅</span></summary><ReviewBanner projectId={projectId} count={live.length} onChanged={reload} /></details>}
+        {(data.proposals?.length ?? 0) > 0 && <details className="sd-review"><summary><strong>待你确认的建议</strong><span>{data.proposals.length} 项</span></summary><Proposals proposals={data.proposals} labels={data.labels} onChanged={reload} /></details>}
+        {!needs && <p className="muted small">当前没有待审阅的范围变化。</p>}
+      </section>
 
       <details className="relation-legacy" open={!relations.length}>
       <summary hidden={!relations.length}>其他关注点 · {remaining.length} 个（保留原配置）</summary>
@@ -96,15 +96,16 @@ export function PlanView({ projectId, company = "", detail }: { projectId: strin
         firstVersion={firstVersion} templates={data.templates} chosen={meta.templates ?? []} onChanged={reload} />
       </details>
 
-      {data.health && <p className="plan-health small">
+      {data.health && <details className="plan-health small"><summary>运行详情</summary><p>
         运行情况：{data.health.items} 个关注点中，{data.health.ran_14d} 个近两周检索过，{data.health.hit_30d} 个近 30 天有命中
         {data.health.never_hit > 0 && `，${data.health.never_hit} 个至今没有命中`}
         {data.health.system_added > 0 && `；系统新增 ${data.health.system_added} 个（你撤销 ${data.health.system_reverted} 个）`}
         {(data.health.proposals.accepted + data.health.proposals.rejected) > 0
           && `；建议已接受 ${data.health.proposals.accepted}、已拒绝 ${data.health.proposals.rejected}`}。
-      </p>}
+      </p></details>}
 
       <Reference items={[
+        { key: "source-choices", title: "来源选择", body: <CollectionSources key={projectId} projectId={projectId} /> },
         { key: "routine", title: "常规采集", note: `${channels.on} 个来源每轮自动${channels.off ? ` · ${channels.off} 个未开启` : ""}`,
           body: <RoutineChannels framework={data.framework} coverage={data.coverage ?? {}} /> },
         { key: "changes", title: "方案变更", note: open.length ? `${open.length} 项 · 可撤销` : undefined,
@@ -222,12 +223,14 @@ function StateSwitch({ item, onChanged }: { item: PlanItem; onChanged: () => voi
 }
 
 /** Standing channels per dimension, folded under 参考与依据. */
-function RoutineChannels({ framework, coverage }: { framework: PlanSection[]; coverage: NonNullable<MonitoringPlanView["coverage"]> }) {
+export function RoutineChannels({ framework, coverage }: { framework: PlanSection[]; coverage: NonNullable<MonitoringPlanView["coverage"]> }) {
   const rows = framework.filter((f) => (coverage[f.key] ?? []).length);
   if (!rows.length) return <p className="muted small">暂无专门来源，靠专项关注点覆盖。</p>;
   return <dl className="routine-list">{rows.map((f) => <div key={f.key}><dt>{f.label}</dt><dd>{coverage[f.key].map((c) =>
-    <span key={c.key} className={`po-channel ${c.state}`} title={c.state === "off" ? "需要先在设置中配置对应服务" : c.state === "error" ? "上一轮检索失败" : `${c.window} ${c.count} ${c.unit}`}>
-      {c.label}{c.state === "off" ? "（未开启）" : c.state === "pending" ? "（待首轮）" : c.state === "error" ? "（上轮失败）" : ` ${c.count}`}</span>)}</dd></div>)}</dl>;
+    <span key={c.key} className={`po-channel ${c.state}`} title={c.execution
+      ? `${c.job_status === 'running' || c.job_status === 'queued' ? '本轮' : '最近一轮'} · ${collectionExecutionLabel(c.execution, c.active)}${c.count == null ? '' : ` · ${c.window} ${c.count} ${c.unit}`}`
+      : c.state === "off" ? "需要先在设置中配置对应服务" : c.state === "error" ? "上一轮检索失败" : `${c.window} ${c.count} ${c.unit}`}>
+      {c.label}{c.execution ? `（${collectionExecutionLabel(c.execution, c.active)}）` : c.state === "off" ? "（未开启）" : c.state === "pending" ? "（待首轮）" : c.state === "error" ? "（上轮失败）" : ` ${c.count}`}</span>)}</dd></div>)}</dl>;
 }
 
 /** A focus point's full detail: why, latest, its module, how it is searched, and every action. */
@@ -246,10 +249,12 @@ function ItemDetail({ item, latest, module, moduleLabel, labels, dims, onChanged
       {item.objects.length > 0 && <div><dt>盯哪些对象</dt><dd>{item.objects.join("、")}</dd></div>}
       {item.trigger_rule && <div><dt>出现什么就提醒</dt><dd>{item.trigger_rule}</dd></div>}
       {item.exit_rule && <div><dt>何时关闭或降频</dt><dd>{item.exit_rule}</dd></div>}
-      <div><dt>怎么查</dt><dd>{item.queries.join("；") || "—"} · {labels.cadence[item.status === "trial" || item.status === "reduced" ? "low" : item.cadence]}
+      <div><dt>怎么查</dt><dd>{item.queries.join("；") || "—"} · {labels.cadence[item.status === "reduced" ? "low" : item.cadence]}
         {item.last_run_at ? ` · 上次 ${relTime(item.last_run_at)}` : " · 尚未运行"}</dd></div>
       <div><dt>来源</dt><dd>{labels.origin[item.plan_origin] ?? "—"} · {labels.tier[item.tier]}</dd></div>
     </dl>
+    {item.visibility === 'public' && item.tier === 'topic' && item.scope_kind !== 'relation'
+      && !!item.queries.length && !!item.exit_rule && <TopicResearch key={`${item.id}:${item.lifecycle_version}`} item={item} />}
     <div className="plan-actions">
       {item.scope_kind !== "question" && item.tier !== "core" && <RowAction item={item} fields={{ tier: "core" }} label="升为核心" note="升为核心" onChanged={onChanged} />}
       {item.tier === "core" && <RowAction item={item} fields={{ tier: "background" }} label="降为背景" note="降为背景" onChanged={onChanged} />}

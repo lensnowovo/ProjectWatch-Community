@@ -1,13 +1,40 @@
 // Only these public tools are advertised by the isolated sdk-minimal profile.
 // The Python gateway owns authorization, validation, journaling and persistence.
+import { request } from "node:http";
+
+function reviewedRequest(toolName, args) {
+  // One local tool can contain several bounded upstream reviews. The host owns
+  // the round deadline; fetch's implicit headers deadline must not cut it short.
+  const body = JSON.stringify(args);
+  return new Promise((resolve, reject) => {
+    const req = request(`${process.env.PW_DSH_GATEWAY}/tools/${toolName}`, {
+      method: "POST", agent: false,
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body),
+        Authorization: `Bearer ${process.env.PW_DSH_GATEWAY_TOKEN}` },
+    }, response => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+        catch (error) { reject(error); }
+      });
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
 export const name = "projectwatch-public-tools";
 export const inject = ["tools"];
 const string = { type: "string" };
 const definitions = [
   ["pw_search", "Search public sources for the confirmed company or a justified related topic.",
     { query: string, category: { type: "string", enum: ["company", "competitor", "industry", "policy"] } }, ["query", "category"]],
-  ["pw_read", "Read a discovered source, reusing cached body. Up to 12000 characters per cached window; use next_offset to continue. No arbitrary URL/file access.",
-    { source_id: string, offset: { type: "integer", minimum: 0 } }, ["source_id"]],
+  ["pw_collect", "Query a specialist public source with an entity or topic term quoted from saved public evidence. The query must occur in quote. Retains a query scope for later rounds and executes through the host ledger. Choose sponsor versus intervention separately; results remain candidates for attribution review. Does not mark sources inapplicable or establish company ownership.",
+    { adapter: { type: "string", enum: ["openalex_affiliation", "openalex_author", "openalex_topic", "patent_search", "clinical_sponsor", "clinical_term", "cn_regulatory"] },
+      query: string, source_id: string, quote: string, reason: string }, ["adapter", "query", "source_id", "quote", "reason"]],
+  ["pw_read", "Read a discovered source. Collected C sources default to saved record fields; view=page requests the original webpage and returns a separate source ID for page citations, preserving the record. Reuse the returned ID. Cached body windows have next_offset. No arbitrary URL/file access.",
+    { source_id: string, offset: { type: "integer", minimum: 0 }, view: { type: "string", enum: ["record", "page"] } }, ["source_id"]],
   ["pw_record", "Retain one evidence-linked fact/news/peer/relation. Relations require relation_type, relation_target appearing in the quote, reason, axis and query, with no exit_rule. Quote must be continuous verbatim text (max 1500 chars) containing all claimed dates/numbers; split records if necessary. Do not add dates to every label or infer event dates from provider_date. Keep qualifications. On record_validation fix all issues together; suggested_quote is only a source-local candidate, not entailment.",
     { kind: {type: "string", enum: ["business", "product", "person", "founded", "location",
         "financing", "milestone", "company", "competitor", "industry", "policy", "peer", "relation"]},
@@ -17,7 +44,8 @@ const definitions = [
       relation_type: {type: "string", enum: ["technology", "product", "indication", "competitor",
         "supplier", "customer", "industry", "policy"]},
       relation_target: string, relation_aliases: { type: "array", items: string, maxItems: 8 } }, ["kind", "label", "source_id", "quote", "text"]],
-  ["pw_status", "Inspect retained coverage and source failures before deciding what to research next.", {}, []],
+  ["pw_status", "Inspect host collection receipts and collected_sources before supplemental research. Page saved sources with collection_offset=next_offset; pw_read reads their exact saved fields without another request. Structured records are not page full text.",
+    { collection_offset: { type: "integer", minimum: 0 } }, []],
   ["pw_finish", "Persist the public project result. Explicitly state uncovered or partial categories; no implied completeness.",
     { gaps: { type: "object", properties: Object.fromEntries(
       ["company", "products", "people", "competitor", "industry", "policy"].map(k => [k, string])),
@@ -27,7 +55,8 @@ export function apply(ctx) {
   const allowed = JSON.parse(process.env.PW_DSH_TOOLS || JSON.stringify(definitions.map(x => x[0])));
   const monitor = allowed.includes("pw_context");
   const list = [...definitions,
-    ["pw_context", "Publish retained public records and inspect evidence, standing relations, temporary questions and due scope.", {}, []],
+    ["pw_context", "Publish retained public records and inspect evidence, standing relations, temporary questions and due scope. Also inspect host collected_sources; use collection_offset=next_offset for more, and pw_read for stored evidence.",
+      { collection_offset: { type: "integer", minimum: 0 } }, []],
     ["pw_explore", "Search a due standing relation or research question using one of its configured queries.",
       { watch_id: string, query: string }, ["watch_id", "query"]],
     ["pw_assess", "Record a cited assessment. Distinguish object_change from evidence_only (research coverage, NOT company progress) and unclear. Evidence-only saves unchanged; unclear saves insufficient. Does not replace human conclusions.",
@@ -53,6 +82,7 @@ export function apply(ctx) {
       // Calls are serialized again by the gateway, including model traffic.
       isConcurrencySafe: () => false,
       async execute(args) {
+        if (["pw_judge", "pw_context", "pw_finish"].includes(toolName)) return reviewedRequest(toolName, args);
         const response = await fetch(`${process.env.PW_DSH_GATEWAY}/tools/${toolName}`, {
           method: "POST", headers: { "Content-Type": "application/json",
             Authorization: `Bearer ${process.env.PW_DSH_GATEWAY_TOKEN}` },

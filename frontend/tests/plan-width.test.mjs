@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 test('monitoring scope shares the project tab width, without a legacy inner cap', () => {
   const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
   const plan = readFileSync(new URL('../src/plan.tsx', import.meta.url), 'utf8');
-  assert.match(plan, /className="plan-view outline tab-frame"/);
+  assert.match(plan, /className="plan-view outline tab-frame monitor-scope"/);
   const rules = [...css.matchAll(/\.plan-view\.outline(?:\.tab-frame)?\s*\{([^}]+)\}/g)].map(m => m[1]);
   assert.ok(rules.length);
   for (const rule of rules) assert.doesNotMatch(rule, /max-width:\s*\d+px/);

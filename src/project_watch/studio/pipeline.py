@@ -1837,6 +1837,15 @@ class Pipeline:
         # Operator opt-in, first public bootstrap only. DSH owns research choices;
         # never silently fall back to the legacy collector on failure.
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
+        if execution and (execution.read_checkpoint('collection_request_v1') or {}).get('mode') == 'topic':
+            from project_watch.studio.dsh_runtime import run_monitor
+            from project_watch.studio.public_executor import require_available
+
+            require_available()
+            if not dsh_root or os.environ.get('PROJECT_WATCH_DSH_MONITOR') != '1':
+                raise ValueError('bounded topic requires DSH monitoring runtime')
+            run_monitor(self, execution, Path(dsh_root))
+            return
         if (dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1"
                 and self.store.get_project(project_id).get("last_external_at")):
             from project_watch.studio.dsh_runtime import run_monitor

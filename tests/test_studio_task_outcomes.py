@@ -49,6 +49,8 @@ def test_partial_dismiss_only_saves_reminder_not_outcome_or_queue(tmp_path):
     project = client.post('/api/studio/projects', json={
         'entity': {'legal_name': '合成状态验收'}, 'consent': True}).json()
     with closing(store._connect()) as db, db:
+        # Synthetic queue reset also removes the newly persisted admission intent.
+        db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute('DELETE FROM studio_jobs')
     job = store.enqueue(project['id'], 'commercial')
     with closing(store._connect()) as db, db:

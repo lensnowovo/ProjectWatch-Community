@@ -104,7 +104,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
       {data && items.length === 0 && unreadOnly && all.length > 0 && <Empty title="都读完了">“全部”中可回看已读动态。</Empty>}
       {data && all.length === 0 && (
         <Empty title="这段时间没有新动态">
-          首次采集可能需几分钟。未检索到信息不代表没有变化。
+          暂无收录动态。
         </Empty>
       )}
       <div className="feed-list">

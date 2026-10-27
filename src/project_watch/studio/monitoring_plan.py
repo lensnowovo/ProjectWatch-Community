@@ -3,7 +3,7 @@
 A plan item is a watch point with the plan fields: axis, objects, reason, current state, sources,
 cadence, trigger, exit rule, tier and status. Every change — by the system, a person or an Agent —
 is written to ``studio_plan_changes`` with who, why and before/after, so it can be shown and reverted.
-Items the system adds start as ``trial`` (low cadence, revertible); promoting, retiring human items or
+Items the system adds start as ``trial`` (revertible, cadence independent); promoting, retiring human items or
 widening paid collection stays with the owner. Retired items keep their judgement history.
 
 Core: storage and rules only; no model, search or network calls.
@@ -21,6 +21,11 @@ from datetime import UTC, datetime, timedelta
 from project_watch.studio.exploration import Explorations
 from project_watch.studio.plan_templates import MODULES, catalog, combine
 from project_watch.studio.store import now
+
+
+class PlanCapacityError(ValueError):
+    """A valid candidate cannot be admitted without exceeding the fixed capacity."""
+
 
 # The fixed framework every plan grows from: four rings around the company, nine dimensions, ordered from
 # the company outwards. Dimensions are about *whom* we watch; an item goes where its object is, not where the
@@ -102,8 +107,10 @@ CHANNELS = (
     ("competitor", "竞品动态", "peers", "competitor", ""),
     ("tender", "招投标（客户采购）", "customer", None, "search"),
     ("facts", "商业关系与政策条件（资料与报道中提取）", "partners", None, ""),
+    ("chain", "产业链动态", "partners", None, ""),
     ("industry", "赛道与市场动态", "market", "industry", ""),
     ("paper", "论文（OpenAlex）", "science", "paper", ""),
+    ("technology", "技术动态", "science", None, ""),
     ("patent", "专利", "science", "patent", "search"),
     ("policy", "政策监管", "rules", "policy", ""),
 )
@@ -250,8 +257,10 @@ class MonitoringPlan:
         return merged
 
     def view(self, project_id: str, *, changes: int = 30) -> dict:
+        from project_watch.studio.collection_dsh import latest_report
         from project_watch.studio.plan_tree import tree_signals
 
+        collection = latest_report(self.monitor.store, project_id)
         items = self.items(project_id)
         with self.monitor._db() as db:
             rows = db.execute("SELECT * FROM studio_plan_changes WHERE project_id=? ORDER BY created_at DESC LIMIT ?",
@@ -289,7 +298,8 @@ class MonitoringPlan:
                 "last_round": self.last_round(project_id),
                 "limits": {"max_hop": MAX_HOP, "per_section": MAX_PER_SECTION},
                 "modules": {w["id"]: self.module(project_id, w) for w in live},
-                "coverage": self.coverage(project_id),
+                "coverage": self.coverage(project_id, snapshot=collection),
+                "collection_report": collection,
                 "latest": {w["id"]: self.latest(project_id, w) for w in live},
                 "week": {"new_items": sum(1 for w in live if (w.get("created_at") or "") >= week_ago),
                          "fresh": sum(bool(signals.get(w["id"], {}).get("fresh")) for w in live)},
@@ -443,14 +453,14 @@ class MonitoringPlan:
         live = candidate.get('status', 'active') != 'retired'
         allocating = current is None or current['status'] == 'retired'
         if live and allocating and len(others) >= MAX_ITEMS:
-            raise ValueError(f"每个项目最多 {MAX_ITEMS} 条运行中的方案条目，请先关闭或合并")
+            raise PlanCapacityError(f"每个项目最多 {MAX_ITEMS} 条运行中的方案条目，请先关闭或合并")
         section = SECTION_OF.get(candidate.get('axis', 'asset'), 'asset')
         moving = current is None or section != SECTION_OF.get(current['axis'], 'asset')
         automatic = actor == 'system' or candidate.get('plan_origin') in ('system', 'bootstrap', 'internal')
         if (live and (allocating or moving) and automatic and role != 'relation'
                 and sum(w.get('scope_kind') != 'relation' and SECTION_OF.get(w['axis'], 'asset') == section
                         for w in others) >= MAX_PER_SECTION):
-            raise ValueError(f"「{AXIS_LABEL.get(section, section)}」已有 {MAX_PER_SECTION} 个关注点")
+            raise PlanCapacityError(f"「{AXIS_LABEL.get(section, section)}」已有 {MAX_PER_SECTION} 个关注点")
         if (live and (allocating or current.get('text') != candidate['text'])
                 and any(_norm(w['text']) == _norm(candidate['text']) for w in others)):
             raise ValueError('已有相同关注点，请更新原条目')
@@ -496,8 +506,11 @@ class MonitoringPlan:
         data = {'axis': 'asset', 'hop': '0', 'parent_id': '', 'status': 'active', **_clean(fields)}
         if "text" not in data:
             raise ValueError("缺少问题")
-        if actor == "system" and origin != "bootstrap":  # later system additions start as revertible, low-cadence trials
-            data["status"], data["cadence"] = "trial", data.get("cadence") if data.get("cadence") == "event" else "low"
+        if actor == "system" and origin != "bootstrap":
+            # Confidence is not a schedule. A new ordinary object gets a first
+            # lookup, then weekly collection unless its scope specifies otherwise.
+            data["status"] = "trial"
+            data.setdefault("cadence", "medium")
         wid = uuid.uuid4().hex
         own = db is None
         with (self.monitor._db() if own else nullcontext(db)) as db, (db if own else nullcontext()):
@@ -736,7 +749,7 @@ class MonitoringPlan:
                     continue
             if w['cadence'] == 'event':
                 continue
-            cadence = "low" if w["status"] in ("trial", "reduced") else w["cadence"]
+            cadence = "low" if w["status"] == "reduced" else w["cadence"]
             last = w.get("last_run_at") or ""
             if last and cadence != "high" and last > (moment - timedelta(days=CADENCE_DAYS[cadence])).isoformat():
                 continue
@@ -915,10 +928,17 @@ class MonitoringPlan:
             kept.append(hit)
         return kept
 
-    def coverage(self, project_id: str) -> dict:
+    def coverage(self, project_id: str, *, snapshot=None) -> dict:
         """常规采集 per section: what is collected every round, how much in 30 days, and what is off or failing."""
+        from project_watch.studio.collection_dsh import latest_report
+
         plan = self.monitor.store.get_plan(project_id) or {}
         report = plan.get("last_report") or {}
+        snapshot = snapshot if snapshot is not None else latest_report(self.monitor.store, project_id)
+        if snapshot is None:
+            saved = plan.get('collection_report') or {}
+            snapshot = saved if saved.get('job_id') == plan.get('round_id') else {}
+        receipt_report = snapshot.get('channels') if snapshot.get('schema_version') == 1 else None
         since = (datetime.now(UTC) - timedelta(days=30)).isoformat()
         with self.monitor._db() as db:
             events = dict(db.execute("SELECT category, count(*) FROM studio_events WHERE project_id=? AND status!='dismissed' "
@@ -951,6 +971,27 @@ class MonitoringPlan:
                 state = "pending"
             out[section].append({"key": key, "label": label, "count": amount, "unit": unit, "state": state,
                                  "window": "近 30 天" if category else "上一轮" if key not in ("site", "facts", "commercial") else "累计"})
+            if receipt_report is not None and key not in ('facts', 'commercial', 'registry'):
+                fallback = {'awaiting_plan': 'pending', 'unavailable': 'unavailable'}.get(
+                    snapshot.get('view_state'), 'not_in_round')
+                execution = receipt_report.get(key, {}).get('execution', fallback)
+                entry = out[section][-1]
+                entry.update(execution=execution,
+                    capabilities=receipt_report.get(key, {}).get('capabilities', []),
+                    due_count=receipt_report.get(key, {}).get('due_count', 0),
+                    query_count=receipt_report.get(key, {}).get('query_count', 0),
+                    rows=receipt_report.get(key, {}).get('rows', []),
+                    round_id=snapshot['job_id'], planned_at=snapshot.get('planned_at'),
+                    active=snapshot.get('active', False), job_status=snapshot.get('job_status'),
+                    observed_at=snapshot.get('observed_at'),
+                    state=('on' if execution in ('success', 'empty') else 'error' if execution in ('failed', 'unknown')
+                           else 'off' if execution in ('disabled', 'not_applicable', 'not_configured', 'not_integrated')
+                           else 'pending'))
+                # New receipt counts describe saved source items, not new events.
+                # Unattempted/unknown sources have no measured zero.
+                if not category and key != 'site':
+                    entry.update(count=receipt_report.get(key, {}).get('added'),
+                                 window='本轮新增收录', unit='条来源')
         return out
 
     def latest(self, project_id: str, watch: dict) -> dict:

@@ -133,7 +133,7 @@ function QuestionVisual({ q, detail, view }: { q: Key; detail: ProjectDetail; vi
     const question = QUESTIONS.find(x => x.key === q)!;
     const saved = judged(view, question);
     return <Visual title="已保存的判断"><Scale scale={question.scale} value={saved?.verdict ?? "unclear"}
-      labels={view.labels[q]} /><p className="muted small">依据保留在右侧，可展开查看。</p></Visual>;
+      labels={view.labels[q]} /></Visual>;
   }
   if (q === "position") return <PeerStages projectId={detail.project.id} revision={raceRevision(detail)} view={view} />;
   if (q === "technology") return <Technology view={view} />;

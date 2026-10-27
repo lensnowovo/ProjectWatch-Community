@@ -1,4 +1,4 @@
-import type { Job, Project, ProjectDetail } from "./api";
+import type { Job, Project, ProjectDetail, TaskJob } from "./api";
 
 const PAUSED_KINDS = new Set(["external", "external_followup", "public_profile", "landscape", "business", "competition", "details", "commercial"]);
 
@@ -28,7 +28,7 @@ export function jobWorkState(detail: ProjectDetail, job: Job) {
 export const WORK_LABEL: Record<string, string> = {
   queued: "排队中", running: "正在执行", stopping: "正在结束", waiting_restart: "等待恢复",
   offline: "等待后台启动", paused: "已暂停",
-  waiting_response: "等待响应", recovering: "等待恢复", blocked: "等待后台恢复",
+  waiting_response: "请求处理中", recovering: "等待恢复", blocked: "等待后台恢复",
   stalled: "长时间无进展", needs_confirmation: "请求结果待确认", partial: "部分完成",
   failed: "未完成", done: "已完成", idle: "监控待命", agent: "等待 Agent 更新",
   unavailable: "状态暂时无法读取",
@@ -42,6 +42,13 @@ export const JOB_LABEL: Record<string, string> = {
 };
 export const isMoving = (state: string) => state === "running" || state === "waiting_response" || state === "stopping";
 export const needsAttention = (state: string) => ["failed", "needs_confirmation", "stalled", "partial", "blocked", "offline", "recovering", "unavailable"].includes(state);
+
+/** Only known, non-actionable coverage gaps can move out of the attention lane. */
+export function isCoverageNote(job: TaskJob) {
+  return job.status === 'done' && job.runtime?.state === 'partial'
+    && job.unknown === 0 && !job.model_failure && !job.error?.trim()
+    && job.advice?.action === 'none';
+}
 
 export function projectListWork(p: Pick<Project, "job_runtime" | "job_status" | "worker_state" | "worker_health" | "status" | "execution_mode">) {
   if (p.job_runtime) return p.job_runtime;
