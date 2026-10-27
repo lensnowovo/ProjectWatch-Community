@@ -80,6 +80,19 @@ close earlier when mandatory review is pending; it does not bypass evidence
 review, extend a budget, retry requests, or fabricate a complete result when a
 round is too large. Exact SDK request replays retain their frozen budget advice.
 
+During closeout the host advertises only the next required submission tool:
+first-round finish, or incremental context, pending assessments, judgment,
+revision and finish according to saved prerequisites. The model still supplies
+arguments, and the existing tool/evidence/lease checks decide whether they are
+valid. Status polling cannot consume new closeout turns; no result or completion
+is inferred by routing. Previously frozen requests retain their original tool
+set for journal replay. Missing required tools fail before dispatch.
+
+Official GLM-5.3 structured requests also enable JSON-object response mode, as
+documented in the provider's [structured-output guide](https://docs.bigmodel.cn/cn/guide/capabilities/struct-output).
+This controls transport syntax only. Malformed JSON, missing fields and invalid
+evidence remain rejected; there is no response repair, retry or budget increase.
+
 
 ## Capacity during evidence projection
 

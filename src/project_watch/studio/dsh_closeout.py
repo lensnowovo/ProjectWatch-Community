@@ -9,6 +9,26 @@ CLOSEOUT_TOOLS = frozenset({'pw_status', 'pw_context', 'pw_assess', 'pw_judge', 
 RESERVE = 8
 
 
+def next_submission(research):
+    """Select an existing submission handler from persisted prerequisites.
+
+    The host selects the operation, never its evidence, judgment or arguments.
+    Tool validation and review still decide whether that operation can commit.
+    """
+    if 'pw_context' not in research.tools:
+        return 'pw_finish'
+    if research.state.get('judged'):
+        return 'pw_finish' if research.state.get('reviewed') else 'pw_revise'
+    from project_watch.studio.dsh_bootstrap import digest
+    if research.state['records'] and research.state.get('published') != digest(research.state['records']):
+        return 'pw_context'
+    try:
+        ctx = research.frozen()
+    except ValueError:
+        return 'pw_context'
+    return 'pw_assess' if research.pending_assessments(ctx) else 'pw_judge'
+
+
 def budget(research):
     execution = research.execution
     admission = execution.read_checkpoint('collection_admission_v1') or {}
@@ -68,17 +88,21 @@ def prepare_model(research, body):
         closing = status['phase'] == 'closeout' or (
             remaining is not None and remaining <= status['reserve_model_calls'])
         status['phase'] = 'closeout' if closing else 'research'
+        if closing:
+            status['next_tool'] = next_submission(research)
         advice = status
         execution.checkpoint(key, advice)
     if advice['phase'] == 'closeout':
         execution.checkpoint(STAGE, {'phase': 'closeout'})
+        # Old frozen advice retains its original payload for journal replay.
+        allowed = {advice['next_tool']} if advice.get('next_tool') else CLOSEOUT_TOOLS
         body = {**body, 'tools': [t for t in body.get('tools', [])
-                                 if t.get('function', {}).get('name') in CLOSEOUT_TOOLS]}
+                                 if t.get('function', {}).get('name') in allowed]}
         if not body['tools']:
             research.hold('dsh_tools_unavailable')
             raise HttpError('dsh_tools_unavailable')
         choice = body.get('tool_choice')
-        if isinstance(choice, dict) and choice.get('function', {}).get('name') not in CLOSEOUT_TOOLS:
+        if isinstance(choice, dict) and choice.get('function', {}).get('name') not in allowed:
             body['tool_choice'] = 'auto'
     note = ('宿主请求预算（remaining 包含本次模型请求）：' + json.dumps(advice, ensure_ascii=False) +
             '\n在研究阶段优先解决 collection 的未执行范围与关键证据；无需逐条摘录全部候选。'

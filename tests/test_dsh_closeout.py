@@ -133,7 +133,7 @@ def test_closeout_preserves_cached_model_reply_and_blocks_more_collection(resear
     assert json.dumps(original) == saved
     gateway.model_call(request(1))
     gateway.model_call(request(2))  # Eight calls left, reserved for structured closeout.
-    assert {x['function']['name'] for x in seen[-1]['tools']} == {'pw_status', 'pw_finish'}
+    assert {x['function']['name'] for x in seen[-1]['tools']} == {'pw_finish'}
     assert '"remaining": 8' in seen[-1]['messages'][0]['content']
     assert research.state['finished'] is None
     with pytest.raises(ValueError, match='closeout'):
@@ -191,7 +191,7 @@ def test_monitor_closeout_keeps_judgment_and_revision_requirements(tmp_path):
     body['tools'] = [{'type': 'function', 'function': {'name': n}} for n in obj.tools]
     gateway.model_call(body)
     names = {x['function']['name'] for x in seen[-1]['tools']}
-    assert names == {'pw_context', 'pw_status', 'pw_assess', 'pw_judge', 'pw_revise', 'pw_finish'}
+    assert names == {'pw_context'}
     with pytest.raises(ValueError, match='judgment and revision'):
         obj.tool('pw_finish', {'reason': 'cannot bypass'})
     assert obj.state['finished'] is None
@@ -273,18 +273,18 @@ def test_official_dsh_submits_saved_evidence_in_reserved_turns(research, tmp_pat
     from project_watch.studio.dsh_runtime import run_dsh
     fixtures.call(research, 'pw_search', query='Synthetic Optics', category='company')
     fixtures.record(research)
-    research.execution.budgets['model'] = 3  # Two tool turns plus one mandatory admission request.
+    research.execution.budgets['model'] = 2  # Submit once plus mandatory admission; no status polling turn.
     calls = []
 
     def scripted(_method, _url, _headers, raw, _timeout):
         body = json.loads(raw)
         if 'tools' not in body:
             return review_response(body)
-        assert {t['function']['name'] for t in body['tools']} == {'pw_status', 'pw_finish'}
+        assert {t['function']['name'] for t in body['tools']} == {'pw_finish'}
         index = len(calls)
         calls.append(body)
-        assert index < 2
-        tool, args = [('pw_status', {}), ('pw_finish', {'gaps': {'company': 'synthetic partial'}})][index]
+        assert index == 0
+        tool, args = 'pw_finish', {'gaps': {'company': 'synthetic partial'}}
         return Response(200, {}, json.dumps({'choices': [{'message': {
             'role': 'assistant', 'content': None, 'tool_calls': [{'id': str(index), 'type': 'function',
                 'function': {'name': tool, 'arguments': json.dumps(args)}}]}, 'finish_reason': 'tool_calls'}]}).encode())
@@ -292,7 +292,68 @@ def test_official_dsh_submits_saved_evidence_in_reserved_turns(research, tmp_pat
     result = run_dsh(research, gateway_for(research, scripted),
                      Path(os.environ['PW_DSH_TEST_RUNTIME']), tmp_path / 'runtime', timeout=120)
     assert result['status'] == 'partial'
-    assert len(calls) == 2
-    assert research.execution.usage()['model']['requests'] == 3
+    assert len(calls) == 1
+    assert research.execution.usage()['model']['requests'] == 2
     assert research.execution.read_checkpoint('dsh_runtime')['drained']
     assert research.store.get_public_profile(research.project_id)['facts']
+
+
+def test_closeout_replay_freezes_submission_choice_and_missing_tool_stops(research):
+    from project_watch.studio.dsh_closeout import prepare_model
+    research.execution.budgets['model'] = 4
+    body = request('closeout')
+    first = prepare_model(research, body)
+    research.state['events'].append({'tool': 'pw_status', 'ordinal': 1})
+    assert prepare_model(research, body) == first
+    assert [t['function']['name'] for t in first['tools']] == ['pw_finish']
+    assert body['tools'] != first['tools']
+    missing = request('missing required submission')
+    missing['tools'] = [t for t in missing['tools'] if t['function']['name'] != 'pw_finish']
+    with pytest.raises(HttpError, match='dsh_tools_unavailable'):
+        prepare_model(research, missing)
+    assert research.execution.usage() == {}
+
+
+def test_legacy_frozen_closeout_advice_preserves_request_fingerprint(research):
+    import hashlib
+
+    from project_watch.studio.dsh_closeout import budget, prepare_model
+    body = request('frozen before upgrade')
+    advice = {**budget(research), 'phase': 'closeout'}
+    key = 'dsh_budget_advice:' + hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    research.execution.checkpoint(key, advice)
+    result = prepare_model(research, body)
+    assert {t['function']['name'] for t in result['tools']} == {'pw_status', 'pw_finish'}
+    assert research.execution.read_checkpoint(key) == advice
+
+
+def test_closeout_monitor_routes_by_validated_prerequisites(tmp_path):
+    from test_studio_dsh_monitor import collect, judge, loop
+
+    from project_watch.studio.dsh_closeout import next_submission
+    obj = loop.__wrapped__(tmp_path)
+    assert next_submission(obj) == 'pw_context'
+    _, _, ref = collect(obj)
+    assert next_submission(obj) == 'pw_assess'
+    for pending in obj.pending_assessments(obj.frozen()):
+        obj.tool('pw_assess', {'watch_id': pending['watch_id'], 'refs': pending['refs'],
+                              'status': 'insufficient', 'note': 'Synthetic unknown'})
+    assert next_submission(obj) == 'pw_judge'
+    judge(obj, ref)
+    assert next_submission(obj) == 'pw_revise'
+    obj.tool('pw_revise', {'changes_json': '[]', 'reason': 'Synthetic unchanged scope'})
+    assert next_submission(obj) == 'pw_finish'
+    assert not obj.state['finished']  # Routing alone never submits a result.
+
+
+def test_closeout_refreshes_unpublished_or_changed_context(tmp_path):
+    from test_studio_dsh_monitor import add_public_event, collect, loop
+
+    from project_watch.studio.dsh_closeout import next_submission
+    obj = loop.__wrapped__(tmp_path)
+    collect(obj)
+    add_public_event(obj, 'changed', 'Synthetic newer evidence')
+    assert next_submission(obj) == 'pw_context'
+    obj.tool('pw_context', {})
+    obj.state['records'].append({'unpublished': 'synthetic'})
+    assert next_submission(obj) == 'pw_context'

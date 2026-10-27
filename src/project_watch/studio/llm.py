@@ -76,6 +76,10 @@ def structured_options(config):
             and urlsplit(config.base_url).hostname == "open.bigmodel.cn"
             and config.model == "glm-5.3"):
         options["reasoning_effort"] = "low"
+        # Official structured-output mode controls syntax; callers must still
+        # validate the schema and evidence. Never repair malformed responses.
+        # https://docs.bigmodel.cn/cn/guide/capabilities/struct-output
+        options["json_object"] = True
     return options
 
 

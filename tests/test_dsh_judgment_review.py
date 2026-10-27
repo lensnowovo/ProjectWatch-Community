@@ -355,7 +355,7 @@ def test_second_batch_unknown_stops_all_later_calls_and_cannot_resubmit(loop, mo
 
 
 @pytest.mark.parametrize('host,model,expected', [
-    ('https://open.bigmodel.cn/api/coding/paas/v4', 'glm-5.3', {'reasoning_effort': 'low'}),
+    ('https://open.bigmodel.cn/api/coding/paas/v4', 'glm-5.3', {'reasoning_effort': 'low', 'response_format': {'type': 'json_object'}}),
     ('https://api.deepseek.com/v1', 'deepseek-v4-pro', {'thinking': {'type': 'disabled'}, 'response_format': {'type': 'json_object'}}),
     ('https://example.invalid/v1', 'other', {}),
 ])
@@ -372,6 +372,28 @@ def test_review_gateway_has_bounded_provider_compatible_options(loop, host, mode
     gateway.model = ModelConfig(api_key='synthetic', model=model, base_url=host)
     gateway.review_judgment(review.review_input({'headline': '合成'}, {'numbered': {'N1': {'context': '合成'}}}))
     assert len(calls) == 1
+
+
+def test_json_mode_malformed_response_still_holds_without_repair_or_retry(loop):
+    calls = []
+    def send(_method, _url, _headers, raw, _timeout):
+        body = json.loads(raw)
+        assert body['response_format'] == {'type': 'json_object'}
+        calls.append(body)
+        # Complete HTTP response, but ambiguous JSON content must not be repaired.
+        return Response(200, {}, json.dumps({'choices': [{'message': {
+            'content': '{"checks":[{"field":"F1","reason","evidence":[]}]}'},
+            'finish_reason': 'stop'}]}).encode())
+    gateway = attach(loop, send)
+    gateway.model = ModelConfig(api_key='synthetic', model='glm-5.3',
+                               base_url='https://open.bigmodel.cn/api/paas/v4')
+    payload = review.review_input({'headline': 'Synthetic'}, {'numbered': {'N1': {'context': 'Synthetic'}}})
+    for _ in range(2):
+        with pytest.raises(HttpError, match='judgment_review_invalid'):
+            gateway.review_judgment(payload)
+    assert len(calls) == 1
+    assert not insight.load(loop.store, loop.project_id)
+    assert loop.execution.usage()['model']['unknown'] == 0
 
 
 @pytest.mark.parametrize('where', ['connect_or_headers', 'response_body'])
