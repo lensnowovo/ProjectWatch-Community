@@ -167,6 +167,52 @@ def test_actual_two_dispatches_remain_capped_across_three_gateways(setup):
     assert role.state['finished']['proposal'] == {'invalid': 'material_turn_limit'}
 
 
+def test_reordered_object_keys_cannot_bypass_durable_wire_limit(setup):
+    pipeline, execution = setup
+    sends = []
+    def send(_method, _url, _headers, raw, _timeout):
+        sends.append(raw)
+        return Response(200, {}, json.dumps({'choices': [{'message': {'role': 'assistant', 'content': 'text'},
+                                                        'finish_reason': 'stop'}]}).encode())
+    pipeline.http_factory = lambda _: Http(send)
+    parent, settings, http, _ = role_inputs(setup)
+    source = {'task_id': '1' * 64, 'refs': {}}
+    variants = [dict(role='user', content='fixed'), dict(content='fixed', role='user')]
+    for index in (0, 1, 0, 1):
+        role = dsh_extraction.Extraction(parent, source)
+        gateway = dsh_extraction.ExtractionGateway(role, settings.model, http)
+        gateway.model_call({'model': settings.model.model, 'messages': [variants[index]],
+                           'tools': [{'function': {'name': dsh_extraction.TOOL, 'description': 'fixed'}}]})
+    assert len(sends) == 2 and sends[0] != sends[1]
+    assert execution.usage()['model']['cache_hits'] == 2
+    # A third byte identity differs only by tool dictionary key order.
+    third = dsh_extraction.Extraction(parent, source)
+    dsh_extraction.ExtractionGateway(third, settings.model, http).model_call({
+        'model': settings.model.model, 'messages': [variants[0]],
+        'tools': [{'function': {'description': 'fixed', 'name': dsh_extraction.TOOL}}]})
+    assert len(sends) == 2 and third.state['finished']['proposal'] == {'invalid': 'material_turn_limit'}
+
+
+def test_completed_legacy_wire_replays_with_two_old_attempt_hashes(setup):
+    pipeline, execution = setup
+    sends = []
+    def send(*_args):
+        sends.append(1)
+        return Response(200, {}, b'{"choices":[{"message":{"role":"assistant","content":"text"},"finish_reason":"stop"}]}')
+    pipeline.http_factory = lambda _: Http(send)
+    parent, settings, http, _ = role_inputs(setup)
+    source = {'task_id': '2' * 64, 'refs': {}}
+    payload = {'model': settings.model.model, 'messages': [{'role': 'user', 'content': 'fixed'}],
+               'tools': [{'function': {'name': dsh_extraction.TOOL}}]}
+    role = dsh_extraction.Extraction(parent, source)
+    dsh_extraction.ExtractionGateway(role, settings.model, http).model_call(payload)
+    execution.checkpoint(role.attempt_stage, ['legacy-sorted-one', 'legacy-sorted-two'])
+    restarted = dsh_extraction.Extraction(parent, source)
+    dsh_extraction.ExtractionGateway(restarted, settings.model, http).model_call(payload)
+    assert len(sends) == 1 and restarted.state['finished'] is None
+    assert execution.usage()['model']['cache_hits'] == 1
+
+
 @pytest.mark.parametrize('code', ['request_outcome_unknown', 'request_budget', 'dsh_runtime_failed'])
 def test_no_submission_never_converts_existing_hold_to_local_rejection(setup, tmp_path, monkeypatch, code):
     from project_watch.studio.http import HttpError

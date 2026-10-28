@@ -112,6 +112,13 @@ def test_adopted_completed_calls_still_consume_explicit_budget(owner, monkeypatc
     adopted = MaterialExecution(current, rows(owner)[0])
     with pytest.raises(HttpError, match='request_budget'):
         adopted.call('model', 'second', lambda: pytest.fail('must not dispatch beyond original cap'), provider='fixture')
+    with pytest.raises(HttpError, match='request_budget'):
+        current.call('model', 'parent-review', lambda: pytest.fail('parent must share inherited consumption'), provider='fixture')
+    assert current.budget_used('model') == 1
+    take_over(current, task['id'])
+    assert current.budget_used('model') == 1
+    reply = adopted.call('model', 'first', lambda: pytest.fail('received response must replay'), provider='fixture')
+    assert reply.body == b'{}' and current.budget_used('model') == 1
     assert not current.usage()
 
 
@@ -136,6 +143,27 @@ def test_legacy_unattributed_dispatch_does_not_masquerade_as_unsent(owner):
     with pytest.raises(ValueError, match='provenance missing'):
         take_over(current, task['id'])
     assert rows(owner)[0]['job_id'] == previous.job['id']
+
+
+def test_legacy_saved_proposal_preserves_budget_across_two_transfers(owner):
+    original, _, _, _ = fixtures.save(owner)
+    original.budgets['model'] = 1
+    task = rows(owner)[0]
+    original.call('model', 'legacy-unscoped', lambda: Response(200, {}, b'{}'), provider='fixture')
+    original.checkpoint('extract_result:' + task['id'], {'proposal': {'observations': []}})
+    middle = next_owner(original)
+    take_over(middle, task['id'])
+    assert middle.budget_used('model') == 1 and not middle.usage()
+    final = next_owner(middle)
+    take_over(final, task['id'])
+    take_over(final, task['id'])
+    assert final.budget_used('model') == 1 and not final.usage()
+    with pytest.raises(HttpError, match='request_budget'):
+        final.call('model', 'parent-review', lambda: pytest.fail('inherited budget must survive another handoff'), provider='fixture')
+    with closing(final.store._connect()) as db:
+        assert db.execute('SELECT count(*) FROM studio_job_calls').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM studio_job_budget_links WHERE job_id=?', (final.job['id'],)).fetchone()[0] == 1
+    assert original.usage()['model']['completed'] == 1
 
 
 def test_late_old_owner_is_fenced_even_if_its_job_gets_a_fresh_lease(owner):

@@ -75,6 +75,18 @@ def take_over(execution, task_id):
             if source:
                 db.execute('INSERT OR IGNORE INTO studio_job_checkpoints VALUES (?,?,?)', (next_job, stage, source[0]))
         db.execute('UPDATE studio_evidence_tasks SET job_id=? WHERE id=? AND job_id=?', (next_job, task_id, previous))
+        # Admission belongs to the whole successor job, not one role wrapper.
+        # UNION/PK deduplicate shared receipts, including multi-hop transfers.
+        db.execute('INSERT OR IGNORE INTO studio_job_budget_links SELECT ?,c.job_id,c.call_key '
+            'FROM studio_material_calls l JOIN studio_job_calls c ON c.job_id=l.job_id AND c.call_key=l.request_key '
+            'WHERE l.task_id=?', (next_job, task_id))
+        if result and not linked:
+            # A legacy saved proposal can be reused locally, but its old model
+            # calls lack material attribution. Conservatively carry that cost.
+            db.execute("INSERT OR IGNORE INTO studio_job_budget_links SELECT ?,job_id,call_key FROM studio_job_calls "
+                       "WHERE job_id=? AND kind='model'", (next_job, previous))
+            db.execute('INSERT OR IGNORE INTO studio_job_budget_links SELECT ?,origin_job_id,call_key '
+                       'FROM studio_job_budget_links WHERE job_id=?', (next_job, previous))
         db.execute('INSERT INTO studio_material_transfers VALUES (?,?,?,?)', (task_id, previous, next_job, now()))
 
 
@@ -111,11 +123,4 @@ class MaterialExecution(JobExecution):
                     return Response(old['response_status'], json.loads(old['response_headers']), old['response_body'])
             db.execute('INSERT INTO studio_material_calls VALUES (?,?,?,?,?) ON CONFLICT(task_id,kind,request_key,provider) '
                        'DO UPDATE SET job_id=excluded.job_id', (self.task['id'], kind, digest, provider_hash, self.job['id']))
-            # Completed calls inherited from old owners still consume the new
-            # owner's explicit budget; they are not counted as new usage.
-            inherited = db.execute('SELECT count(*) FROM (SELECT DISTINCT c.job_id,c.call_key FROM studio_material_calls l '
-                'JOIN studio_evidence_tasks t ON t.id=l.task_id JOIN studio_job_calls c ON c.job_id=l.job_id AND c.call_key=l.request_key '
-                'WHERE t.job_id=? AND c.job_id!=? AND c.kind=?)', (self.job['id'], self.job['id'], kind)).fetchone()[0]
-            cap = self.parent.budgets.get(kind)
-            self.budgets[kind] = None if cap is None else max(0, cap - inherited)
         return super().call(kind, key, transport, provider=provider, **kwargs)
