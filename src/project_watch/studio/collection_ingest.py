@@ -10,6 +10,7 @@ from contextlib import closing
 from datetime import datetime
 from urllib.parse import urlsplit
 
+from project_watch.studio import evidence_tasks
 from project_watch.studio.http import HttpError
 from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePart
 from project_watch.studio.sources import item_key
@@ -77,6 +78,7 @@ class CollectionIngest:
             execution._guard(db)
             for statement in SCHEMA:
                 db.execute(statement)
+            db.execute(evidence_tasks.SCHEMA)
 
     def __call__(self, unit, items):
         try:
@@ -168,6 +170,8 @@ class CollectionIngest:
                        'observed_at=excluded.observed_at', (self.project_id, identity, item_id, record['id'], observed))
         db.execute('INSERT OR IGNORE INTO studio_collection_observations VALUES (?,?,?,?,?,?)',
                    (self.execution.job['id'], unit['id'], item_id, record['id'], operation, observed))
+        if operation != 'historical':
+            evidence_tasks.admit(db, self.execution, record['id'])
         return dict(item_id=item_id, evidence_version_id=record['id'], identity=identity,
                     operation=prior['operation'] if prior else operation, observed_at=prior['observed_at'] if prior else observed,
                     source_type=record['source_type'], read_scope=record['read_scope'],

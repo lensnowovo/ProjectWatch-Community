@@ -3,6 +3,27 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('material role exposes only structured submission with a typed receipt', () => {
+  const previous = process.env.PW_DSH_TOOLS;
+  try {
+    process.env.PW_DSH_TOOLS = JSON.stringify(['pw_submit_observations']);
+    const tools = [];
+    apply({tools:{register(tool) { tools.push(tool); }}});
+    assert.deepEqual(tools.map(t => t.name), ['pw_submit_observations']);
+    const tool = tools[0];
+    assert.equal(tool.parameters.additionalProperties, false);
+    assert.equal(tool.parameters.properties.observations.items.additionalProperties, false);
+    assert.deepEqual(tool.parameters.properties.observations.items.required, ['text', 'refs']);
+    assert.equal(tool.parameters.properties.observations.items.properties.refs.items.minLength, 64);
+    assert.equal(tool.output.schema.additionalProperties, false);
+    assert.deepEqual(tool.output.schema.required, ['received', 'review_status']);
+    assert.deepEqual(tool.output.schema.properties.review_status.enum, ['pending']);
+  } finally {
+    if (previous === undefined) delete process.env.PW_DSH_TOOLS;
+    else process.env.PW_DSH_TOOLS = previous;
+  }
+});
+
 for (const toolName of ['pw_judge', 'pw_context', 'pw_finish']) {
 test(`${toolName} waits for the host and preserves rejection feedback without retry`, async () => {
   const previous = { ...process.env };

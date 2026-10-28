@@ -55,6 +55,12 @@ export function apply(ctx) {
   const allowed = JSON.parse(process.env.PW_DSH_TOOLS || JSON.stringify(definitions.map(x => x[0])));
   const monitor = allowed.includes("pw_context");
   const list = [...definitions,
+    ["pw_submit_observations", "Submit source assertions for separate host validation and review. Select supplied reference IDs; do not rewrite quotes.",
+      { observations: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+        properties: { text: { type: "string", minLength: 1, maxLength: 3000 },
+          event_at: { anyOf: [{ type: "string", minLength: 10, maxLength: 10 }, { type: "null" }] },
+          refs: { type: "array", minItems: 1, maxItems: 20, items: {type: "string", minLength: 64, maxLength: 64} } },
+        required: ["text", "refs"] } } }, ["observations"]],
     ["pw_context", "Publish retained public records and inspect evidence, standing relations, temporary questions and due scope. Also inspect host collected_sources; use collection_offset=next_offset for more, and pw_read for stored evidence.",
       { collection_offset: { type: "integer", minimum: 0 } }, []],
     ["pw_explore", "Search a due standing relation or research question using one of its configured queries.",
@@ -78,7 +84,10 @@ export function apply(ctx) {
     ctx.tools.register({
       name: toolName, description,
       parameters: { type: "object", properties, required, additionalProperties: false },
-      output: { schema: {}, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+      output: { schema: toolName === "pw_submit_observations" ? { type: "object", additionalProperties: false,
+        properties: {received: {type: "boolean"}, review_status: {type: "string", enum: ["pending"]}},
+        required: ["received", "review_status"] } : {},
+        render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
       // Calls are serialized again by the gateway, including model traffic.
       isConcurrencySafe: () => false,
       async execute(args) {

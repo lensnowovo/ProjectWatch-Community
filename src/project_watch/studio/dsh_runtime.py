@@ -586,7 +586,7 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
                     if not initialized:
                         error = "dsh_initialization_failed"
                         break
-                    send(2, "session/prompt", {"sessionId": research.execution.job["id"], "contentBlocks": [{
+                    send(2, "session/prompt", {"sessionId": getattr(research, 'session_id', research.execution.job["id"]), "contentBlocks": [{
                         "type": "text", "text": "确认主体：" + research.project["legal_name"] + "。简称：" +
                         research.project["name"] + "。" + research.task}]})
                 elif message.get("id") == 2:
@@ -625,7 +625,7 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
             process.stdin.close()
             process.stdout.close()
     error = settled_error(research, error or runtime_failure)
-    research.execution.checkpoint("dsh_runtime", {
+    research.execution.checkpoint(getattr(research, 'runtime_receipt_stage', 'dsh_runtime'), {
         "version": DSH_VERSION, "initialized": initialized, "prompted": prompted, "idle": ended,
         "event_types": sorted(set(events)), "advertised_tools": sorted(gateway.advertised_tools),
         "gateway_model_requests": gateway.model_requests, "runtime_failure": runtime_failure,

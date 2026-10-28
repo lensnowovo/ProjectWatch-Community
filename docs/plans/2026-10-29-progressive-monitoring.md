@@ -39,6 +39,36 @@ clinical registry records and papers are not inferred from news headlines. The
 older installed build lacked this path. Synthetic host/report regressions cover
 the current path; they do not establish actual paper/clinical recall for a company.
 
+## P2 foundation (not the complete event-processing stage)
+
+Successful source ingest now records one material task per public evidence
+version and policy, atomically with its source/observation. Tasks retain their
+original parent job. Replay does not create a fresh task or fresh budget.
+The local processor uses that parent's existing lease and JobExecution; it has
+no scheduler or transport. A provider adapter must use that same journal.
+
+Model proposals select stable part IDs; the host restores exact immutable text
+and positions. These are candidate source assertions, not approved facts or
+news. Invalid proposal structure/reference affects its own material; unknown,
+budget and lease failures stop dispatch without erasing saved results. Input
+dependencies use the existing stale/rebuild mechanism. Withdrawal excludes input
+before extraction and is rechecked inside the output commit transaction.
+
+Still required for P2 completion: wire the fixed DSH extraction adapter into
+normal execution under a single pipeline owner; bounded scheduling/backpressure;
+explicit recovery of old-owner tasks without bypassing unknown; event revision,
+merge/split and correction projection. The foundation does not yet replace the
+current DSH batch, publish event observations or invoke extra model requests.
+
+The extraction adapter now has a pinned-runtime synthetic integration check:
+fresh session per material, one allowed structured submission tool, typed tool
+receipt, same parent's journal and budget, separate runtime/result checkpoint
+names. At most two model turns are admitted by a role instance; exhaustion
+persists an invalid candidate for per-material isolation. A received candidate
+replays locally. Existing project holds still prevent new role dispatch.
+These checks prove isolation and receipts, not extraction quality or complete
+pipeline migration; normal monitoring has not been switched to this adapter.
+
 ## Remaining stages
 
 P0: verify pinned DSH composition and the existing offline invariants.
