@@ -33,6 +33,7 @@ PYTHON_VERSION = "3.12.15"
 RUNTIME_RELEASE = "20261013"
 EXTRAS = "desktop,ocr,mcp,team,postgres"
 NODE_VERSION = "v24.22.1"
+MACOS_MINIMUM = "14.0"  # Frozen OCR wheels require macOS 14 or newer.
 # Official HTTPS SHASUMS256.txt, checked 2026-10-28. Signature not yet verified.
 NODE_HASHES = {
     "arm64": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
@@ -224,7 +225,7 @@ def write_plist(app, version, arch):
             "CFBundleExecutable": "ProjectWatch", "CFBundleVersion": build_version,
             "CFBundleIconFile": "ProjectWatch.icns",
             "CFBundleShortVersionString": short, "ProjectWatchVersion": version,
-            "LSMinimumSystemVersion": "13.0", "LSUIElement": True,
+            "LSMinimumSystemVersion": MACOS_MINIMUM, "LSUIElement": True,
             "LSArchitecturePriority": [arch], "NSHighResolutionCapable": True}
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
 
@@ -317,6 +318,7 @@ def build(args):
     validate_macho(runtime / "bin/python3.12", args.arch)
     site = runtime / "lib/python3.12/site-packages"
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PROJECT_WATCH_", "PYTHON", "UV_", "PIP_"))}
+    env['MACOSX_DEPLOYMENT_TARGET'] = MACOS_MINIMUM
     constraints = (["--constraint", str(args.constraints.resolve())] if getattr(args, "constraints", None) else [])
     subprocess.run([uv, "pip", "install", *constraints, "--python", sys.executable,
                     "--python-version", "3.12", "--python-platform", spec["target"],

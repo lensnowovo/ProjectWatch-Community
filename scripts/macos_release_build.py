@@ -118,14 +118,14 @@ print(json.dumps({'dependencies':rows,'libpq_version':psycopg.pq.version()}))'''
     run('git', 'archive', '--format=zip', '--output', delivery / source_name, 'HEAD')
     readme = '''# ProjectWatch R11b Apple Silicon 预览包
 
-适用于 M 系列 Mac（arm64）。内置 Python、Node、DSH，无需自行安装这些运行时。
+适用于 macOS 14+ 的 M 系列 Mac（arm64）。内置 Python、Node、DSH，无需自行安装这些运行时。
 解压后将 ProjectWatch.app 复制到“应用程序”并打开；替换旧版前先从菜单栏正常退出并备份。
 数据保存在 ~/Library/Application Support/ProjectWatch-Desktop，替换应用不等于删除数据。
 
 本包未做 Developer ID 签名和 Apple 公证。若系统拦截，请记录提示，不关闭 Gatekeeper。
 完成 GitHub macOS 15 arm64 原生导入、离线合成安装流程、原生 DSH 和中文路径验证；
 没有完成独立用户的 Finder 首次打开、菜单栏交互、休眠、真实付费服务验收。
-plist 声明 macOS 13.0，但不能据此声称所有13+系统已验证。Intel 不支持此包。
+最低系统要求为 macOS 14（由 OCR 依赖决定）；原生验证在 macOS 15 上完成。Intel 不支持此包。
 
 产品源码与已发布 R11b 一致。构建源码附件另包含 Mac 打包流程与 Node 24.22.1 固定哈希。
 Windows Release 已披露的分析/来源覆盖限制同样适用。源码使用 Community 1.0，非 OSI 开源。
