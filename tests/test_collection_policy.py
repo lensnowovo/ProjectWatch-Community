@@ -128,8 +128,10 @@ def test_configured_policy_drives_incremental_and_periodic_host_windows(tmp_path
             pipeline.store.enqueue(execution.job['project_id'], 'external', automatic=True)
             execution = JobExecution(pipeline.store, pipeline.store.claim())
             pipeline._execution_state.current = execution
+            collection_host.admit(execution, mode='incremental')
             dsh_runtime.run_monitor(pipeline, execution, None)
         else:
+            collection_host.admit(execution, mode='first')  # Legacy host-only protocol.
             dsh_runtime.run_bootstrap(pipeline, execution, None)
         plan = execution.read_checkpoint('collection_round_v1')['plan']
         assert plan['history_policy'] == dict(overlap_days=3, baseline_days=2)
