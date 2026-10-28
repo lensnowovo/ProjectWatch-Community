@@ -48,7 +48,7 @@
         },
         {
           "name": "Install maintainer tools",
-          "run": "python -m pip install build \"Pillow==13.0.0\" \"uv==0.11.10\" pytest pip-audit"
+          "run": "python -m pip install -c packaging/macos/r11b-constraints.txt \".[dev,desktop,ocr,mcp,team,postgres]\" build \"uv==0.11.10\" pip-audit"
         },
         {
           "name": "Build and verify native app",
