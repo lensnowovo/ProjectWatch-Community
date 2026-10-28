@@ -40,6 +40,32 @@ finish 只结束采集，不发布记录或修改长期监控范围。专业查�
 撤回来源 blocked、已冻结输入保留旧版，均不伪装为可自动执行的延期任务。
 长文分段扩展与全量质量验证尚未完成，不能据此声明 P2 完成或上线。
 
+### 独立公开范围维护（P4 首个子批）
+
+monitor 已准入关系记录在原 job 留下 `scope_maintenance_intent_v1`，事件和分析交接后由
+现有队列排入独立 `scope` job。fresh 角色只有 context/scope/status/finish，没有综合判断、
+搜索/读页、内部资料或永久订阅工具；最多4次生成。它选择已通过原材料语义准入的候选，
+新关系只按 MonitoringPlan 规则加入公开 trial；已有范围修改形成待人工确认的 proposal。
+临时问题仅从固定长期 parent 新建，继承其查询词、目标和别名，必须有退出标准，保留两跳、
+总量与分区上限。安静关系不自动结束；新问题实际材料/独立评估与睡眠唤醒在后续 P4 子批接入。
+
+关系适配固定公开主体/目标的唯一对象 ID、有效别名与整数版本；未建对象的技术/适应症等
+保留项目内 typed target。稳定 link 含主体 ID、类型、目标身份、watch ID/版本及原 refs。
+竞争关系可绑定既有 relationship scope_key/origin/version；其他关系不挤入竞争本体。
+人工 exclude 决定由宿主检查，旧 link 指向关闭或改目标的范围也不能重新授权。
+每次派发及提交事务检查范围、关系/人工决定、对象和公开证据版本；变动保留 pending。
+新增/提案与完成回执同事务保存，提交后角色 checkpoint 中断可以零新增调用恢复。
+
+事件触发的 scope 串接原 round budget tail，claim 等前驱终态，consumer 再继承前驱最终
+own/inherited calls，避免队列提前建 child 漏掉前驱后来消费。scope 不成为本轮分析的前置条件。
+既有公开范围首次轮询建立低频周期；27天到期是独立 cap=4 新轮，准入时持久化到期基准，
+普通失败不会每次轮询重置额度。它复核已存范围与候选；广度来源仍由 baseline 的有界采集产生，
+不自动增加一轮自由补搜。旧范围/证据失效、容量和未选候选保留明确原因。
+
+没有新增 schema DDL；job/checkpoint/state 与原 plan history 继续承担持久化。
+回退前须暂停 worker 并处理已排入的新 kind，保留回执和链接，不删除数据后用旧 worker 重放。
+此子批不是全 P4/P5 或上线声明；fresh topic、独立问题评估与 scheduler 睡眠/版本唤醒仍待接通。
+
 ### 事件交付与独立判断
 
 新 monitor 复用上述有界采集、正文和材料准入，但采集角色不做 judge/revise，也不修改长期范围。

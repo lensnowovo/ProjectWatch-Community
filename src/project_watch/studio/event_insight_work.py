@@ -170,6 +170,8 @@ def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
     if existing:
         return job  # An existing admission retains its exact predecessor and input.
     ancestor = JobExecution(pipeline.store, {'id': origin}).read_checkpoint(INPUT, db=db) or {}
+    if not ancestor:
+        ancestor = JobExecution(pipeline.store, {'id': origin}).read_checkpoint('public_stage_input_v1', db=db) or {}
     root = ancestor.get('round_root_job_id', origin)
     budget = JobExecution(pipeline.store, {'id': root}).read_checkpoint(BUDGET, db=db)
     if budget and budget['cap'] != state['cap']:

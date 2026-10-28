@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS studio_usage (
 );
 """
 
-JOB_KINDS = ("internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight")
+JOB_KINDS = ("internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight", "scope")
 LANDSCAPE_DAYS = 7  # competition / industry pages are regenerated weekly
 IMPORTANCE = ("major", "notable", "routine")
 ITEM_STATUS = ("new", "read", "starred", "dismissed")
@@ -1290,7 +1290,7 @@ class StudioStore:
             prefer_brief = int(burst[0] if burst else 0) < 2
             row = db.execute("""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
-                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief')
+                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief','scope')
                     OR COALESCE(p.status,'active')='active')
                 AND (j.kind!='external_followup' OR EXISTS (SELECT 1 FROM studio_jobs parent
                      WHERE parent.id=j.input_version AND parent.project_id=j.project_id AND parent.kind='external' AND parent.status='done')
@@ -1310,6 +1310,13 @@ class StudioStore:
                      WHERE c.job_id=j.id AND c.stage='event_insight_input_v1' AND parent.project_id=j.project_id
                        AND (parent.status IN ('done','failed') OR (parent.id=j.id
                          AND json_extract(c.data,'$.budget_basis')='explicit_new_analysis_round'))))
+                AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c WHERE c.job_id=j.id AND c.stage='public_stage_input_v1')
+                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints c LEFT JOIN studio_jobs parent
+                       ON parent.id=json_extract(c.data,'$.predecessor_job_id')
+                     WHERE c.job_id=j.id AND c.stage='public_stage_input_v1' AND
+                       ((parent.project_id=j.project_id AND parent.status IN ('done','failed'))
+                        OR (json_extract(c.data,'$.predecessor_job_id') IS NULL
+                            AND json_extract(c.data,'$.budget_basis')='explicit_periodic_scope_round'))))
                 ORDER BY CASE WHEN ? AND j.kind='brief' THEN 0 ELSE 1 END,
                          COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (prefer_brief,)).fetchone()
             if not row:

@@ -186,6 +186,9 @@ def run(pipeline, execution, runtime_root):
     from project_watch.studio.recovery import input_binding
 
     manifest = execution.read_checkpoint(event_insight_work.INPUT)
+    from project_watch.studio.public_stage_work import prepare
+
+    prepare(pipeline, execution, {**manifest, 'work': None})
     cap = execution.budgets.get('model')
     execution.budgets.update(model=manifest['cap'] if cap is None else min(cap, manifest['cap']), search=0, page=0, open_data=0, site=0)
     with closing(pipeline.store._connect()) as db:

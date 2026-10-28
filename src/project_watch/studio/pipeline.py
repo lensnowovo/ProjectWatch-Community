@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -2361,6 +2361,15 @@ class Pipeline:
             _log.info("crosscheck skipped: %s", exc)
 
     # ------------------------------------------------------------------ deep analysis
+    def run_scope(self, job: dict) -> None:
+        from project_watch.studio import scope_maintenance
+
+        execution = getattr(self._execution_state, 'current', None)
+        root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+        if not execution or not root:
+            raise ValueError('scope maintenance requires leased DSH runtime')
+        scope_maintenance.run(self, execution, Path(root))
+
     def run_insight(self, job: dict) -> None:
         """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
@@ -2738,7 +2747,8 @@ class Pipeline:
                 {"internal": self.run_internal, "external": self.run_external, 'external_followup': self.run_external_followup,
                  "brief": self.run_brief, "public_profile": self.run_public_profile,
                  "landscape": self.run_landscape, "business": self.run_business, "competition": self.run_competition,
-                 "details": self.run_details, "commercial": self.run_commercial, "insight": self.run_insight}[job["kind"]](job)
+                 "details": self.run_details, "commercial": self.run_commercial, "insight": self.run_insight,
+                 "scope": self.run_scope}[job["kind"]](job)
                 if execution:
                     if job['kind'] != 'internal' and (self.store.get_project(job['project_id']) or {}).get('status') == 'paused':
                         raise HttpError('project_paused')
@@ -2880,6 +2890,11 @@ class StudioWorker:
                     self.pipeline.schedule_details(project['id'])
                     self.pipeline.schedule_competition(project['id'])
                 self.pipeline.schedule_insight(project['id'])
+                if os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1':
+                    from project_watch.studio import scope_maintenance
+
+                    with suppress(HttpError):
+                        scope_maintenance.dispatch(self.pipeline, project['id'])
             # Only remember successful passes; an exception must retry normally.
             if changed:
                 self._analysis_stamp = stamp

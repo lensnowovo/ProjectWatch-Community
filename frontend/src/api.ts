@@ -399,7 +399,7 @@ export interface Job {
   runtime?: JobRuntime;
   dismissed?: boolean;
   id: string;
-  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight";
+  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope";
   status: "queued" | "running" | "done" | "failed";
   stage: string;
   error: string;

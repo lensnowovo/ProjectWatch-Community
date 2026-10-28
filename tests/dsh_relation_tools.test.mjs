@@ -3,6 +3,22 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('independent scope role exposes no analysis, source or internal tools', () => {
+  const previous = process.env.PW_DSH_TOOLS;
+  try {
+    const allowed = ['pw_context', 'pw_scope', 'pw_status', 'pw_finish'];
+    process.env.PW_DSH_TOOLS = JSON.stringify(allowed);
+    const tools = [];
+    apply({tools:{register(tool) { tools.push(tool); }}});
+    assert.deepEqual(new Set(tools.map(t => t.name)), new Set(allowed));
+    assert.match(tools.find(t => t.name === 'pw_scope').description, /No comprehensive judgment prerequisite/);
+    assert.deepEqual(tools.find(t => t.name === 'pw_finish').parameters.required, ['reason']);
+  } finally {
+    if (previous === undefined) delete process.env.PW_DSH_TOOLS;
+    else process.env.PW_DSH_TOOLS = previous;
+  }
+});
+
 test('bounded collection role cannot publish records or alter monitoring scope', () => {
   const previous = process.env.PW_DSH_TOOLS;
   try {

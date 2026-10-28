@@ -81,7 +81,15 @@ export function apply(ctx) {
       { analysis_json: string }, ["analysis_json"]],
     ["pw_revise", "Review scope after judgment. Do not modify context.revision_blocked_ids; explain gaps in reason instead. changes_json is an array; every row needs action/watch_id/why/refs. note and finish also REQUIRE text (cited answer, max 200 chars). set_exit needs exit_rule; explore needs text/axis/queries/exit_rule. [] is valid. On revision_validation fix the listed fields only, without regenerating judgment. Check items: dropped/proposed does not mean applied.",
       { changes_json: string, reason: string }, ["changes_json", "reason"]],
+    ["pw_scope", "Submit a bounded independent scope decision. Select reviewed candidates with retain(record_key), add a temporary question using a frozen standing parent with question(parent_id,text,exit_rule), or propose(watch_id,fields) for human review. No comprehensive judgment prerequisite, permanent scope, exit-rule mutation or source tools. [] preserves all candidates as not selected. This ends the maintenance stage.",
+      { changes_json: string, reason: string }, ["changes_json", "reason"]],
   ].filter(x => allowed.includes(x[0])).map(x => {
+    if (allowed.includes("pw_scope") && x[0] === "pw_context") return [
+      x[0], "Read the frozen public candidates, scope identities, owner decisions and current watch versions. No publication or collection.", x[2], x[3]];
+    if (allowed.includes("pw_scope") && x[0] === "pw_status") return [
+      x[0], "Inspect this bounded scope stage's input fingerprint and remaining shared model budget.", {}, []];
+    if (allowed.includes("pw_scope") && x[0] === "pw_finish") return [
+      x[0], "End scope maintenance without selecting further candidates; preserve remaining candidates as deferred.", {reason: string}, ["reason"]];
     if (x[0] === "pw_finish" && allowed.includes("pw_collect") && !allowed.includes("pw_record")) return [
       x[0], "End the bounded public collection pass only. Does not publish facts, events, analysis or monitoring scope.", x[2], x[3]];
     if (monitor && x[0] === "pw_finish") return [
