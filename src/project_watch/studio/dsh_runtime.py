@@ -273,8 +273,10 @@ class Gateway:
             self.research.guard()
             system = CONSISTENCY_SYSTEM if payload.get('phase') == 'consistency' else SYSTEM
             if payload.get('purpose') == 'public_record_admission' and payload.get('phase') != 'consistency':
-                from project_watch.studio.dsh_record_review import GUIDANCE
+                from project_watch.studio.dsh_record_review import GUIDANCE, TYPED_GUIDANCE
                 system += GUIDANCE
+                if payload.get('attribution_context'):
+                    system += TYPED_GUIDANCE
             aliases = ReviewFieldAliases(payload)
             body = {'model': self.model.model, 'stream': False, 'messages': [
                 {'role': 'system', 'content': system},
@@ -668,8 +670,9 @@ def recover_authorized_site(pipeline, execution):
 
 
 def run_bootstrap(pipeline, execution, runtime_root: Path):
-    from project_watch.studio import collection_host
+    from project_watch.studio import collection_host, progressive_bootstrap
 
+    owner = progressive_bootstrap.freeze(execution, 'bootstrap')
     admission = collection_host.admit(execution, mode='first')
     if admission['enabled']:
         collection_host.limit_budgets(execution, admission['mode'])
@@ -684,14 +687,17 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
     gateway = Gateway(research, settings.model, http)
     collection_host.prepare(research)
     directory = session_directory(research)
+    if owner['owner'] == 'materials':
+        return progressive_bootstrap.run(research, settings.model, http, runtime_root, directory)
     return run_dsh(research, gateway, runtime_root, directory)
 
 
 def run_monitor(pipeline, execution, runtime_root: Path, *, analysis_only=False):
-    from project_watch.studio import collection_host
+    from project_watch.studio import collection_host, progressive_bootstrap
     from project_watch.studio.dsh_monitor import PublicMonitor
 
     research_class = PublicMonitor
+    progressive_bootstrap.freeze(execution, 'monitor')
     if not analysis_only:
         request = execution.read_checkpoint('collection_request_v1') or {}
         mode = request.get('mode', 'incremental')

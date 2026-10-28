@@ -3,6 +3,26 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('typed material role requires attribution and locations without exposing legacy extraction', () => {
+  const previous = process.env.PW_DSH_TOOLS;
+  try {
+    process.env.PW_DSH_TOOLS = JSON.stringify(['pw_submit_records']);
+    const tools = [];
+    apply({tools:{register(tool) { tools.push(tool); }}});
+    assert.deepEqual(tools.map(t => t.name), ['pw_submit_records']);
+    const item = tools[0].parameters.properties.observations.items;
+    assert.deepEqual(item.required, ['kind', 'subject', 'label', 'text', 'refs', 'start', 'end']);
+    assert.equal(item.properties.text.maxLength, 600);
+    assert.equal(item.properties.refs.maxItems, 1);
+    for (const field of ['quote', 'source_id', 'exit_rule']) assert.equal(item.properties[field], undefined);
+    assert.ok(item.properties.relation_type.enum.includes('customer'));
+    assert.deepEqual(tools[0].output.schema.required, ['received', 'review_status']);
+  } finally {
+    if (previous === undefined) delete process.env.PW_DSH_TOOLS;
+    else process.env.PW_DSH_TOOLS = previous;
+  }
+});
+
 test('material role exposes only structured submission with a typed receipt', () => {
   const previous = process.env.PW_DSH_TOOLS;
   try {

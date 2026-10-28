@@ -12,12 +12,19 @@ CONTENT = ('label', 'text', 'date', 'reason', 'relation_type', 'relation_target'
 GUIDANCE = ('\n每个 field 是一条候选记录，包含标题、正文及关系属性；逐项断言全部支持才能判 supported。'
             '正面支持必须引用该 field 的 bound_evidence；其余 evidence 可用于反证。'
             '引文选择最短充分的连续原文片段，不改写。')
+TYPED_GUIDANCE = ('\n候选含 kind 和 subject 时，同时复核分类及其与 confirmed_company 的归属。'
+    'company 及档案事实须有依据关联到该公司；competitor 须有竞争关系依据；industry/policy 须符合所声明的类别。'
+    'peer/relation 的对象、方向、角色及关注理由须由所绑定材料支持。'
+    '不能仅因名称同页出现就判归属成立，无法确定时标 insufficient。')
 
 
 def payload_for(research, rows):
     fields, numbered, bindings = {}, {}, {}
     for key, row in sorted(rows.items()):
-        fields[key] = json.dumps({k: row[k] for k in CONTENT if row.get(k)}, ensure_ascii=False, sort_keys=True)
+        content = {k: row[k] for k in CONTENT if row.get(k)}
+        if row.get('subject'):
+            content.update(subject=row['subject'], kind=row['kind'])
+        fields[key] = json.dumps(content, ensure_ascii=False, sort_keys=True)
         bindings[key] = []
         for ref in row['refs']:
             version = research.store.evidence.get(research.project_id, ref['evidence_version_id'], include_internal=False)
@@ -26,8 +33,12 @@ def payload_for(research, rows):
                 'title': ref.get('title', ''), 'read_scope': version['read_scope'],
                 'source_type': version['source_type'], 'evidence_version_id': version['id']}
             bindings[key].append(name)
-    return {'purpose': 'public_record_admission', 'analysis': fields, 'fields': fields,
-            'evidence': numbered, 'bound_evidence': bindings}
+    payload = {'purpose': 'public_record_admission', 'analysis': fields, 'fields': fields,
+               'evidence': numbered, 'bound_evidence': bindings}
+    if any(row.get('subject') for row in rows.values()):
+        payload['attribution_context'] = {'confirmed_company': research.project['legal_name'],
+                                          'policy': TYPED_GUIDANCE}
+    return payload
 
 
 def validate_records(value, payload):

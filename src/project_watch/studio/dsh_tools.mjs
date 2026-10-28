@@ -61,6 +61,14 @@ export function apply(ctx) {
           event_at: { anyOf: [{ type: "string", minLength: 10, maxLength: 10 }, { type: "null" }] },
           refs: { type: "array", minItems: 1, maxItems: 20, items: {type: "string", minLength: 64, maxLength: 64} } },
         required: ["text", "refs"] } } }, ["observations"]],
+    ["pw_submit_records", "Submit typed public candidates, not confirmed facts. Name the subject and category explicitly. Select one immutable part ID and continuous character offsets; never transcribe quotes. Preserve qualifications and provide cited relationship attributes where applicable.",
+      { observations: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+        properties: { ...definitions.find(x => x[0] === "pw_record")[2],
+          subject: { type: "string", minLength: 1, maxLength: 200 },
+          refs: { type: "array", minItems: 1, maxItems: 1, items: {type: "string", minLength: 64, maxLength: 64} },
+          start: { type: "integer", minimum: 0 }, end: { type: "integer", minimum: 1 },
+          event_at: { anyOf: [{ type: "string", minLength: 10, maxLength: 10 }, { type: "null" }] } },
+        required: ["kind", "subject", "label", "text", "refs", "start", "end"] } } }, ["observations"]],
     ["pw_context", "Publish retained public records and inspect evidence, standing relations, temporary questions and due scope. Also inspect host collected_sources; use collection_offset=next_offset for more, and pw_read for stored evidence.",
       { collection_offset: { type: "integer", minimum: 0 } }, []],
     ["pw_explore", "Search a due standing relation or research question using one of its configured queries.",
@@ -78,13 +86,19 @@ export function apply(ctx) {
       "pw_finish", "End this reviewed round. Does not mean every topic is answered.", {reason: string}, ["reason"]];
     if (monitor && x[0] === "pw_record") return [x[0], x[1], {...x[2],
       kind: {...x[2].kind, enum: x[2].kind.enum.filter(k => k !== "watch")}}, x[3]];
+    if (x[0] === "pw_submit_records") {
+      const properties = { ...x[2].observations.items.properties };
+      for (const key of ["source_id", "quote", "exit_rule"]) delete properties[key];
+      return [x[0], x[1], { observations: {...x[2].observations,
+        items: {...x[2].observations.items, properties}} }, x[3]];
+    }
     return x;
   });
   for (const [toolName, description, properties, required] of list) {
     ctx.tools.register({
       name: toolName, description,
       parameters: { type: "object", properties, required, additionalProperties: false },
-      output: { schema: toolName === "pw_submit_observations" ? { type: "object", additionalProperties: false,
+      output: { schema: ["pw_submit_observations", "pw_submit_records"].includes(toolName) ? { type: "object", additionalProperties: false,
         properties: {received: {type: "boolean"}, review_status: {type: "string", enum: ["pending"]}},
         required: ["received", "review_status"] } : {},
         render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },

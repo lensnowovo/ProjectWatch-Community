@@ -775,7 +775,7 @@ class PublicBootstrap:
         news_items = []
         for row in records:
             if row["kind"] in KINDS:
-                new_facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs")})
+                new_facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs", "subject") if k in row})
             if row["kind"] in CATEGORIES:
                 source = self.source(row["source_id"])
                 news.setdefault(urldefrag(source["url"])[0], []).append(row)
@@ -810,7 +810,7 @@ class PublicBootstrap:
                 "key": key, "title": source["title"], "url": source["url"], "source": source["source"],
                 "published_at": source["published_at"], "snippet": source["excerpt"][:5000],
                 "extra": {"dsh_bootstrap": True, "evidence_version_id": source["evidence_version_id"],
-                          "dsh_claims": [{"kind": row["kind"], "text": row["text"], "refs": row["refs"]} for row in claims]}}])
+                          "dsh_claims": [{k: row[k] for k in ("kind", "text", "refs", "subject") if k in row} for row in claims]}}])
             item = self.store.item_by_key(self.project_id, key)
             # INSERT OR IGNORE deliberately preserves user state. Append new
             # claims separately so later categories do not erase prior findings.
@@ -820,11 +820,15 @@ class PublicBootstrap:
                 extra = json.loads(db.execute("SELECT extra FROM studio_items WHERE id=?", (item["id"],)).fetchone()[0] or "{}")
                 retained = list(extra.get("dsh_claims") or [])
                 for row in claims:
-                    claim = {"kind": row["kind"], "text": row["text"], "refs": row["refs"]}
+                    claim = {k: row[k] for k in ("kind", "text", "refs", "subject") if k in row}
                     if claim not in retained:
                         retained.append(claim)
                 extra.update(dsh_claims=retained, evidence_version_id=source["evidence_version_id"])
                 db.execute("UPDATE studio_items SET extra=? WHERE id=?", (json.dumps(extra, ensure_ascii=False), item["id"]))
+                if claims[0].get('subject') and not item.get('event_id'):
+                    # Collection channel is not semantic classification. Only
+                    # an admitted typed candidate assigns a new event's category.
+                    db.execute('UPDATE studio_items SET category=? WHERE id=? AND event_id IS NULL', (category, item['id']))
             self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
             body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]

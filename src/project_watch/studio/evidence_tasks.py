@@ -7,11 +7,12 @@ import hashlib
 import json
 from contextlib import closing
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 POLICY = 'event-observation-v1'
+TYPED_POLICY = 'public-record-candidate-v2'
 SCHEMA = """CREATE TABLE IF NOT EXISTS studio_evidence_tasks (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
     job_id TEXT NOT NULL REFERENCES studio_jobs(id),
@@ -40,6 +41,35 @@ class Proposal(BaseModel):
     observations: list[Observation] = Field(max_length=50)
 
 
+class RecordCandidate(Observation):
+    kind: Literal['business', 'product', 'person', 'founded', 'location', 'financing', 'milestone',
+                  'company', 'competitor', 'industry', 'policy', 'peer', 'relation']
+    label: str = Field(min_length=1, max_length=200)
+    subject: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=600)
+    refs: list[Annotated[str, Field(min_length=64, max_length=64)]] = Field(min_length=1, max_length=1)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    reason: str = Field(default='', max_length=600)
+    axis: str = Field(default='', max_length=30)
+    query: str = Field(default='', max_length=300)
+    relation_type: str = Field(default='', max_length=30)
+    relation_target: str = Field(default='', max_length=120)
+    relation_aliases: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator('subject')
+    @classmethod
+    def explicit_subject(cls, value):
+        if not value.strip():
+            raise ValueError('explicit subject required')
+        return value.strip()
+
+
+class RecordProposal(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    observations: list[RecordCandidate] = Field(max_length=50)
+
+
 def admit(db, execution, evidence_id):
     """Caller owns the ingest transaction; material and work commit together."""
     execution._guard(db)
@@ -48,9 +78,11 @@ def admit(db, execution, evidence_id):
                      (evidence_id, project_id)).fetchone()
     if not row:
         raise ValueError('stage input outside public project')
-    key = hashlib.sha256(json.dumps([project_id, 'public', evidence_id, POLICY]).encode()).hexdigest()
+    owner = execution.read_checkpoint('material_pipeline_v1') or {}
+    policy = TYPED_POLICY if owner.get('owner') == 'materials' else POLICY
+    key = hashlib.sha256(json.dumps([project_id, 'public', evidence_id, policy]).encode()).hexdigest()
     db.execute("INSERT OR IGNORE INTO studio_evidence_tasks (id,project_id,job_id,evidence_version_id,policy,status) "
-               "VALUES (?,?,?,?,?,'pending')", (key, project_id, execution.job['id'], evidence_id, POLICY))
+               "VALUES (?,?,?,?,?,'pending')", (key, project_id, execution.job['id'], evidence_id, policy))
     return key
 
 
@@ -63,8 +95,11 @@ def _input(execution, task):
         key = hashlib.sha256(f"{record['id']}:{index}".encode()).hexdigest()
         refs[key] = dict(evidence_version_id=record['id'], part_index=index, start=0,
                          end=len(part['text']), quote=part['text'], locator=part['locator'])
-    return dict(task_id=task['id'], evidence_version_id=record['id'], source_type=record['source_type'],
-                read_scope=record['read_scope'], refs=refs)
+    source = dict(task_id=task['id'], evidence_version_id=record['id'], source_type=record['source_type'],
+                  read_scope=record['read_scope'], refs=refs)
+    if task['policy'] == TYPED_POLICY:
+        source['policy'] = task['policy']
+    return source
 
 
 def _withdrawn(db, task):
@@ -90,7 +125,7 @@ def _save(execution, task, status, result):
                    (status, json.dumps(result, ensure_ascii=False, allow_nan=False), task['id']))
 
 
-def run_pending(execution, extractor, *, limit=20):
+def run_pending(execution, extractor, *, limit=20, policy=POLICY):
     """Bounded processing using the same JobExecution as collection/review.
 
 The extractor must journal external calls on that execution with task_id in
@@ -99,13 +134,15 @@ item-format errors. Invalid returned structure affects only that material.
 """
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('invalid material batch size')
+    if policy not in (POLICY, TYPED_POLICY):
+        raise ValueError('unsupported material policy')
     from project_watch.studio.material_ownership import MaterialExecution, project_guard
 
     with closing(execution.store._connect()) as db:
         execution._guard(db)
         tasks = [dict(row) for row in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
             "AND policy=? AND status='pending' ORDER BY rowid LIMIT ?",
-            (execution.job['id'], execution.job['project_id'], POLICY, limit))]
+            (execution.job['id'], execution.job['project_id'], policy, limit))]
     for task in tasks:
         material = MaterialExecution(execution, task)
         with closing(execution.store._connect()) as db:
@@ -118,13 +155,19 @@ item-format errors. Invalid returned structure affects only that material.
         source = _input(execution, task)
         response = extractor(source, material)
         try:
-            proposed = Proposal.model_validate(response)
+            proposed = (RecordProposal if policy == TYPED_POLICY else Proposal).model_validate(response)
             observations = []
             for observation in proposed.observations:
                 if any(ref not in source['refs'] for ref in observation.refs):
                     raise ValueError('reference_not_in_material')
-                observations.append(dict(text=observation.text,
-                    event_at=observation.event_at, refs=list(dict.fromkeys(observation.refs))))
+                if policy == TYPED_POLICY:
+                    ref = source['refs'][observation.refs[0]]
+                    if not 6 <= observation.end - observation.start <= 1500 or observation.end > len(ref['quote']):
+                        raise ValueError('invalid_reference_span')
+                    observations.append(observation.model_dump())
+                else:
+                    observations.append(dict(text=observation.text,
+                        event_at=observation.event_at, refs=list(dict.fromkeys(observation.refs))))
         except (ValidationError, ValueError):
             _save(execution, task, 'rejected', {'code': 'invalid_observation'})
             continue
