@@ -1,0 +1,40 @@
+{
+  "run_id": 40679100872,
+  "build_commit": "996928904ae7ef5bcba25d8df1386747b0c64d38",
+  "previous_body_sha256": "43a2bdeff695e328773aef095d2d2061c1fc9acf3c9f4a92eb63b7125dc8d5ac",
+  "windows_assets": {
+    "ProjectWatch-Setup.exe": "bbd7e6aa42d592005ba9b4b8b9df5907c2e7c962f65d1fe404f40fdb26a5b6a2",
+    "ProjectWatch-Windows-0.2.0rc2-r11b-Preview.zip": "958e1077d8103c7559fcac3d1a895817b3d0cc1db5bb06d3120a127d41251d7f",
+    "ProjectWatch-0.2.0rc2-r11b-source-review.zip": "ff074181e37e14b15ade9055822eaf8a0df5756f4039e3990748a15bc8be2ead",
+    "ProjectWatch-Third-Party-Sources-rc2-r2.zip": "d4b7b195aaa0ffaf9c2d806f34e996f85d47085bc014c70585b1a2f5a5fa57ab",
+    "ProjectWatch-0.2.0rc2-r11b-SHA256SUMS.txt": "9f7c436bf6779d4b454705f19c754a60c1ee5a68e64a5374b63bdfbeb676405a"
+  },
+  "assets": [
+    {
+      "name": "ProjectWatch-macOS-arm64-0.2.0rc2-r11b-Preview.zip",
+      "bytes": 276350763,
+      "sha256": "dc6e2ebe7d99b4f7f393aac57033701f0921071a17a1c54a8f1526fe6b6f4d23"
+    },
+    {
+      "name": "ProjectWatch-macOS-r11b-build-source.zip",
+      "bytes": 6922054,
+      "sha256": "768087464909b65d35527d14880318efabb75db4f110e7074749a6a7266403c0"
+    },
+    {
+      "name": "ProjectWatch-macOS-r11b-README.md",
+      "bytes": 1423,
+      "sha256": "9d1b1e85fa835a0e99441a9d3345db5c89646e55b457c07b419d7912e12d7176"
+    },
+    {
+      "name": "ProjectWatch-macOS-r11b-SHA256SUMS.txt",
+      "bytes": 441,
+      "sha256": "fc1ab713f621d0fa3043d32ba7a2347b957a688a0422142c1dd6f9e0e4dc6630"
+    },
+    {
+      "name": "ProjectWatch-macOS-r11b-Third-Party-Supplement.zip",
+      "bytes": 8376534,
+      "sha256": "b6047b0d6d0b176c8d9acc1591ff7d571f9eed08fcc344a1754e253230564b88"
+    }
+  ],
+  "notes_append": "## 新增：Apple Silicon Mac 预览包\n\nM 系列 Mac 请下载 **ProjectWatch-macOS-arm64-0.2.0rc2-r11b-Preview.zip**（约 276 MB）。最低 macOS 14，Intel 不适用。解压后将 ProjectWatch.app 放入“应用程序”；升级前正常退出并备份。应用内置 Python 3.12.15、Node 24.22.1 和 DSH，无需另装运行环境。数据保存在 `~/Library/Application Support/ProjectWatch-Desktop`。\n\n- 原生验证环境：macOS 15.7.9 arm64；[构建与验证 40679100872](https://github.com/lensnowovo/ProjectWatch-Community/actions/runs/40679100872) 成功。\n- 199 项通过、0 失败、1 项 Windows 专用路径测试跳过；原生 DSH 合成流程实际执行。实际 ZIP 解压到含中文及空格路径，安装版合成旅程和持久化重开通过，296 个产品文件与对应源码逐字节一致。没有真实供应商调用。\n- 对实际打包的 72 项 Python 依赖执行 pip-audit，未发现已知漏洞；这不是对所有原生库或全部行为的安全保证。\n- 本包未做 Developer ID 签名和 Apple 公证；尚未完成独立用户 Finder 首次打开、菜单栏交互、休眠及真实付费服务验收。遇到系统拦截请保留提示，不关闭 Gatekeeper。Windows 的 Defender 结果不能代替 Mac 验证。\n- 应用源码仍为 `aa53cf1f08e1fe48cacec8b93c36571892216bd5`；Mac 构建源码为 `996928904ae7ef5bcba25d8df1386747b0c64d38`，见单独构建源码附件。Mac 单独使用 pypdf 6.21.2 修复 PDF 长耗时问题，产品功能未扩展。许可和原第三方源码附件继续适用，另附 Mac 第三方源码补充包及 PyObjC 原许可证。\n\n### 新发现的 Windows 依赖风险\n\n本次 Mac 核验发现 pypdf 6.21.1 存在三项恶意 PDF 导致长时间运行的已知问题，修复版为 6.21.2：[上游公告](https://github.com/py-pdf/pypdf/security/advisories/GHSA-6c7f-9265-g8fw)、[公告二](https://github.com/py-pdf/pypdf/security/advisories/GHSA-jr96-gvgh-j3r4)、[公告三](https://github.com/py-pdf/pypdf/security/advisories/GHSA-gmh7-3g9r-mjh5)。**Mac 包已修补；原 Windows R11b 附件仍为 6.21.1，未在本次替换，仍待补丁。** Windows 用户暂勿导入不可信 PDF，不能把 Mac 本次扫描结果套用到 Windows。\n\n### Mac 附件 SHA-256\n\n| 文件 | SHA-256 |\n| --- | --- |\n| ProjectWatch-macOS-arm64-0.2.0rc2-r11b-Preview.zip | `dc6e2ebe7d99b4f7f393aac57033701f0921071a17a1c54a8f1526fe6b6f4d23` |\n| ProjectWatch-macOS-r11b-build-source.zip | `768087464909b65d35527d14880318efabb75db4f110e7074749a6a7266403c0` |\n| ProjectWatch-macOS-r11b-README.md | `9d1b1e85fa835a0e99441a9d3345db5c89646e55b457c07b419d7912e12d7176` |\n| ProjectWatch-macOS-r11b-SHA256SUMS.txt | `fc1ab713f621d0fa3043d32ba7a2347b957a688a0422142c1dd6f9e0e4dc6630` |\n| ProjectWatch-macOS-r11b-Third-Party-Supplement.zip | `b6047b0d6d0b176c8d9acc1591ff7d571f9eed08fcc344a1754e253230564b88` |\n"
+}

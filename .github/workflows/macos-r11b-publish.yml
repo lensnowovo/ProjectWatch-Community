@@ -1,0 +1,23 @@
+name: Publish reviewed Mac R11b assets
+on:
+  push:
+    branches: [codex/macos-r11b-build]
+    paths:
+      - .github/workflows/macos-r11b-publish.yml
+      - scripts/macos_release_publish.py
+      - scripts/macos-r11b-publication.json
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Verify retained artifact and add Mac assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/macos_release_publish.py
