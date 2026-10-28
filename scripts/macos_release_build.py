@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,7 +85,8 @@ def main():
         '--output', out / 'native-tests', '--dsh-runtime', resources / 'dsh',
         'tests/test_macos_bundle.py', 'tests/test_macos_developer.py',
         'tests/test_macos_executor.py', 'tests/test_studio_dsh_runtime.py',
-        'tests/test_studio_dsh_monitor.py', 'tests/test_collection_model_continuation.py')
+        'tests/test_studio_dsh_monitor.py', 'tests/test_collection_model_continuation.py',
+        'tests/test_file_intake_safety.py', 'tests/test_collection_pages.py')
     shutil.copyfile(out / 'native-tests/pytest.xml', receipts / 'native-tests.xml')
     suites = ET.parse(receipts / 'native-tests.xml').getroot().iter('testsuite')
     counts = {key: 0 for key in ('tests', 'failures', 'errors', 'skipped')}
@@ -93,14 +95,15 @@ def main():
             counts[key] += int(suite.get(key, 0))
     assert counts['tests'] and not counts['failures'] and not counts['errors']
     # Inventory the shipped environment, not the maintainer/test venv.
-    code = '''import importlib.metadata as m,json,psycopg.pq
+    code = '''import importlib.metadata as m,json,psycopg.pq,shapely,ssl
 rows=[]
 for d in m.distributions():
  rows.append({'name':d.metadata['Name'],'version':d.version,
  'license':d.metadata.get('License-Expression') or d.metadata.get('License'),
  'classifiers':[x for x in d.metadata.get_all('Classifier',[]) if x.startswith('License')],
- 'license_files':[str(p) for p in d.files or [] if any(x in str(p).lower() for x in ('license','copying','notice'))]})
-print(json.dumps({'dependencies':rows,'libpq_version':psycopg.pq.version()}))'''
+ 'license_files':[str(p) for p in d.files or [] if any(x in str(p).lower() for x in ('license','licence','copying','notice'))]})
+print(json.dumps({'dependencies':rows,'libpq_version':psycopg.pq.version(),
+ 'geos_version':shapely.geos_version_string,'python_openssl':ssl.OPENSSL_VERSION}))'''
     inventory = json.loads(subprocess.check_output([str(app_python), '-I', '-B', '-c', code], text=True))
     (receipts / 'dependency-inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
     requirements = receipts / 'audit-requirements.txt'
@@ -116,6 +119,16 @@ print(json.dumps({'dependencies':rows,'libpq_version':psycopg.pq.version()}))'''
     shutil.copyfile(archive, delivery / name)
     source_name = 'ProjectWatch-macOS-r11b-build-source.zip'
     run('git', 'archive', '--format=zip', '--output', delivery / source_name, 'HEAD')
+    supplement = json.loads((ROOT / 'packaging/macos/source-supplement.json').read_text())
+    source_dir = out / 'third-party-sources'
+    source_dir.mkdir()
+    for item in supplement:
+        download(item['url'], source_dir / item['name'], item['sha256'])
+    with zipfile.ZipFile(delivery / 'ProjectWatch-macOS-r11b-Third-Party-Supplement.zip',
+                         'x', compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(source_dir.iterdir()):
+            archive.write(path, path.name)
+        archive.writestr('source-manifest.json', json.dumps(supplement, indent=2))
     readme = '''# ProjectWatch R11b Apple Silicon 预览包
 
 适用于 macOS 14+ 的 M 系列 Mac（arm64）。内置 Python、Node、DSH，无需自行安装这些运行时。
@@ -130,6 +143,8 @@ print(json.dumps({'dependencies':rows,'libpq_version':psycopg.pq.version()}))'''
 产品源码与已发布 R11b 一致。构建源码附件另包含 Mac 打包流程与 Node 24.22.1 固定哈希。
 Windows Release 已披露的分析/来源覆盖限制同样适用。源码使用 Community 1.0，非 OSI 开源。
 许可证位于应用资源、Python dist-info 和 DSH notices；第三方对应源码见同一 Release 的附件。
+Mac 包的 pypdf 已固定至 6.21.2，修复 6.21.1 的恶意 PDF 长耗时问题；应用源码保持 R11b。
+新增第三方源码补充附件与原第三方源码附件配合使用。PyObjC 许可证另保留在应用 LICENSES 中。
 '''
     (delivery / 'ProjectWatch-macOS-r11b-README.md').write_text(readme, encoding='utf-8')
     receipt = {'product_commit': PRODUCT_COMMIT,

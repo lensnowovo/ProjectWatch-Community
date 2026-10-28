@@ -45,7 +45,7 @@ pycparser==3.11
 pydantic==2.14.1
 pydantic_core==2.50.1
 PyJWT==2.15.1
-pypdf==6.21.1
+pypdf==6.21.2
 pypdfium2==4.30.0
 pystray==0.19.5
 python-docx==1.2.0

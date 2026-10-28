@@ -1,0 +1,30 @@
+[
+  {
+    "package": "pyobjc-core",
+    "version": "12.2.2",
+    "url": "https://files.pythonhosted.org/packages/a5/78/abc4ce5920305780aeb36b4067a86253378b36e29ba96673a3deb02eb03a/pyobjc_core-12.2.2.tar.gz",
+    "name": "pyobjc_core-12.2.2.tar.gz",
+    "sha256": "3906452339cd06a3bb07df103c2511d4cb0f7a22d8771c0b802eba15d9a642b6"
+  },
+  {
+    "package": "openpyxl",
+    "version": "3.1.5",
+    "url": "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz",
+    "name": "openpyxl-3.1.5.tar.gz",
+    "sha256": "cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050"
+  },
+  {
+    "package": "et-xmlfile",
+    "version": "2.0.0",
+    "url": "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz",
+    "name": "et_xmlfile-2.0.0.tar.gz",
+    "sha256": "dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54"
+  },
+  {
+    "package": "pypdf",
+    "version": "6.21.2",
+    "url": "https://files.pythonhosted.org/packages/06/28/081f1cbcca7042441dafc8de00f48ba60853f89e5bff92c5f26477346d81/pypdf-6.21.2.tar.gz",
+    "name": "pypdf-6.21.2.tar.gz",
+    "sha256": "0a3e1c5c886a1be03646c16a04827cc166c2a0575c971b26a4bf89686551c2d4"
+  }
+]
