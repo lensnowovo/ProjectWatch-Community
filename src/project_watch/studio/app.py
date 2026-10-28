@@ -30,7 +30,7 @@ from project_watch.studio.public_profile import company_trials
 from project_watch.studio.resolve import resolve_company
 from project_watch.studio.settings import SearchConfig, SettingsStore, SettingsUnavailable
 from project_watch.studio.sources import Collectors
-from project_watch.studio.store import StudioStore
+from project_watch.studio.store import FollowupSuperseded, StudioStore
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 DRAFT_TTL_SECONDS = 6 * 3600
@@ -886,6 +886,9 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                 raise HTTPException(409, '请先恢复监控')
             try:
                 return store.retry_external_followup(project_id)
+            except FollowupSuperseded:
+                # Stale receipts are not resumed; the owner's rerun starts a round on current inputs.
+                return store.enqueue(project_id, 'external')
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
         if body.kind == 'commercial':

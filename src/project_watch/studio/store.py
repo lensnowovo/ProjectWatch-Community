@@ -184,6 +184,10 @@ def now() -> str:
 UNREAD_DAYS = 14
 
 
+class FollowupSuperseded(ValueError):
+    """The failed follow-up's inputs changed; recover with a fresh round, never by resuming it."""
+
+
 class StudioStore:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -1226,7 +1230,11 @@ class StudioStore:
                 raise ValueError('补全已完成，请重新更新项目')
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED}",
                                  (job['id'],)).fetchone()
-            if unknown or job['retry_after'] == '9999-12-31':
+            if unknown:
+                raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
+            if job['retry_after'] == '9999-12-31':
+                if '监控依据已变化' in (job['error'] or ''):
+                    raise FollowupSuperseded('监控依据已变化，请按最新信息重新更新项目')
                 raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
             db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
                        "lease_token='',lease_until=NULL WHERE id=?", (job['id'],))
