@@ -571,12 +571,10 @@ class PublicMonitor(PublicBootstrap):
         analysis = self.pipeline.insight_generator.normalize(raw, ctx["numbered"])
         if not analysis["cited"]:
             raise ValueError("judgment needs valid citations")
-        review = dsh_judgment_review.verify(self, analysis, ctx)
-        previous = insight.load(self.store, self.project_id) or {}
-        if previous.get("fingerprint") != ctx["fingerprint"] or previous.get("analysis") != analysis:
-            insight.save(self.store, self.project_id, analysis, ctx, model="dsh-public")
-        self.store.set_state("dsh-judgment-proof:" + self.project_id,
-                            digest([self.judgment_signature(ctx), analysis]))
+        review = self.review_candidate(analysis, ctx)
+        if review is None:
+            return {'saved': False, 'pending': self.state['finished']}
+        self.save_judgment(analysis, ctx, review)
         self.state["judged"] = ctx["fingerprint"]
         self.state["judged_numbered"] = digest(ctx["numbered"])
         self.state["judgment_gaps"] = analysis["gaps"]
@@ -584,6 +582,16 @@ class PublicMonitor(PublicBootstrap):
         return {"saved": True, "fingerprint": ctx["fingerprint"], "gaps": analysis["gaps"],
                 "evidence_review": review,
                 "next_tool": "pw_revise"}
+
+    def review_candidate(self, analysis, ctx):
+        return dsh_judgment_review.verify(self, analysis, ctx)
+
+    def save_judgment(self, analysis, ctx, review):
+        previous = insight.load(self.store, self.project_id) or {}
+        if previous.get("fingerprint") != ctx["fingerprint"] or previous.get("analysis") != analysis:
+            insight.save(self.store, self.project_id, analysis, ctx, model="dsh-public")
+        self.store.set_state("dsh-judgment-proof:" + self.project_id,
+                            digest([self.judgment_signature(ctx), analysis]))
 
     def validate_revisions(self, rows, ctx):
         watches = {w["id"]: w for w in ctx["watches"]}

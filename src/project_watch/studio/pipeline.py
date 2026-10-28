@@ -396,6 +396,9 @@ class Pipeline:
         from project_watch.studio.relationships import RelationshipStore
 
         self.relationships = RelationshipStore(store, self.objects)
+        from project_watch.studio.insight_versions import initialize
+
+        initialize(store)
         self._insight_checked: dict[str, datetime] = {}
         from project_watch.studio.health import HealthStore
 
@@ -2362,6 +2365,13 @@ class Pipeline:
         """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
         execution = getattr(self._execution_state, 'current', None)
+        if execution and execution.read_checkpoint('event_insight_input_v1'):
+            from project_watch.studio import event_insight
+
+            if not dsh_root:
+                raise ValueError('frozen insight requires DSH runtime')
+            event_insight.run(self, execution, Path(dsh_root))
+            return
         if dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
             from project_watch.studio.dsh_runtime import run_monitor
 
@@ -2384,10 +2394,19 @@ class Pipeline:
         """Analyse settled new evidence once, without holding it behind a daily gate."""
         from project_watch.studio.public_executor import unavailable_reason
 
-        if unavailable_reason() or (os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1"):
-            # The DSH external round owns its public judgment. The legacy
-            # all-source fingerprint must not enqueue a second, paid loop.
+        if unavailable_reason():
             return None
+        project, settings = self.store.get_project(project_id), self.settings_store.load()
+        if not project or not project['activated'] or project['status'] != 'active' or not settings.model.ready:
+            return None
+        if os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
+            # Dispatch only durable object/event work from a settled source round.
+            from project_watch.studio import event_insight_work
+
+            try:
+                return event_insight_work.dispatch_pending(self, project_id)
+            except HttpError:
+                return None  # Existing project hold remains visible; no new stage bypasses it.
         if self.insight_generator is None:
             return None
 
@@ -2686,6 +2705,23 @@ class Pipeline:
         self._execution_state.current = execution
         try:
             with self.store.write_scope(execution._guard if execution else None):
+                if (execution and job['kind'] == 'insight' and job.get('input_version', '').startswith('manual:')
+                        and os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'):
+                    from project_watch.studio import event_insight_work
+
+                    event_insight_work.admit_manual(self, execution)
+                if (execution and job['kind'] in ('external', 'external_followup')
+                        and os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+                        and execution.read_checkpoint('material_pipeline_v1') is None):
+                    from project_watch.studio import progressive_bootstrap
+
+                    request = execution.read_checkpoint('collection_request_v1') or {}
+                    monitor = os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
+                    project = self.store.get_project(job['project_id']) or {}
+                    if request.get('mode') == 'topic' or (monitor and (job['kind'] == 'external_followup' or project.get('last_external_at'))):
+                        progressive_bootstrap.freeze(execution, 'monitor', materials=request.get('mode') != 'topic')
+                    elif not project.get('last_external_at'):
+                        progressive_bootstrap.freeze(execution, 'bootstrap')
                 if execution and job['kind'] != 'commercial':
                     from project_watch.studio.recovery import input_binding
 
@@ -2784,6 +2820,22 @@ class StudioWorker:
                     new_status = "blocked_failed" if not job or job[0] == "failed" else "blocked_no_current_output"
                 elif status == "queued":
                     dependency = deps.get(pid, request["artifact_key"])
+                    if dependency and dependency['kind'] == 'insight':
+                        if not model_ready or project['status'] != 'active' or not project['activated']:
+                            continue
+                        from project_watch.studio import event_insight_work
+
+                        try:
+                            job = event_insight_work.rebuild(self.pipeline, pid, request)
+                        except HttpError:
+                            continue
+                        if job is None:
+                            continue
+                        new_status = 'scheduled:' + job['id']
+                        with closing(store._connect()) as db, db:
+                            db.execute('UPDATE studio_rebuild_requests SET status=? WHERE project_id=? AND artifact_key=? '
+                                'AND generation=? AND status=?', (new_status, pid, request['artifact_key'], request['generation'], status))
+                        continue
                     kind = {"profile": "internal", "public_profile": "public_profile", "brief": "brief"}.get(dependency["kind"] if dependency else "")
                     if not kind:
                         new_status = "awaiting_source_update"

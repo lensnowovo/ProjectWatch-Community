@@ -198,8 +198,9 @@ def test_started_and_recovery_jobs_freeze_legacy_before_research_construction(se
     assert progressive_bootstrap.freeze(execution, 'bootstrap') == owner
 
 
-def test_monitor_stays_legacy_and_cannot_change_bootstrap_owner(setup, monkeypatch):
+def test_started_monitor_stays_legacy_and_cannot_change_bootstrap_owner(setup, monkeypatch):
     pipeline, execution = setup
+    execution.checkpoint('recovery_inputs', {})
     pipeline.http_factory = lambda _: Http(lambda _m, url, *_a: fixtures.response(url))
     seen = []
     monkeypatch.setattr(dsh_runtime, 'run_dsh', lambda research, *_: seen.append(research.tools))

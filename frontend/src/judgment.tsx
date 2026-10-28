@@ -120,7 +120,7 @@ function JudgmentEvidence({compact,children}:{compact:boolean;children:ReactNode
 function Provenance({ view }: { view: InsightView }) {
   const record = view.record!;
   // An external Agent's write-back keeps its name; the analysis and source statements are stored separately.
-  return <span className="jd-meta">{record?.origin?.producer ? `${record.origin.producer} 写回` : "AI"} 交叉分析 · 依据 {record.total} 条 · {new Date(record.generated_at).toLocaleDateString("zh-CN")}</span>;
+  return <span className="jd-meta">{record?.origin?.producer ? `${record.origin.producer} 写回` : "AI"} 交叉分析 · 依据 {record.total} 条 · {new Date(record.generated_at).toLocaleDateString("zh-CN")}{record.status === "stale" || record.dependency?.status === "stale" ? " · 依据已变化，保留旧版待更新" : ""}</span>;
 }
 
 /** 竞争对手: where the company stands against its peers. */

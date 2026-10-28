@@ -266,7 +266,7 @@ export interface InsightAnalysis {
 export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] }
 export interface InsightView {
   generation_available?: boolean;
-  record: { analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
+  record: { id?: string; status?: string; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
   history: { generated_at: string; headline: string; position: string; maturity: string; consensus: string; industry: string }[];
   job: { id: string; status: Job["status"]; error: string | null; created_at: string } | null;
   model_ready: boolean;

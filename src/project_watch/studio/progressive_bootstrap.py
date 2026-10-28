@@ -22,7 +22,7 @@ OWNER = 'material_pipeline_v1'
 CLOSEOUT = 'material_closeout_v1'
 
 
-def freeze(execution, entry):
+def freeze(execution, entry, *, materials=False):
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
@@ -40,10 +40,11 @@ def freeze(execution, entry):
         started = bool(stages - {'collection_request_v1', 'external_first_ready', 'external_followup_input'})
         started |= db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1',
                               (execution.job['id'],)).fetchone() is not None
-        value = dict(entry=entry, owner='materials' if entry == 'bootstrap' and not started else 'legacy',
+        value = dict(entry=entry, owner='materials' if (entry == 'bootstrap' or materials) and not started else 'legacy',
                      policy=evidence_tasks.TYPED_POLICY,
-                     reason='started_or_recovery' if started else 'monitor_integration_pending' if entry != 'bootstrap' else '')
+                     reason='started_or_recovery' if started else 'monitor_integration_pending' if entry != 'bootstrap' and not materials else '')
         if value['owner'] == 'materials':
+            value['mapping_version'] = 'subject-v1'
             project_guard(db, execution.job['project_id'], execution.job['id'])
         db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
                    (execution.job['id'], OWNER, json.dumps(value)))
@@ -96,6 +97,11 @@ def _map_records(research):
                 continue
             row = research.state['records'][-1]
             row.update(subject=candidate['subject'], date=candidate['event_at'] or '')
+            if (research.execution.read_checkpoint(OWNER) or {}).get('mapping_version') == 'subject-v1':
+                from project_watch.studio.dsh_bootstrap import digest
+
+                row['key'] = digest([row['key'], candidate['subject']])
+                research.state['records'] = [r for r in research.state['records'][:-1] if r['key'] != row['key']] + [row]
             # Keep the chosen location even when the same text occurs twice.
             row['refs'][0].update(part_index=ref['part_index'], start=candidate['start'], end=candidate['end'], quote=quote)
     research.execution.checkpoint_chunked('material_mapping_v2', {'issues': issues, 'tasks': len(tasks)})

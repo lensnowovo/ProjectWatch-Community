@@ -1303,6 +1303,13 @@ class StudioStore:
                          AND j.input_version='recovery:'||parent.id))
                 AND (j.kind!='external' OR NOT EXISTS (SELECT 1 FROM studio_jobs material
                      WHERE material.project_id=j.project_id AND material.kind='internal' AND material.status IN ('queued','running')))
+                AND (j.kind!='insight' OR NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c
+                     WHERE c.job_id=j.id AND c.stage='event_insight_input_v1') OR EXISTS (
+                     SELECT 1 FROM studio_job_checkpoints c JOIN studio_jobs parent
+                       ON parent.id=COALESCE(json_extract(c.data,'$.predecessor_job_id'),json_extract(c.data,'$.origin_job_id'))
+                     WHERE c.job_id=j.id AND c.stage='event_insight_input_v1' AND parent.project_id=j.project_id
+                       AND (parent.status IN ('done','failed') OR (parent.id=j.id
+                         AND json_extract(c.data,'$.budget_basis')='explicit_new_analysis_round'))))
                 ORDER BY CASE WHEN ? AND j.kind='brief' THEN 0 ELSE 1 END,
                          COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (prefer_brief,)).fetchone()
             if not row:

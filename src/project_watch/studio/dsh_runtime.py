@@ -705,7 +705,12 @@ def run_monitor(pipeline, execution, runtime_root: Path, *, analysis_only=False)
     from project_watch.studio.dsh_monitor import PublicMonitor
 
     research_class = PublicMonitor
-    progressive_bootstrap.freeze(execution, 'monitor')
+    request = execution.read_checkpoint('collection_request_v1') or {}
+    owner = progressive_bootstrap.freeze(execution, 'monitor', materials=not analysis_only and request.get('mode') != 'topic')
+    if owner['owner'] == 'materials':
+        from project_watch.studio import progressive_monitor
+
+        return progressive_monitor.run(pipeline, execution, runtime_root)
     if not analysis_only:
         request = execution.read_checkpoint('collection_request_v1') or {}
         mode = request.get('mode', 'incremental')

@@ -139,11 +139,14 @@ class RelationshipStore:
             self.objects.evidence.dependencies.track_objects(project_id, "relationship:" + key, checked["object_versions"], db=db)
             return record
 
-    @staticmethod
-    def _history(db, record):
+    def _history(self, db, record):
         db.execute("INSERT INTO studio_relationship_history VALUES (?,?,?,?,?,?,?)",
                    (record["project_id"], record["scope_key"], record["origin"], record["version"],
                     record["visibility"], json.dumps(record), now()))
+        if record['origin'] == 'auto_research':
+            # A changed automatic relationship also changes a judgment's
+            # interpretation context. Existing rebuild rows coalesce the work.
+            self.objects.evidence.dependencies.on_relationship_corrected(record['project_id'], db=db)
 
     def _rows(self, table, project_id, include_internal=True, *, db=None):
         # Table is internal and fixed by the methods below, never a request parameter.

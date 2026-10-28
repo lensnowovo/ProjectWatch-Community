@@ -336,6 +336,7 @@ class PublicBootstrap:
     task = "完成公开项目档案与监控范围补全。"
     bootstrap_projection = True
     topic_projection = False
+    allow_scope_projection = True
 
     def __init__(self, pipeline, execution, collectors, reader):
         self.pipeline, self.execution = pipeline, execution
@@ -785,6 +786,9 @@ class PublicBootstrap:
                 news.setdefault(urldefrag(source["url"])[0], []).append(row)
         # Reuse legacy category-based keys as well as new URL-based keys, without
         # deleting history, restoring dismissed events, or crossing projects.
+        publication_intent = getattr(self, 'publication_intent', None)
+        if publication_intent:
+            publication_intent(news)
         with closing(self.store._connect()) as db:
             existing_news = db.execute("SELECT key,url FROM studio_items WHERE project_id=? AND key LIKE 'dsh:%' "
                                       "ORDER BY collected_at,id", (self.project_id,)).fetchall()
@@ -891,7 +895,7 @@ class PublicBootstrap:
         if dependency["status"] != "current":
             status = "partial"
         peers = [{"name": peer_label(row["label"]), "reason": row["reason"], "evidence": row["refs"]}
-                 for row in records if row["kind"] == "peer"]
+                 for row in records if row["kind"] == "peer" and self.allow_scope_projection]
         report = {category: {
             "checked": sum(s["category"] == category for s in self.state["searches"]),
             "added": sum(claims[0]["kind"] == category for claims in news.values()),
