@@ -1,7 +1,8 @@
 """Durable, local exploration control. No model calls and no project scheduler changes.
 
-An exploration may sleep while ordinary monitoring keeps collecting evidence. Only
-new, routed evidence wakes it; replaying a job or touching an event timestamp does not.
+An exploration may sleep while ordinary monitoring keeps collecting evidence.
+New routed evidence or an explicit owner topic admission may wake it; replaying
+a job or touching an event timestamp does not.
 """
 from __future__ import annotations
 
@@ -33,9 +34,10 @@ CREATE TABLE IF NOT EXISTS studio_exploration_history (
 
 NO_GAIN_ROUNDS = 3
 REASONS = {
-    'exploring': '探索中', 'new_evidence': '新证据唤醒', 'answered': '本次问题已回答',
+    'exploring': '探索中', 'new_evidence': '新证据唤醒', 'owner_requested': '用户启动专题', 'answered': '本次问题已回答',
     'no_gain': '连续三轮无新线索', 'relation_limit': '已到关联边界',
     'capacity_limit': '已到关注点容量', 'source_failure': '来源失败，等待重试',
+    'request_budget': '本轮调用额度已到，等待后续运行',
     'waiting_recovery': '等待确认恢复', 'waiting_event': '等待新证据',
 }
 
@@ -46,32 +48,71 @@ class Explorations:
 
     @staticmethod
     def managed(watch):
-        return watch.get('tier') == 'topic' or watch.get('cadence') == 'event'
+        return (watch.get('scope_kind') != 'relation'
+                and (watch.get('tier') == 'topic' or watch.get('cadence') == 'event'))
 
     def view(self, project_id):
         with self.monitor._db() as db:
             return {r['watch_id']: {**dict(r), 'label': REASONS.get(r['reason'], r['reason'])}
                     for r in db.execute('SELECT * FROM studio_explorations WHERE project_id=?', (project_id,))}
 
-    def tokens(self, watch, ledger=None):
+    def tokens(self, watch, ledger=None, *, event_filter=None, legacy_aliases=None):
         """Content, not collection clocks. Only already-routed, non-dismissed inputs.
 
         Material routing is revalidated against consent/binding/current versions by
         the question ledger. Raw commercial records never enter this path.
         """
         tokens = set()
+        # The DSH project's routing policy survives restarts and other evidence
+        # arrival paths. Internal questions/materials retain their old behavior.
+        if (event_filter is None and watch.get('visibility') == 'public'
+                and (watch.get('scope_kind') in ('relation', 'question')
+                     or self.monitor.store.get_state('dsh-public-routing:' + watch['project_id']) == 'focus-v1')):
+            from project_watch.studio.questions import QuestionLedger
+
+            project = self.monitor.store.get_project(watch['project_id']) or {}
+            def event_filter(w, row):
+                return QuestionLedger.public_row_match(w, project, row)
         with self.monitor._db() as db:
-            for row in db.execute('''SELECT DISTINCT i.title,i.snippet,ev.content_hash
+            public_rows = None
+            if watch.get('visibility') == 'public':
+                from project_watch.studio.questions import QuestionLedger
+                public_rows = {r["id"]: r for r in QuestionLedger.public_event_rows(db, watch["project_id"])}
+            for row in db.execute('''SELECT DISTINCT i.id,i.title,i.summary,i.snippet,i.body,i.body_status,ev.content_hash,
+                e.title AS event_title,e.summary AS event_summary
                 FROM studio_watch_hits h JOIN studio_items i ON i.id=h.item_id
                 JOIN studio_events e ON e.id=i.event_id
                 LEFT JOIN studio_item_evidence ie ON ie.item_id=i.id
                 LEFT JOIN studio_evidence_versions ev ON ev.id=ie.evidence_version_id AND ev.project_id=i.project_id
-                WHERE h.watch_id=? AND i.project_id=? AND e.project_id=? AND e.status!='dismissed' ''',
+                WHERE h.watch_id=? AND i.project_id=? AND e.project_id=? AND i.relevant=1 AND e.status!='dismissed' ''',
                 (watch['id'], watch['project_id'], watch['project_id'])):
-                # Same article/event content under a new row ID is not new evidence.
+                candidate = dict(row) if public_rows is None else public_rows.get(row["id"])
+                if candidate is None:
+                    continue
+                if event_filter is not None and watch.get('visibility') == 'public' and not event_filter(watch, candidate):
+                    continue
                 payload = row['content_hash'] or json.dumps(
-                    [' '.join(str(v or '').split()) for v in (row['title'], row['snippet'])], ensure_ascii=False)
-                tokens.add('event:' + hashlib.sha256(payload.encode()).hexdigest())
+                    [' '.join(str(v or '').split()) for v in (row['title'], row['snippet'],
+                     row['body'] if row['body_status'] in ('article_body', 'partial_body', 'search_summary') else '')], ensure_ascii=False)
+                legacy = 'event:' + hashlib.sha256(payload.encode()).hexdigest()
+                if watch.get('visibility') != 'public':
+                    tokens.add(legacy)
+                    continue  # Internal evidence/disclosure semantics are unchanged.
+                # EvidenceStore hashes include provenance/locators. Agent intake
+                # has no such binding and truncates its snippet differently.
+                # Neither representation difference is new research evidence.
+                # Use all retained source text (not the 12k item preview), and
+                # never a generated event summary or collection timestamp.
+                body = candidate.get('body') if candidate.get('body_status') in (
+                    'article_body', 'partial_body', 'search_summary') else ''
+                text = ' '.join(str(body or candidate.get('snippet') or candidate.get('title') or '').split())
+                token = 'event-text-v2:' + hashlib.sha256(text.encode()).hexdigest()
+                tokens.add(token)
+                # Upgrade existing seen ledgers lazily, without waking all old
+                # stopped branches or swallowing genuinely changed source text.
+                # Only aliases of currently routed, eligible rows may bridge.
+                if legacy_aliases is not None:
+                    legacy_aliases.setdefault(token, set()).add(legacy)
             if ledger is not None:
                 for material in ledger._material_rows(db, watch['project_id'], watch):
                     version = material['ref']['evidence_version_id']
@@ -82,7 +123,7 @@ class Explorations:
 
     @staticmethod
     def _valid(db, watch):
-        row = db.execute('SELECT status,lifecycle_version,tier,cadence FROM studio_watchpoints WHERE id=? AND project_id=?',
+        row = db.execute('SELECT status,lifecycle_version,tier,cadence,scope_kind FROM studio_watchpoints WHERE id=? AND project_id=?',
                          (watch['id'], watch['project_id'])).fetchone()
         return (row and row['status'] != 'retired' and Explorations.managed(dict(row))
                 and str(row['lifecycle_version']) == str(watch.get('lifecycle_version', '0')))
@@ -93,12 +134,15 @@ class Explorations:
                    (row['watch_id'], row['generation'], row['state'], row['reason'],
                     json.dumps(sorted(evidence)), now()))
 
-    def refresh(self, project_id, ledger=None):
+    def refresh(self, project_id, ledger=None, *, event_filter=None, watch_ids=None):
         """Called at evidence/collection boundaries, never by a status GET."""
         for watch in self.monitor.watchpoints(project_id):
+            if watch_ids is not None and watch['id'] not in watch_ids:
+                continue
             if watch['status'] == 'retired' or not self.managed(watch):
                 continue
-            tokens = self.tokens(watch, ledger)
+            aliases = {}
+            tokens = self.tokens(watch, ledger, event_filter=event_filter, legacy_aliases=aliases)
             version = str(watch.get('lifecycle_version', '0'))
             with self.monitor._db() as db, db:
                 db.execute('BEGIN IMMEDIATE')
@@ -119,6 +163,10 @@ class Explorations:
                     continue
                 row = dict(found)
                 seen = {r[0] for r in db.execute('SELECT token FROM studio_exploration_seen WHERE watch_id=?', (watch['id'],))}
+                migrated = {token for token, old in aliases.items() if old & seen} - seen
+                db.executemany('INSERT OR IGNORE INTO studio_exploration_seen VALUES (?,?)',
+                               [(watch['id'], t) for t in migrated])
+                seen.update(migrated)
                 fresh = tokens - seen
                 if not fresh:
                     continue
@@ -134,6 +182,89 @@ class Explorations:
                 db.execute('UPDATE studio_explorations SET generation=?,state=?,reason=?,no_gain=0,gain=1,updated_at=? WHERE watch_id=?',
                            (row['generation'], row['state'], row['reason'], now(), watch['id']))
 
+    def admit_collection(self, execution, plan):
+        """Bind host query sets to exploration generations before dispatch.
+
+        Admission never wakes a sleeping question and is separate from whether
+        the collected evidence eventually answers its exit condition.
+        """
+        ids = {u['target_id'][6:] for u in plan['units'] if u['disposition'] == 'pending'
+               and u['source'] == 'search' and u['target_id'].startswith('watch:')}
+        with execution.store.write_scope(execution._guard):
+            self.refresh(plan['project_id'], watch_ids=ids)
+            for watch in self.monitor.watchpoints(plan['project_id']):
+                if watch['id'] not in ids or watch['visibility'] != 'public' or not self.managed(watch):
+                    continue
+                units = [u for u in plan['units'] if u['target_id'] == 'watch:' + watch['id']
+                         and u['source'] == 'search' and u['disposition'] == 'pending']
+                if any(u['query_version'] != 'watch:' + str(watch['lifecycle_version']) for u in units):
+                    raise ValueError('question scope changed before collection')
+                with self.monitor._db() as db:
+                    execution._guard(db)
+                    previous = db.execute('SELECT * FROM studio_exploration_cycles WHERE watch_id=? AND cycle=?',
+                                          (watch['id'], execution.job['id'])).fetchone()
+                    state = db.execute('SELECT * FROM studio_explorations WHERE watch_id=?', (watch['id'],)).fetchone()
+                if previous:
+                    if (not state or previous['generation'] != state['generation']
+                            or previous['version'] != state['version']):
+                        raise ValueError('question generation changed during collection')
+                    continue  # Replay preserves the original cycle, including collected/reused.
+                if not self.start(watch, execution.job['id']):
+                    raise ValueError('question is not runnable for collection')
+
+    @staticmethod
+    def record_collection(db, plan, successful):
+        """Project only this cycle's complete query set, in the receipt transaction.
+
+        Old cached results remain readable but cannot count again toward the
+        no-gain stopping threshold. Failed/truncated sets never exhaust a topic.
+        """
+        from project_watch.studio.collection_history import moment
+
+        ids = {u['target_id'][6:] for u in plan['units']
+               if u['source'] == 'search' and u['target_id'].startswith('watch:')}
+        for wid in ids:
+            row = db.execute('SELECT * FROM studio_watchpoints WHERE id=? AND project_id=?',
+                             (wid, plan['project_id'])).fetchone()
+            if not row or row['visibility'] != 'public' or row['status'] == 'retired' or not Explorations.managed(dict(row)):
+                continue
+            watch = dict(row)
+            cycle = db.execute('SELECT * FROM studio_exploration_cycles WHERE watch_id=? AND cycle=?',
+                               (wid, plan['round_id'])).fetchone()
+            state = db.execute('SELECT * FROM studio_explorations WHERE watch_id=?', (wid,)).fetchone()
+            if (not cycle or cycle['state'] != 'collecting' or not state
+                    or cycle['version'] != str(watch['lifecycle_version'])
+                    or state['version'] != cycle['version'] or state['generation'] != cycle['generation']):
+                continue
+            queries = set(json.loads(watch['queries']))
+            units = [u for u in plan['units'] if u['source'] == 'search' and u['target_id'] == 'watch:' + wid
+                     and u['query_version'] == 'watch:' + cycle['version'] and u['disposition'] == 'pending']
+            if not queries or {u['query'] for u in units} != queries:
+                continue
+            times = {}
+            for unit in units:
+                if unit['id'] not in successful:
+                    continue
+                saved = db.execute('SELECT fetched_at FROM studio_collection_successes '
+                                   'WHERE project_id=? AND job_id=? AND unit_id=? AND query_key=?',
+                                   (plan['project_id'], plan['round_id'], unit['id'], unit['history_key'])).fetchone()
+                if saved:
+                    times[unit['query']] = moment(saved['fetched_at'])
+            if times.keys() != queries:
+                continue
+            fetched = min(times.values())
+            fresh = not watch['last_run_at'] or fetched > moment(watch['last_run_at'])
+            db.execute('UPDATE studio_exploration_cycles SET state=? WHERE watch_id=? AND cycle=?',
+                       ('collected' if fresh else 'reused', wid, plan['round_id']))
+            if fresh:
+                attempt = max(times.values())
+                if watch['last_attempt_at']:
+                    attempt = max(attempt, moment(watch['last_attempt_at']))
+                db.execute("UPDATE studio_watchpoints SET last_run_at=?,last_attempt_at=?,completed_queries='[]' WHERE id=?",
+                           (fetched.isoformat(), attempt.isoformat(), wid))
+            # The downstream engine alone decides answered/no_gain. Do not
+            # clear any recovery hold or alter the exploration state here.
+
     def start(self, watch, cycle):
         with self.monitor._db() as db, db:
             db.execute('BEGIN IMMEDIATE')
@@ -144,7 +275,7 @@ class Explorations:
             if receipt:
                 return (receipt['state'] == 'collecting' and row is not None
                         and receipt['generation'] == row['generation'] and receipt['version'] == row['version'])
-            if not row or (row['state'] != 'active' and row['reason'] != 'source_failure'):
+            if not row or (row['state'] != 'active' and row['reason'] not in ('source_failure', 'request_budget')):
                 return False
             db.execute("INSERT OR IGNORE INTO studio_exploration_cycles VALUES (?,?,?,?,'collecting',?)",
                        (watch['id'], cycle, row['generation'], row['version'], now()))
@@ -155,7 +286,7 @@ class Explorations:
             row = db.execute('SELECT * FROM studio_explorations WHERE watch_id=?', (watch['id'],)).fetchone()
             if not row or row['version'] != str(watch.get('lifecycle_version', '0')):
                 return False
-            if row['state'] == 'active' or row['reason'] == 'source_failure':
+            if row['state'] == 'active' or row['reason'] in ('source_failure', 'request_budget'):
                 return True
             if row['reason'] == 'waiting_recovery' and cycle:
                 return db.execute("SELECT 1 FROM studio_exploration_cycles WHERE watch_id=? AND cycle=? AND state='collecting' AND generation=? AND version=?",
@@ -170,7 +301,7 @@ class Explorations:
             # A successful receipt from the held cycle is explicit recovery, not
             # a new job silently retrying an unknown paid request.
             db.execute("""UPDATE studio_explorations SET state='active',reason='exploring',updated_at=?
-                WHERE watch_id=? AND reason IN ('source_failure','waiting_recovery') AND EXISTS (
+                WHERE watch_id=? AND reason IN ('source_failure','waiting_recovery','request_budget') AND EXISTS (
                 SELECT 1 FROM studio_watchpoints w WHERE w.id=studio_explorations.watch_id
                 AND w.lifecycle_version=studio_explorations.version AND w.status!='retired') AND EXISTS (
                 SELECT 1 FROM studio_exploration_cycles c WHERE c.watch_id=studio_explorations.watch_id
@@ -201,7 +332,7 @@ class Explorations:
             return row['reason'] == 'new_evidence' and not cycles
 
     def hold(self, watch, reason):
-        if reason not in ('source_failure', 'waiting_recovery'):
+        if reason not in ('source_failure', 'waiting_recovery', 'request_budget'):
             raise ValueError('invalid hold reason')
         self.stop(watch, reason, state='waiting')
 
@@ -217,7 +348,7 @@ class Explorations:
         """Resume only the original durable job. The HTTP journal still gates resend."""
         with self.monitor._db() as db, db:
             db.execute("""UPDATE studio_explorations SET state='active',reason='exploring',updated_at=?
-                WHERE project_id=? AND reason IN ('waiting_recovery','source_failure') AND EXISTS (
+                WHERE project_id=? AND reason IN ('waiting_recovery','source_failure','request_budget') AND EXISTS (
                 SELECT 1 FROM studio_watchpoints w WHERE w.id=studio_explorations.watch_id
                 AND w.lifecycle_version=studio_explorations.version AND w.status!='retired') AND EXISTS (
                 SELECT 1 FROM studio_exploration_cycles c WHERE c.watch_id=studio_explorations.watch_id
@@ -238,20 +369,22 @@ class Explorations:
             if row['state'] == state and row['reason'] == reason:
                 return False
             row.update(state=state, reason=reason)
-            count = 0 if reason in ('source_failure', 'waiting_recovery') else row['no_gain']
+            count = 0 if reason in ('source_failure', 'waiting_recovery', 'request_budget') else row['no_gain']
             db.execute('UPDATE studio_explorations SET state=?,reason=?,no_gain=?,updated_at=? WHERE watch_id=?',
                        (state, reason, count, now(), watch['id']))
             self._history(db, row, evidence)
             return True
 
-    def finish(self, project_id, cycle, ledger=None):
+    def finish(self, project_id, cycle, ledger=None, *, event_filter=None, watch_ids=None):
         """One successful complete query set + downstream routing = one round.
 
         Idempotent across process restarts. A partial/failing query set is never
         evidence of exhaustion. Explicit answer/boundary outcomes win over counts.
         """
-        self.refresh(project_id, ledger)
+        self.refresh(project_id, ledger, event_filter=event_filter, watch_ids=watch_ids)
         for watch in self.monitor.watchpoints(project_id):
+            if watch_ids is not None and watch['id'] not in watch_ids:
+                continue
             with self.monitor._db() as db, db:
                 db.execute('BEGIN IMMEDIATE')
                 if not self._valid(db, watch):

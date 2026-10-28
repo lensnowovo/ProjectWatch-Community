@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import ntpath
 import os
+import stat
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -41,6 +42,21 @@ class BlobInventory:
     corrupt: tuple[str, ...]
     orphan: tuple[str, ...]
     unexpected: tuple[str, ...]
+
+
+def _is_link_or_reparse_point(path: Path) -> bool:
+    """Do not follow Windows junctions or other reparse points inside objects.
+
+    lstat also works on supported Python 3.11, before Path.is_junction existed.
+    This validates existing entries; it is not a same-user hostile-race sandbox.
+    """
+    try:
+        entry = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(entry.st_mode) or bool(
+        getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
 
 
 class BlobStore:
@@ -98,9 +114,11 @@ class BlobStore:
 
             sha256 = digest.hexdigest()
             destination = self.path_for_hash(sha256)
-            if destination.parent.is_symlink() or destination.is_symlink():
-                raise UploadError("object store contains a symbolic link")
+            if _is_link_or_reparse_point(destination.parent) or _is_link_or_reparse_point(destination):
+                raise UploadError("object store contains a symbolic link or reparse point")
             destination.parent.mkdir(exist_ok=True)
+            if _is_link_or_reparse_point(destination.parent) or _is_link_or_reparse_point(destination):
+                raise UploadError("object store contains a symbolic link or reparse point")
             if destination.exists():
                 with destination.open("rb") as existing:
                     existing_hash = hashlib.file_digest(existing, "sha256").hexdigest()
@@ -133,9 +151,26 @@ class BlobStore:
         present: set[str] = set()
         corrupt: set[str] = set()
         unexpected: set[str] = set()
-        for path in self.root.rglob("*"):
+        def entries() -> Iterable[Path]:
+            # followlinks=False alone does not prune Windows directory junctions.
+            # Remove them before os.walk descends, and still report the link itself.
+            def fail(error: OSError) -> None:
+                raise error
+
+            for directory, subdirectories, filenames in os.walk(
+                self.root, topdown=True, followlinks=False, onerror=fail
+            ):
+                for name in subdirectories[:]:
+                    path = Path(directory) / name
+                    if _is_link_or_reparse_point(path):
+                        subdirectories.remove(name)
+                        yield path
+                for name in filenames:
+                    yield Path(directory) / name
+
+        for path in entries():
             relative = path.relative_to(self.root).as_posix()
-            if path.is_symlink():
+            if _is_link_or_reparse_point(path):
                 unexpected.add(relative)
                 continue
             if path.is_dir():

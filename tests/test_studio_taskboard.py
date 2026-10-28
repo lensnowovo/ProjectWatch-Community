@@ -41,6 +41,8 @@ def test_board_orders_running_then_queue_and_hides_removed_projects(tmp_path):
     a = client.post("/api/studio/projects", json={"entity": {"legal_name": "看板甲"}, "consent": True}).json()
     b = client.post("/api/studio/projects", json={"entity": {"legal_name": "看板乙"}, "consent": True}).json()
     with closing(store._connect()) as db, db:
+        # Remove only admission metadata in this synthetic queue-reset fixture.
+        db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute("DELETE FROM studio_jobs")
     first = store.enqueue(a["id"], "external")
     store.enqueue(a["id"], "brief")
@@ -84,6 +86,8 @@ def test_dismissed_failures_leave_the_attention_list_but_stay_in_history(tmp_pat
     store = app.state.studio_store
     a = client.post("/api/studio/projects", json={"entity": {"legal_name": "看板丙"}, "consent": True}).json()
     with closing(store._connect()) as db, db:
+        # Remove only admission metadata in this synthetic queue-reset fixture.
+        db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute("DELETE FROM studio_jobs")
     job = store.enqueue(a["id"], "external")
     with closing(store._connect()) as db, db:

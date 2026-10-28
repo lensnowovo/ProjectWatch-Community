@@ -40,3 +40,21 @@ class SourceAuthorization(BaseModel):
 class TextSubmission(SourceAuthorization):
     filename: str = Field(min_length=1, max_length=255)
     text: str = Field(min_length=1, max_length=100000)
+
+
+class ScopeFields(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    text: str = Field(min_length=2, max_length=200)
+    queries: list[str] = Field(default_factory=list, max_length=4)
+    axis: str = Field(default='asset', max_length=40)
+    reason: str = Field(default='', max_length=600)
+    criteria: str = Field(default='', max_length=600)
+    exit_rule: str = Field(default='', max_length=600)
+    tier: Literal['core', 'topic', 'background'] = 'core'
+    status: Literal['active', 'trial', 'reduced', 'retired'] = 'active'
+
+
+class ScopeWrite(SourceAuthorization):
+    expected_scope_version: str = Field(min_length=64, max_length=64)
+    watch_id: str | None = Field(default=None, min_length=1, max_length=100)
+    item: ScopeFields

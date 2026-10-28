@@ -3,6 +3,32 @@ import { useEffect, useState } from "react";
 import { api, type TechView } from "./api";
 import { Reveal, useToast } from "./motion";
 import { ErrorNote, relTime, useAsync } from "./ui";
+import { publicLink } from "./relationScope";
+import './techReading.css';
+
+/** Full-width, bounded summaries; original titles remain available to keyboard and touch. */
+export function TechEntrants({ entrants }: { entrants: TechView['entrants'] }) {
+  const [all, setAll] = useState(false);
+  return <section className="tech-side" aria-label="新面孔">
+    <h4>新面孔 <span className="muted small">近 90 天首次出现的机构或公司</span></h4>
+    {entrants.length ? <>
+      <table className="table compact-table tech-new-table"><colgroup><col className="tech-name-col"/><col className="tech-date-col"/><col/></colgroup>
+        <thead><tr><th>机构或公司</th><th>首次出现</th><th>主题与来源</th></tr></thead>
+        <tbody>{(all ? entrants : entrants.slice(0,5)).map(e => {
+          const url = publicLink(e.url);
+          return <tr key={e.name}>
+            <th scope="row"><span className="tech-entrant-name" title={e.name}>{e.name}</span><span className="tech-entrant-note muted small">{e.what}</span></th>
+            <td className="num tech-entrant-date"><time>{e.first || '日期未知'}</time></td>
+            <td><details className="tech-topic"><summary><span>{e.title || '主题未标注'}</span><small>展开</small></summary>
+              <p>{e.title || '主题未标注'}</p>{url && <a href={url} target="_blank" rel="noreferrer noopener">查看原始来源 ↗</a>}
+            </details></td>
+          </tr>;
+        })}</tbody>
+      </table>
+      {entrants.length > 5 && <button className="link small tech-entrants-more" aria-expanded={all} onClick={()=>setAll(v=>!v)}>{all ? '收起更多机构' : `查看其余 ${entrants.length-5} 家`}</button>}
+    </> : <p className="muted small">近 90 天没有新出现的机构或公司。</p>}
+  </section>;
+}
 
 /** Grouped quarterly bars, one series per route; colour follows the route's slot, the company's route first. */
 function RouteChart({ data }: { data: TechView }) {
@@ -39,7 +65,7 @@ function RouteChart({ data }: { data: TechView }) {
           );
         })}
       </svg></div>
-      <figcaption className="muted small">已收录论文、专利与报道的季度提及次数，不是市场份额，也不代表技术领先或产业共识。不同维度的标签可并存。</figcaption>
+      <figcaption className="muted small"><details className="chart-evidence"><summary>统计口径</summary>已收录论文、专利与报道的季度提及次数，不是市场份额，也不代表技术领先或产业共识。不同维度的标签可并存。</details></figcaption>
     </figure>
   );
 }
@@ -89,12 +115,12 @@ function RouteEditor({ data, projectId, onSaved, onClose }: { data: TechView; pr
 
 /** Collected technical mentions and newly observed names, not route superiority. */
 export function TechRoutes({ projectId, revision, onSettled }: { projectId: string; revision: string; onSettled?: () => void }) {
-  const { data, error, setData } = useAsync<TechView>(() => api.tech(projectId), [projectId, revision]);
+  const { data, error, setData, reload } = useAsync<TechView>(() => api.tech(projectId), [projectId, revision]);
   const settled = !!data || !!error;
   useEffect(() => { if (settled) onSettled?.(); }, [settled]); // eslint-disable-line react-hooks/exhaustive-deps
   const [editing, setEditing] = useState(false);
   useEffect(() => setEditing(false), [projectId]);
-  if (!data) return error ? null : <section className="card card-pad tech-panel tech-skel" role="status" aria-label="读取技术信息"><Skeleton lines={7} /></section>;
+  if (!data) return error ? <section><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取技术信息</button></section> : <section className="card card-pad tech-panel tech-skel" role="status" aria-label="读取技术信息"><Skeleton lines={4} /></section>;
   return (
     <Reveal as="section" className="card card-pad tech-panel">
       <div className="card-head tech-head">
@@ -108,17 +134,7 @@ export function TechRoutes({ projectId, revision, onSettled }: { projectId: stri
           {data.rows.length ? <RouteChart data={data} /> : <p className="muted small">已收录材料中还没有技术标签。可点“调整路线”添加。</p>}
           {data.insight && <p className="tech-insight">{data.insight}</p>}
         </div>
-        <section className="tech-side" aria-label="新面孔">
-          <h4>新面孔 <span className="muted small">近 90 天首次出现的机构或公司</span></h4>
-          {data.entrants.length ? <>
-            <table className="table compact-table tech-new-table"><thead><tr><th>机构或公司</th><th>首次出现</th><th>主题</th></tr></thead>
-              <tbody>{data.entrants.slice(0, 5).map((e) => (
-                <tr key={e.name}><th scope="row">{e.name}<span className="muted small"> {e.what}</span></th><td className="num">{e.first}</td>
-                  <td>{e.url ? <a href={e.url} target="_blank" rel="noreferrer noopener">{e.title}</a> : e.title}</td></tr>))}</tbody></table>
-            {data.entrants.length > 5 && <details className="folded-reports"><summary>另有 {data.entrants.length - 5} 家<span className="muted small">{data.entrants.slice(5, 8).map((e) => e.name).join("、")}{data.entrants.length > 8 ? " 等" : ""}</span></summary>
-              <ol>{data.entrants.slice(5).map((e) => <li key={e.name}><time>{e.first}</time><span>{e.name} · {e.title}</span></li>)}</ol></details>}
-          </> : <p className="muted small">近 90 天没有新出现的机构或公司。</p>}
-        </section>
+        <TechEntrants key={projectId} entrants={data.entrants}/>
       </div>
     </Reveal>
   );

@@ -26,6 +26,33 @@ const detail = {
   plan: { competitors: [{ name: "合成候选甲", reason: "同属行业，因此高威胁" }] },
 };
 
+test("bilingual labels and explicit aliases share one competitor card and retain confirmation", () => {
+  const html = render({ ...detail, plan: { competitors: [{ name: "合成神经科技（SynNeuro）" }, { name: "合成神经科技" }, { name: "SynNeuro" }] },
+    competition_research: { candidates: [{ name: "SynNeuro", id: "peer-a", origin: "search" }] },
+    relationships: { items: [{ peer_id: "peer-a", peer_name: "合成神经科技", peer_names: ["合成神经科技", "SynNeuro"],
+      origin: "user_override", scope_key: "a", basis_facts: [] }], exclusions: [] } });
+  assert.equal((html.match(/class="rival-row open"/g) ?? []).length, 1);
+  assert.match(html, /<h4>合成神经科技<\/h4>/);
+  assert.match(html, /已确认/);
+  assert.doesNotMatch(html, /待确认线索 1 家/);
+});
+
+test("ambiguous aliases and regional subsidiaries are not merged", () => {
+  const { competitionIdentity } = load("../src/peerNames.ts");
+  const key = competitionIdentity({ ...detail, competition_research: { candidates: [
+    { name: "同名", id: "a" }, { name: "同名", id: "b" } ] } });
+  assert.notEqual(key("同名", "a"), key("同名", "b"));
+  assert.notEqual(key("同名"), key("同名", "a"));
+  assert.notEqual(key("合成科技（深圳）"), key("合成科技（北京）"));
+});
+
+test("company exclusion also hides its explicit alias candidate", () => {
+  const html = render({ ...detail, plan: { competitors: [{ name: "SynNeuro" }] },
+    relationships: { items: [], exclusions: [{ scope_key: "a", peer_id: "a", company_wide: true,
+      peer_name: "合成神经科技", peer_names: ["合成神经科技", "SynNeuro"] }] } });
+  assert.doesNotMatch(html, /class="rival-row/);
+});
+
 test("placeholder candidates are hidden across legacy, research and relationship sources", () => {
   const html = render({ ...detail, plan: { competitors: [{ name: "未知" }, { name: "未知科技" }, { name: "AI" }] },
     competition_research: { candidates: [{ name: "ＵＮＫＮＯＷＮ", id: "x" }] },
@@ -199,8 +226,8 @@ test("project navigation uses meaningful status dots, never unread counts", () =
   assert.match(html, /status-ok/);
   assert.match(html, /aria-label="监控已启用"/);
   assert.doesNotMatch(html, /99\+|未读|123/);
-  assert.match(renderStatus({ activated: true, status: "active", job_status: "running", nav_alerts: [] }), /status-ok.*正在更新/);
-  assert.match(renderStatus({ activated: true, status: "active", job_status: "queued", nav_alerts: [] }), /status-ok.*等待更新/);
+  assert.match(renderStatus({ activated: true, status: "active", job_status: "running", worker_state: "running", nav_alerts: [] }), /status-ok.*正在更新/);
+  assert.match(renderStatus({ activated: true, status: "active", job_status: "queued", nav_alerts: [] }), /status-ok.*排队中/);
   assert.match(renderStatus({ activated: true, status: "active", job_status: "running", worker_state: "stopped", nav_alerts: [] }), /status-idle.*自动更新未运行/);
   assert.match(renderStatus({ activated: true, status: "active", worker_state: "stopped", nav_alerts: ["有新的重大事件"] }), /status-alert.*有新的重大事件/);
   assert.match(renderStatus({ activated: true, nav_alerts: ["有新的重大事件", "外部更新未完成"] }), /status-alert.*有新的重大事件；外部更新未完成/);
@@ -215,15 +242,15 @@ test("queued and offline work never renders as executing, but running parsing st
     pending_documents: 0, model_ready: true, execution: { analysis: "running", parsing: "stopped" },
     jobs: [{ kind: "external", status: "queued", stage: "旧执行阶段" }] };
   const html = d => renderToStaticMarkup(React.createElement(Progress, { detail: d, onReload() {} }));
-  assert.match(html(base), /等待更新.*排队中/);
+  assert.match(html(base), /收集公开信息.*排队中/);
   assert.doesNotMatch(html(base), /正在更新|旧执行阶段/);
   const offline = { ...base, execution: { analysis: "stopped", parsing: "stopped" } };
-  assert.match(html(offline), /自动更新未运行.*等待后台启动/);
+  assert.match(html(offline), /等待后台启动/);
   assert.doesNotMatch(html(offline), /working-dot|正在更新/);
-  assert.match(html({ ...base, jobs: [{ kind: "external", status: "running", stage: "本次阶段" }] }), /正在更新.*本次阶段/);
-  assert.match(html({ ...offline, project: { ...base.project, status: "paused" } }), /监控已暂停/);
-  assert.match(html({ ...offline, documents: [{ status: "processing" }], execution: { analysis: "stopped", parsing: "running" } }), /正在更新.*正在解析/);
-  assert.match(html({ ...base, jobs: [{ kind: "external", status: "running" }], execution: { analysis: "stopping", parsing: "stopped" } }), /正在结束当前更新/);
+  assert.match(html({ ...base, jobs: [{ kind: "external", status: "running", stage: "本次阶段" }] }), /正在执行.*本次阶段/);
+  assert.match(html({ ...offline, project: { ...base.project, status: "paused" } }), /已暂停/);
+  assert.match(html({ ...offline, documents: [{ status: "processing" }], execution: { analysis: "stopped", parsing: "running" } }), /等待后台启动.*资料正在识别/);
+  assert.match(html({ ...base, jobs: [{ kind: "external", status: "running" }], execution: { analysis: "stopping", parsing: "stopped" } }), /正在结束/);
 });
 
 test("industry summary gaps do not claim first search is pending", () => {

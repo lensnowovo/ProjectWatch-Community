@@ -45,6 +45,12 @@ from project_watch.financial_intake import (
     FinancialSuggestion,
     validate_financial_suggestions,
 )
+from project_watch.followup_records import (
+    watch_change_input,
+    watch_change_review_input,
+    watch_item_input,
+    watch_review_input,
+)
 from project_watch.holding_input import validated_holding_input
 from project_watch.identity_input import review_note, verified_identity_input
 from project_watch.monitor_profile_store import ensure_profile_schema, validate_edit
@@ -54,12 +60,6 @@ from project_watch.operating_intake import (
     validate_operating_suggestions,
 )
 from project_watch.source_topics import impact_topic, review_topics
-from project_watch.followup_records import (
-    watch_change_input,
-    watch_change_review_input,
-    watch_item_input,
-    watch_review_input,
-)
 
 
 class NotFoundError(LookupError):

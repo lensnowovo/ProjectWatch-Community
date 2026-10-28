@@ -31,14 +31,9 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
     <motion.article
       layout="position"
       className={`item item-${item.importance} ${item.status === "new" ? "item-new" : ""}`}
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0, transition: { duration: 0.4, ease: EASE, delay: Math.min(index, 12) * 0.03 } }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, transition: { duration: 0.4, ease: EASE, delay: Math.min(index, 12) * 0.03 } }}
       exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, marginBottom: 0, transition: { duration: 0.28, ease: EASE } }}
-      onMouseMove={(e) => {
-        const r = e.currentTarget.getBoundingClientRect();
-        e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
-        e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
-      }}
     >
       <div className="item-rail"><ImportanceDot level={item.importance} /></div>
       <div className="item-body">
@@ -61,20 +56,22 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
               共 {item.source_count} 篇报道 {open ? "▴" : "▾"}
             </button>
           )}
-          <span className="muted">· {relTime(when)}</span>
+          <time className="muted item-date" dateTime={when || undefined}>· {relTime(when)}</time>
         </div>
         <a className="item-title" href={item.url} target="_blank" rel="noreferrer noopener"
           onClick={markRead}>
           {item.title}
         </a>
+        <div className="item-reading-detail">
         {item.summary && item.summary !== item.title && <p className="item-summary">{item.summary}</p>}
-        <button className="item-why" onClick={() => { setWhy(true); markRead(); }}>关联与依据 →</button>
         <EventContextDrawer projectId={item.project_id} projectName={item.project_name} eventId={item.id} title={item.title}
           open={why} onClose={() => setWhy(false)} />
-        {item.impact && <p className="item-impact"><span>{also.length ? `对${item.project_name}的意义` : "对项目的意义"}</span>{item.impact}</p>}
+        {item.impact && <details className="item-impact"><summary>{also.length ? `对${item.project_name}的意义` : "对项目的意义"}</summary><p>{item.impact}</p></details>}
         {also.filter((o) => o.impact && o.impact !== item.impact).map((o) => (
-          <p key={o.id} className="item-impact"><span>对{o.project_name}的意义</span>{o.impact}</p>
+          <details key={o.id} className="item-impact"><summary>对{o.project_name}的意义</summary><p>{o.impact}</p></details>
         ))}
+        <button className="item-why" onClick={() => { setWhy(true); markRead(); }}>关联与依据 →</button>
+        </div>
         <AnimatePresence initial={false}>
           {open && item.sources && (
             <motion.ul className="item-sources" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}

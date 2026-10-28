@@ -3,7 +3,7 @@
 A plan item is a watch point with the plan fields: axis, objects, reason, current state, sources,
 cadence, trigger, exit rule, tier and status. Every change — by the system, a person or an Agent —
 is written to ``studio_plan_changes`` with who, why and before/after, so it can be shown and reverted.
-Items the system adds start as ``trial`` (low cadence, revertible); promoting, retiring human items or
+Items the system adds start as ``trial`` (revertible, cadence independent); promoting, retiring human items or
 widening paid collection stays with the owner. Retired items keep their judgement history.
 
 Core: storage and rules only; no model, search or network calls.
@@ -15,11 +15,17 @@ import json
 import math
 import re
 import uuid
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 from project_watch.studio.exploration import Explorations
 from project_watch.studio.plan_templates import MODULES, catalog, combine
 from project_watch.studio.store import now
+
+
+class PlanCapacityError(ValueError):
+    """A valid candidate cannot be admitted without exceeding the fixed capacity."""
+
 
 # The fixed framework every plan grows from: four rings around the company, nine dimensions, ordered from
 # the company outwards. Dimensions are about *whom* we watch; an item goes where its object is, not where the
@@ -101,8 +107,10 @@ CHANNELS = (
     ("competitor", "竞品动态", "peers", "competitor", ""),
     ("tender", "招投标（客户采购）", "customer", None, "search"),
     ("facts", "商业关系与政策条件（资料与报道中提取）", "partners", None, ""),
+    ("chain", "产业链动态", "partners", None, ""),
     ("industry", "赛道与市场动态", "market", "industry", ""),
     ("paper", "论文（OpenAlex）", "science", "paper", ""),
+    ("technology", "技术动态", "science", None, ""),
     ("patent", "专利", "science", "patent", "search"),
     ("policy", "政策监管", "rules", "policy", ""),
 )
@@ -111,7 +119,9 @@ MAX_HOP = 2  # 0 = the company itself, 1 = directly related (competitor asset, d
 MAX_PER_SECTION = 4
 STABLE_AFTER = 3  # consecutive revisions with no additions or proposals
 EDITABLE = ("text", "label", "queries", "criteria", "axis", "objects", "reason", "current_state", "sources",
-            "cadence", "trigger_rule", "exit_rule", "tier", "status", "alert", "view", "view_params", "hop", "parent_id")
+            "cadence", "trigger_rule", "exit_rule", "tier", "status", "alert", "view", "view_params", "hop", "parent_id",
+            "scope_kind", "relation_type", "relation_target", "relation_aliases")
+RELATION_TYPES = ("technology", "product", "indication", "competitor", "supplier", "customer", "industry", "policy")
 
 
 def _clean(fields: dict) -> dict:
@@ -119,7 +129,13 @@ def _clean(fields: dict) -> dict:
     for key, value in fields.items():
         if key not in EDITABLE or value is None:
             continue
-        if key == "queries":
+        if key == "relation_aliases":
+            if (not isinstance(value, list) or len(value) > 8 or any(
+                    not isinstance(v, str) or not 2 <= len(v.strip()) <= 120
+                    or (v.strip().isascii() and len(v.strip()) < 3) for v in value)):
+                raise ValueError("别名须为明确名称，最多8个，每个2–120字，英文至少3字符")
+            value = list(dict.fromkeys(v.strip() for v in value))
+        elif key == "queries":
             value = [str(q).strip()[:80] for q in value if str(q).strip()][:4]
         elif key == "objects":
             value = [str(o).strip()[:60] for o in value if str(o).strip()][:8]
@@ -140,6 +156,10 @@ def _clean(fields: dict) -> dict:
             raise ValueError("unknown tier")
         if key == "status" and value not in STATUSES:
             raise ValueError("unknown status")
+        if key == "scope_kind" and value not in ("", "relation", "question"):
+            raise ValueError("unknown scope kind")
+        if key == "relation_type" and value and value not in RELATION_TYPES:
+            raise ValueError("unknown relation type")
         if key == "hop" and value not in ("0", "1", "2"):
             raise ValueError(f"关联链最多延伸 {MAX_HOP} 层")
         if key == "view" and value not in MODULES:
@@ -155,7 +175,7 @@ def _row(watch: dict) -> dict:
 
 
 def _encode(fields: dict) -> dict:
-    return {k: (json.dumps(v, ensure_ascii=False) if k in ("queries", "objects", "view_params") else (1 if v else 0) if k == "alert" else v)
+    return {k: (json.dumps(v, ensure_ascii=False) if k in ("queries", "objects", "view_params", "relation_aliases") else (1 if v else 0) if k == "alert" else v)
             for k, v in fields.items()}
 
 
@@ -237,6 +257,10 @@ class MonitoringPlan:
         return merged
 
     def view(self, project_id: str, *, changes: int = 30) -> dict:
+        from project_watch.studio.collection_dsh import latest_report
+        from project_watch.studio.plan_tree import tree_signals
+
+        collection = latest_report(self.monitor.store, project_id)
         items = self.items(project_id)
         with self.monitor._db() as db:
             rows = db.execute("SELECT * FROM studio_plan_changes WHERE project_id=? ORDER BY created_at DESC LIMIT ?",
@@ -264,16 +288,21 @@ class MonitoringPlan:
             w["section"] = place(w.get("axis") or "asset", w.get("text") or "")
         return {"items": items, "changes": [c for c in log if c.get("state", "applied") != "proposed"],
                 "proposals": proposals, "framework": framework,
+                "scope": self.scope_groups(live),
+                "relation_updates": self.relation_updates(project_id, live),
+                "tree_signals": (signals := tree_signals(self, project_id, items)),
                 "explorations": self.explorations.view(project_id),
                 "rings": [{"key": k, "label": label} for k, label in RINGS],
                 "meta": {k: meta.get(k) for k in ("understanding", "method", "in_scope", "out_of_scope", "updated_at", "templates", "review")},
                 "state": self.state(project_id),
+                "last_round": self.last_round(project_id),
                 "limits": {"max_hop": MAX_HOP, "per_section": MAX_PER_SECTION},
                 "modules": {w["id"]: self.module(project_id, w) for w in live},
-                "coverage": self.coverage(project_id),
-                "latest": (latest := {w["id"]: self.latest(project_id, w) for w in live}),
+                "coverage": self.coverage(project_id, snapshot=collection),
+                "collection_report": collection,
+                "latest": {w["id"]: self.latest(project_id, w) for w in live},
                 "week": {"new_items": sum(1 for w in live if (w.get("created_at") or "") >= week_ago),
-                         "fresh": sum(1 for v in latest.values() if v["fresh"])},
+                         "fresh": sum(bool(signals.get(w["id"], {}).get("fresh")) for w in live)},
                 "health": self.health(project_id, live),
                 "module_labels": {k: v.split("：")[0] for k, v in MODULES.items()},
                 "templates": catalog(),
@@ -281,6 +310,15 @@ class MonitoringPlan:
                 "labels": {"axis": AXIS_LABEL, "cadence": CADENCE_LABEL, "tier": TIER_LABEL,
                            "status": STATUS_LABEL, "origin": ORIGIN_LABEL, "coverage": COVERAGE_LABEL},
                 "max_items": MAX_ITEMS}
+
+    def last_round(self, project_id: str) -> dict | None:
+        """Last settled DSH round, never a claim about an in-flight/newer job."""
+        try:
+            saved = json.loads(self.monitor.store.get_state("dsh-monitor:" + project_id) or "{}")
+        except (ValueError, TypeError):
+            return None
+        summary = saved.get("round_summary") if isinstance(saved, dict) else None
+        return summary if isinstance(summary, dict) and summary.get("job_id") and summary.get("completed_at") else None
 
     # ------------------------------------------------------------------ writes
     def _log(self, db, project_id, watch_id, action, actor, reason, before, after, *, state="applied", evidence=()):
@@ -337,12 +375,45 @@ class MonitoringPlan:
     def _owned_by_people(self, watch: dict) -> bool:
         return bool(watch.get("reviewed_at")) or watch.get("plan_origin") in ("human", "draft", "internal") or watch.get("origin") == "human"
 
+    @staticmethod
+    def scope_groups(items):
+        """IDs only: do not duplicate the plan/evidence in model context."""
+        return {
+            "relation_ids": [w["id"] for w in items if w.get("scope_kind") == "relation"],
+            "question_ids": [w["id"] for w in items if w.get("scope_kind") == "question"],
+            "legacy_ids": [w["id"] for w in items if not w.get("scope_kind")],
+        }
+
+    def relation_updates(self, project_id, items):
+        """Read-only, current matching receipts, not model-assessed progress."""
+        from project_watch.studio.questions import QuestionLedger
+
+        project = self.monitor.store.get_project(project_id) or {}
+        with self.monitor._db() as db:
+            rows = QuestionLedger.public_event_rows(db, project_id)
+        result = {}
+        for watch in items:
+            if watch.get("scope_kind") != "relation" or watch.get("visibility") != "public":
+                continue
+            matches = []
+            seen = set()
+            for row in rows:
+                match = QuestionLedger.public_row_match(watch, project, dict(row))
+                if match and row["event_id"] not in seen:
+                    seen.add(row["event_id"])
+                    matches.append({"event_id": row["event_id"], "title": row["event_title"],
+                                    "url": row["url"], "source": row["source"],
+                                    "date": row["event_at"] or "", **match})
+            result[watch["id"]] = {"count": len(matches), "items": matches[:3]}
+        return result
+
     def _validate_write(self, db, project_id: str, candidate: dict, *, current=None, actor: str) -> dict[str, str]:
         """Validate the proposed graph under the same write lock as its mutation.
 
         Existing over-capacity legacy plans can still be edited/closed; only a
         new allocation must fit. Human-authored section sizes remain explicit
-        choices, but restoring an automatic item cannot bypass its section cap.
+        choices, but restoring an automatic question cannot bypass its section cap.
+        Standing relations share the project total, not the old question section cap.
         """
         if actor not in ACTORS:
             raise ValueError("unknown actor")
@@ -350,16 +421,46 @@ class MonitoringPlan:
             'SELECT * FROM studio_watchpoints WHERE project_id=?', (project_id,))}
         wid = candidate['id']
         others = [w for k, w in nodes.items() if k != wid and w['status'] != 'retired']
+        role = candidate.get("scope_kind", "")
+        if current and current.get("scope_kind") and role != current["scope_kind"]:
+            raise ValueError("已有范围角色不能隐式转换；请保留原记录并明确建立新条目")
+        if role == "relation":
+            if (current and current.get("relation_target") != candidate.get("relation_target")
+                    and any(w.get("parent_id") == wid for w in nodes.values())):
+                raise ValueError("关联已有研究分支；更换目标应新建关联，保留原分支依据")
+            if (candidate.get("relation_type") not in RELATION_TYPES
+                    or len(candidate.get("relation_target", "").strip()) < 2
+                    or not candidate.get("reason") or not candidate.get("sources") or not candidate.get("queries")):
+                raise ValueError("关联需要类型、具体目标、原因、出处和检索词")
+            if (candidate.get("tier", "background") == "topic"
+                    or candidate.get("cadence") == "event" or candidate.get("exit_rule")):
+                raise ValueError("长期关联不能使用临时问题的退出规则")
+            if candidate.get("parent_id") and nodes.get(candidate["parent_id"], {}).get("scope_kind") != "relation":
+                raise ValueError("长期关联的父节点必须是关联，不能从临时问题继承生命周期")
+            if candidate.get("status") != "retired" and any(
+                    w.get("scope_kind") == "relation" and w.get("relation_type") == candidate["relation_type"]
+                    and _norm(w.get("relation_target", "")) == _norm(candidate["relation_target"]) for w in others):
+                raise ValueError("已有同类型同目标关联，请更新原条目")
+        if role == "question" and (
+                candidate.get("tier") != "topic" or not candidate.get("parent_id") or not candidate.get("exit_rule")):
+            raise ValueError("临时研究问题必须有父关注点、专题类型与退出条件")
+        if role == "question" and candidate.get("relation_target", "") != nodes.get(
+                candidate.get("parent_id"), {}).get("relation_target", ""):
+            raise ValueError("临时问题必须保留父范围的目标约束")
+        if role == "question" and candidate.get("relation_aliases", []) != json.loads(
+                nodes.get(candidate.get("parent_id"), {}).get("relation_aliases", "[]")):
+            raise ValueError("研究分支继承父范围别名，请在父范围修订")
         live = candidate.get('status', 'active') != 'retired'
         allocating = current is None or current['status'] == 'retired'
         if live and allocating and len(others) >= MAX_ITEMS:
-            raise ValueError(f"每个项目最多 {MAX_ITEMS} 条运行中的方案条目，请先关闭或合并")
+            raise PlanCapacityError(f"每个项目最多 {MAX_ITEMS} 条运行中的方案条目，请先关闭或合并")
         section = SECTION_OF.get(candidate.get('axis', 'asset'), 'asset')
         moving = current is None or section != SECTION_OF.get(current['axis'], 'asset')
         automatic = actor == 'system' or candidate.get('plan_origin') in ('system', 'bootstrap', 'internal')
-        if (live and (allocating or moving) and automatic
-                and sum(SECTION_OF.get(w['axis'], 'asset') == section for w in others) >= MAX_PER_SECTION):
-            raise ValueError(f"「{AXIS_LABEL.get(section, section)}」已有 {MAX_PER_SECTION} 个关注点")
+        if (live and (allocating or moving) and automatic and role != 'relation'
+                and sum(w.get('scope_kind') != 'relation' and SECTION_OF.get(w['axis'], 'asset') == section
+                        for w in others) >= MAX_PER_SECTION):
+            raise PlanCapacityError(f"「{AXIS_LABEL.get(section, section)}」已有 {MAX_PER_SECTION} 个关注点")
         if (live and (allocating or current.get('text') != candidate['text'])
                 and any(_norm(w['text']) == _norm(candidate['text']) for w in others)):
             raise ValueError('已有相同关注点，请更新原条目')
@@ -399,17 +500,27 @@ class MonitoringPlan:
 
     def add(self, project_id: str, fields: dict, *, actor: str, origin: str, reason: str = "",
             visibility: str = "internal", evidence=(), expected_parent_version: str | None = None,
-            expected_parent_generation: int | None = None) -> dict:
+            expected_parent_generation: int | None = None, db=None) -> dict:
         if origin not in ORIGINS or visibility not in ('public', 'internal'):
             raise ValueError("unknown origin")
         data = {'axis': 'asset', 'hop': '0', 'parent_id': '', 'status': 'active', **_clean(fields)}
         if "text" not in data:
             raise ValueError("缺少问题")
-        if actor == "system" and origin != "bootstrap":  # later system additions start as revertible, low-cadence trials
-            data["status"], data["cadence"] = "trial", data.get("cadence") if data.get("cadence") == "event" else "low"
+        if actor == "system" and origin != "bootstrap":
+            # Confidence is not a schedule. A new ordinary object gets a first
+            # lookup, then weekly collection unless its scope specifies otherwise.
+            data["status"] = "trial"
+            data.setdefault("cadence", "medium")
         wid = uuid.uuid4().hex
-        with self.monitor._db() as db, db:
-            db.execute('BEGIN IMMEDIATE')
+        own = db is None
+        with (self.monitor._db() if own else nullcontext(db)) as db, (db if own else nullcontext()):
+            if own:
+                db.execute('BEGIN IMMEDIATE')
+            if data.get("scope_kind") == "question":
+                parent = db.execute('SELECT relation_target,relation_aliases FROM studio_watchpoints WHERE id=? AND project_id=?',
+                                    (data.get("parent_id"), project_id)).fetchone()
+                data["relation_target"] = parent[0] if parent else ""
+                data["relation_aliases"] = json.loads(parent[1]) if parent else []
             if expected_parent_version is not None:
                 parent = db.execute('SELECT lifecycle_version FROM studio_watchpoints WHERE id=? AND project_id=?',
                                     (data.get('parent_id'), project_id)).fetchone()
@@ -430,14 +541,17 @@ class MonitoringPlan:
             db.execute(f"UPDATE studio_watchpoints SET {', '.join(f'{k}=?' for k in rest)}, plan_origin=?, updated_at=? WHERE id=?",
                        (*rest.values(), origin, now(), wid))
             self._log(db, project_id, wid, 'add', actor, reason, {}, data, evidence=evidence)
-        return self._get(project_id, wid)
+            result = dict(db.execute('SELECT * FROM studio_watchpoints WHERE id=?', (wid,)).fetchone())
+        return self._get(project_id, wid) if own else result
 
     def update(self, watch_id: str, fields: dict, *, actor: str, reason: str = "", evidence=(),
                expected_lifecycle_version: str | None = None, expected_exploration_generation: int | None = None,
-               exploration_answer: bool = False) -> dict:
+               exploration_answer: bool = False, db=None) -> dict:
         data = _clean(fields)
-        with self.monitor._db() as db, db:
-            db.execute('BEGIN IMMEDIATE')
+        own = db is None
+        with (self.monitor._db() if own else nullcontext(db)) as db, (db if own else nullcontext()):
+            if own:
+                db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM studio_watchpoints WHERE id=?', (watch_id,)).fetchone()
             if not row:
                 raise KeyError(watch_id)
@@ -454,7 +568,7 @@ class MonitoringPlan:
                 raise ValueError('结束探索需要当前代次、退出条件和本题依据')
             if actor == 'system' and current['status'] == 'retired' and data.get('status') != 'active':
                 raise ValueError('已关闭的条目不再接受自动修订')
-            for key in ('queries', 'objects', 'view_params'):
+            for key in ('queries', 'objects', 'view_params', 'relation_aliases'):
                 current[key] = json.loads(current[key])
             current['alert'] = bool(current['alert'])
             project_id = current['project_id']
@@ -464,7 +578,8 @@ class MonitoringPlan:
                            (now(), watch_id))
                 self.explorations._history(db, {**dict(exploration), 'state': 'stopped', 'reason': 'answered'},
                     [json.dumps(e, ensure_ascii=False, sort_keys=True) for e in evidence])
-        return self._get(project_id, watch_id)
+            result = dict(db.execute('SELECT * FROM studio_watchpoints WHERE id=?', (watch_id,)).fetchone())
+        return self._get(project_id, watch_id) if own else result
 
     def _update_locked(self, db, project_id, current, data, *, actor, reason, evidence):
         watch_id = current['id']
@@ -487,12 +602,28 @@ class MonitoringPlan:
                   else "restore" if changed.get("status") == "active" and before.get("status") in ("retired", "reduced", "trial")
                   else "modify")
         enc = _encode(changed)
-        if set(changed) & {'status', 'text', 'queries', 'objects', 'tier', 'cadence', 'parent_id', 'hop', 'exit_rule', 'trigger_rule'}:
+        if set(changed) & {'status', 'text', 'queries', 'objects', 'tier', 'cadence', 'parent_id', 'hop', 'exit_rule', 'trigger_rule',
+                           'scope_kind', 'relation_type', 'relation_target', 'relation_aliases'}:
             enc['lifecycle_version'] = str(int(current.get('lifecycle_version') or 0) + 1)
         if "queries" in changed:
             enc.update(completed_queries="[]", last_run_at="", last_attempt_at="")
         db.execute(f"UPDATE studio_watchpoints SET {', '.join(f'{k}=?' for k in enc)}, updated_at=? WHERE id=?",
                    (*enc.values(), now(), watch_id))
+        if "relation_aliases" in changed:
+            pending = [watch_id]
+            while pending:
+                parent_id = pending.pop()
+                children = db.execute("SELECT * FROM studio_watchpoints WHERE project_id=? AND parent_id=? AND scope_kind='question'",
+                                      (project_id, parent_id)).fetchall()
+                for child in children:
+                    previous = json.loads(child["relation_aliases"])
+                    if previous != changed["relation_aliases"]:
+                        db.execute("""UPDATE studio_watchpoints SET relation_aliases=?, lifecycle_version=?,
+                            completed_queries='[]',last_run_at='',updated_at=? WHERE id=?""",
+                            (enc["relation_aliases"], str(int(child["lifecycle_version"]) + 1), now(), child["id"]))
+                        self._log(db, project_id, child["id"], "modify", actor, "继承父范围的别名修订",
+                                  {"relation_aliases": previous}, {"relation_aliases": changed["relation_aliases"]})
+                    pending.append(child["id"])
         for wid, hop in depths.items():
             if wid != watch_id:
                 db.execute('UPDATE studio_watchpoints SET hop=? WHERE id=?', (hop, wid))
@@ -618,7 +749,7 @@ class MonitoringPlan:
                     continue
             if w['cadence'] == 'event':
                 continue
-            cadence = "low" if w["status"] in ("trial", "reduced") else w["cadence"]
+            cadence = "low" if w["status"] == "reduced" else w["cadence"]
             last = w.get("last_run_at") or ""
             if last and cadence != "high" and last > (moment - timedelta(days=CADENCE_DAYS[cadence])).isoformat():
                 continue
@@ -750,10 +881,20 @@ class MonitoringPlan:
 
     # ------------------------------------------------------------------ module data
     def _hits(self, db, watch_id: str, limit: int = 30) -> list[dict]:
+        # Keep watch hits as the outer loop. SQLite otherwise prefers the global
+        # relevant-items index, checking every project's items even for an empty
+        # watch. CROSS JOIN preserves this order while ON retains the same join.
         rows = db.execute("""SELECT i.id, i.title, i.url, i.source, i.importance, i.category, i.summary,
+                                    i.event_id, i.collected_at AS recorded_at,
                                     COALESCE(i.published_at, i.collected_at) AS date
-                             FROM studio_watch_hits h JOIN studio_items i ON i.id=h.item_id
-                             WHERE h.watch_id=? AND i.relevant=1 ORDER BY date DESC LIMIT ?""", (watch_id, limit)).fetchall()
+                             FROM studio_watch_hits h CROSS JOIN studio_items i ON i.id=h.item_id
+                             WHERE h.watch_id=? AND i.relevant=1
+                             AND NOT EXISTS(SELECT 1 FROM studio_events e WHERE e.id=i.event_id AND e.status='dismissed')
+                             AND NOT EXISTS(SELECT 1 FROM studio_item_evidence ie
+                                 JOIN studio_evidence_lifecycle l ON l.evidence_version_id=ie.evidence_version_id
+                                 AND l.project_id=ie.project_id WHERE ie.item_id=i.id
+                                 AND ie.project_id=i.project_id AND l.status='withdrawn')
+                             ORDER BY date DESC LIMIT ?""", (watch_id, limit)).fetchall()
         return [{**dict(r), "date": (r["date"] or "")[:10]} for r in rows]
 
     def _keys(self, project_id: str, watch: dict) -> list[str]:
@@ -787,10 +928,17 @@ class MonitoringPlan:
             kept.append(hit)
         return kept
 
-    def coverage(self, project_id: str) -> dict:
+    def coverage(self, project_id: str, *, snapshot=None) -> dict:
         """常规采集 per section: what is collected every round, how much in 30 days, and what is off or failing."""
+        from project_watch.studio.collection_dsh import latest_report
+
         plan = self.monitor.store.get_plan(project_id) or {}
         report = plan.get("last_report") or {}
+        snapshot = snapshot if snapshot is not None else latest_report(self.monitor.store, project_id)
+        if snapshot is None:
+            saved = plan.get('collection_report') or {}
+            snapshot = saved if saved.get('job_id') == plan.get('round_id') else {}
+        receipt_report = snapshot.get('channels') if snapshot.get('schema_version') == 1 else None
         since = (datetime.now(UTC) - timedelta(days=30)).isoformat()
         with self.monitor._db() as db:
             events = dict(db.execute("SELECT category, count(*) FROM studio_events WHERE project_id=? AND status!='dismissed' "
@@ -823,23 +971,46 @@ class MonitoringPlan:
                 state = "pending"
             out[section].append({"key": key, "label": label, "count": amount, "unit": unit, "state": state,
                                  "window": "近 30 天" if category else "上一轮" if key not in ("site", "facts", "commercial") else "累计"})
+            if receipt_report is not None and key not in ('facts', 'commercial', 'registry'):
+                fallback = {'awaiting_plan': 'pending', 'unavailable': 'unavailable'}.get(
+                    snapshot.get('view_state'), 'not_in_round')
+                execution = receipt_report.get(key, {}).get('execution', fallback)
+                entry = out[section][-1]
+                entry.update(execution=execution,
+                    capabilities=receipt_report.get(key, {}).get('capabilities', []),
+                    due_count=receipt_report.get(key, {}).get('due_count', 0),
+                    query_count=receipt_report.get(key, {}).get('query_count', 0),
+                    rows=receipt_report.get(key, {}).get('rows', []),
+                    round_id=snapshot['job_id'], planned_at=snapshot.get('planned_at'),
+                    active=snapshot.get('active', False), job_status=snapshot.get('job_status'),
+                    observed_at=snapshot.get('observed_at'),
+                    state=('on' if execution in ('success', 'empty') else 'error' if execution in ('failed', 'unknown')
+                           else 'off' if execution in ('disabled', 'not_applicable', 'not_configured', 'not_integrated')
+                           else 'pending'))
+                # New receipt counts describe saved source items, not new events.
+                # Unattempted/unknown sources have no measured zero.
+                if not category and key != 'site':
+                    entry.update(count=receipt_report.get(key, {}).get('added'),
+                                 window='本轮新增收录', unit='条来源')
         return out
 
     def latest(self, project_id: str, watch: dict) -> dict:
         """The one line a reader needs per focus point: the system's current understanding if it has one,
         else the newest on-topic hit, else whether it has been searched at all. ``fresh`` = within 7 days."""
-        week_ago = (datetime.now(UTC) - timedelta(days=7)).isoformat()[:10]
+        from project_watch.studio.plan_tree import evidence_signal
         with self.monitor._db() as db:
             hits = self._focused(project_id, watch, self._hits(db, watch["id"], limit=20))
         # Newest major/notable hit first; a routine listing only when nothing more telling exists.
         top = next((h for h in hits if h.get("importance") in ("major", "notable")), None)
+        signal = evidence_signal(hits)
         if watch.get("current_state"):
-            date = (watch.get("updated_at") or "")[:10]
+            # A configuration edit is neither a new observation nor the date of this understanding.
+            date = ""
             return {"kind": "note", "text": watch["current_state"], "date": date, "url": "",
-                    "count": len(hits), "fresh": bool(date and date >= week_ago) or bool(top and top["date"] >= week_ago)}
+                    "count": len(hits), "fresh": signal["fresh"]}
         if top:
             return {"kind": "hit", "text": top["title"], "date": top["date"], "url": top["url"], "count": len(hits),
-                    "fresh": bool(top["date"] and top["date"] >= week_ago)}
+                    "fresh": signal["fresh"]}
         if hits:  # only routine listings: not news, but the reader should know the search found something
             return {"kind": "none", "text": f"已检索，仅有一般信息（{len(hits)} 条）", "date": hits[0]["date"], "url": "",
                     "count": len(hits), "fresh": False}

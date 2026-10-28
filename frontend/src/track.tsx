@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type TrackCell, type TrackView } from "./api";
 import { Reveal } from "./motion";
 import { Grade } from "./race";
-import { relTime, useAsync } from "./ui";
+import { ErrorNote, relTime, useAsync } from "./ui";
 import { Figure, Skeleton, VerdictBand } from "./frame";
 import { SignalListDrawer } from "./signalList";
 
@@ -40,47 +40,54 @@ function Cell({ cell, onOpen }: { cell: TrackCell; onOpen: (cell: TrackCell) => 
         <span className="track-label">{cell.label}</span>
         <span className={`track-dir track-${cell.tone}`}>{cell.direction}</span>
       </div>
-      <div className="track-value">{cell.value}{cell.sub && <span className="track-sub">{cell.sub}</span>}</div>
+      <div className="track-visual"><div className="track-value">{cell.value}{cell.sub && <span className="track-sub">{cell.sub}</span>}</div>
       {cell.series.some((s) => s.value) && <Bars cell={cell} />}
+      </div><div className="track-reading-copy">
       {cell.for_us && <p className="track-forus">对公司：{cell.for_us}</p>}
-      {cell.evidence.length > 0 ? <ul className="track-ev">{cell.evidence.map((e, i) => (
+      {cell.evidence.length > 0 ? <details className="chart-evidence"><summary>图表依据 · {cell.evidence.length} 条</summary><ul className="track-ev">{cell.evidence.map((e, i) => (
         <li key={i}>
           {e.url ? <a href={e.url} target="_blank" rel="noreferrer noopener">{e.title}</a> : e.title}
           <span className="muted small"> {e.date}{e.source && ` · ${e.source}`}</span> <Grade grade={e.grade} />
-        </li>))}</ul>
+        </li>))}</ul></details>
         : <p className="muted small">已收录信息中还没有这类记录。</p>}
       <button className="link small track-more" onClick={() => onOpen(cell)}>看全部{cell.label}记录 →</button>
+      </div>
     </article>
   );
 }
 
 /** 赛道四格: demand, capital, price, policy — rule-read from stored, cited records. */
-export function TrackBoard({ projectId, revision, onSettled }: { projectId: string; revision: string; onSettled?: () => void }) {
-  const { data, error } = useAsync<TrackView>(() => api.track(projectId), [projectId, revision]);
+export function TrackBoard({ projectId, revision, onSettled, keys }: { projectId: string; revision: string; onSettled?: () => void; keys?:TrackCell['key'][] }) {
+  const { data:loaded, error, reload } = useAsync<TrackView>(() => api.track(projectId), [projectId, revision]);
+  const data=loaded && keys ? {...loaded,cells:loaded.cells.filter(c=>keys.includes(c.key)),summary:'',balance:''} : loaded;
   const [open, setOpen] = useState<TrackCell | null>(null);
   const settled = !!data || !!error;
   useEffect(() => { if (settled) onSettled?.(); }, [settled]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hold the band's and the cells' place while loading, so the judgments below never jump down when it arrives.
-  if (!data) return error ? null : <div role="status" aria-label="读取赛道信息"><section className="tf-band"><Skeleton lines={1} className="tf-skel-eyebrow" />
+  if (!data && keys && !error) return <section className="macro-chart-loading" role="status" aria-label="读取赛道信息"><Skeleton lines={2}/><div className="track-grid">{keys.map(k=><Skeleton key={k} lines={4}/>)}</div></section>;
+  if (!data) return error ? <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取图表</button></div> : <div role="status" aria-label="读取赛道信息"><section className="tf-band"><Skeleton lines={1} className="tf-skel-eyebrow" />
     <Skeleton lines={2} className="tf-skel-title" /><div className="tf-figures">{[0, 1, 2, 3].map((i) => <Skeleton key={i} lines={2} className="tf-skel-fig" />)}</div></section>
     <section className="track-board track-skel">{[0, 1, 2].map((i) => <Skeleton key={i} lines={6} className="card card-pad" />)}</section></div>;
   const blank = (c: TrackCell) => !c.evidence.length && c.series.every((s) => !s.value);
-  if (data.cells.length && data.cells.every(blank)) {
+  if (data.cells.every(blank)) {
     // No records at all: one quiet line instead of four empty charts.
     return (
       <Reveal as="section" className="card card-pad track-board track-empty">
-        <div className="card-head"><h3>赛道在变大还是变挤</h3><span className="muted small">{data.industry && `${data.industry} · `}近 {data.quarters.length} 个季度 · 规则整理</span></div>
-        <p className="muted small">{data.cells.map((c) => c.label).join("、")}：已收录信息中还没有这类记录。未收录不代表没有发生。</p>
+        <div className="card-head"><h3>{keys?.length===1?'政策记录':'赛道在变大还是变挤'}</h3><span className="muted small">{data.industry && `${data.industry} · `}近 {data.quarters.length} 个季度 · 规则整理</span></div>
+        <p className="muted small">{data.cells.length>0 && `${data.cells.map((c) => c.label).join("、")}：`}已收录信息中还没有这类记录。未收录不代表没有发生。</p>
       </Reveal>
     );
   }
   const shown = data.cells.filter((c) => !blank(c));
   return (
     <>
-      <VerdictBand eyebrow={<>行业环境{data.balance && <span className="rj-verdict small-verdict">{data.balance}</span>}</>}
+      {keys ? <header className="track-section-head">
+        <h3>{keys.length===1?'已收录政策信号':'需求、价格与资本'}</h3>
+        <span className="muted small">{data.industry ? `${data.industry} · ` : ''}近 {data.quarters.length} 个季度 · 规则整理 · {relTime(data.generated_at)}</span>
+      </header> : <VerdictBand eyebrow={<>行业环境{data.balance && <span className="rj-verdict small-verdict">{data.balance}</span>}</>}
         meta={`${data.industry ? `${data.industry} · ` : ""}近 ${data.quarters.length} 个季度 · 规则整理 · ${relTime(data.generated_at)}`}
-        title={data.summary || "赛道在变大还是变挤"}
-        figures={<>{data.cells.map((c) => <Figure key={c.key} label={c.label} value={c.value || "—"} note={c.direction} />)}</>} />
+        title={data.summary || '赛道在变大还是变挤'}
+        figures={<>{data.cells.map((c) => <Figure key={c.key} label={c.label} value={c.value || "—"} note={c.direction} />)}</>} />}
       <SignalListDrawer projectId={projectId} cell={open} open={!!open} onClose={() => setOpen(null)} />
       <section className="track-board" aria-label="赛道在变大还是变挤">
         <div className={`track-grid track-n${shown.length}`}>{shown.map((c) => <Cell key={c.key} cell={c} onOpen={setOpen} />)}</div>

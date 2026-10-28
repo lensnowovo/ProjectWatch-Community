@@ -125,6 +125,7 @@ def test_profile_product_codes_receive_all_permitted_source_quotes(tmp_path, sam
         store, service = app.state.studio_store, app.state.studio_application
         grant = service.issue_grant(pid, 'write', 'synthetic-material-test', allow_internal=True)
         with store._connect() as db, db:
+            db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
             db.execute('DELETE FROM studio_jobs')
         # Even a foreign public version containing SECRET-CODE isn't a donor.
         other = app.state.intake_worker.repository.create_project('另一个合成项目')
@@ -148,6 +149,7 @@ def test_profile_product_codes_receive_all_permitted_source_quotes(tmp_path, sam
             else:
                 assert not store.source_analysis_allowed(pid, parsed.source_id, app.state.studio_pipeline.model_binding())
         with store._connect() as db, db:
+            db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
             db.execute('DELETE FROM studio_jobs')
         job = store.enqueue(pid, 'internal')
         app.state.studio_pipeline.run_internal(job)

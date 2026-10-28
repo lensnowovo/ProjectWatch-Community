@@ -98,7 +98,7 @@ def test_paper_triage_reads_labeled_abstract_not_only_authors(tmp_path):
             assert "论文摘要" in user and "distant galaxies" in user
             assert "署名单位" in user and "全文" in system and "行业共识" in system
             rows = pipeline.store.untriaged(project.id)
-            return {"results": [{"id": row["id"], "relevant": row["key"] != "noise",
+            return {"results": [{"id": row["id"], "source_title": row["title"], "source_quote": row["title"], "relevant": row["key"] != "noise",
                                  "category": "company", "summary": "合成摘要", "importance": "routine"}
                                 for row in rows]}
 
@@ -182,7 +182,7 @@ def test_collection_to_event_keeps_topic_paper_and_original_abstract(tmp_path):
         def json(self, _system, user, **_kwargs):
             assert "durable persistence" in user and "CAR-T cells" in user
             rows = pipeline.store.untriaged(project.id)
-            return {"results": [{"id": r["id"], "relevant": True, "category": "paper",
+            return {"results": [{"id": r["id"], "source_title": r["title"], "source_quote": r["title"], "relevant": True, "category": "paper",
                                  "importance": "notable", "summary": "CAR-T持续性研究线索"} for r in rows]}
 
     plan = {"company_queries": ["合成细胞"], "paper_queries": ["CAR-T cells"], "affiliation_names": []}

@@ -14,6 +14,7 @@ import logging
 import re
 import uuid
 from contextlib import closing
+from datetime import date
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -182,9 +183,11 @@ class QuestionLedger:
                 state = db.execute('SELECT status FROM studio_watchpoints WHERE id=?', (watch_id,)).fetchone()
                 if state and state[0] == 'retired':
                     raise ValueError('question closed before assessment commit')
-            owner = db.execute('SELECT project_id,visibility FROM studio_watchpoints WHERE id=?', (watch_id,)).fetchone()
+            owner = db.execute('SELECT project_id,visibility,scope_kind FROM studio_watchpoints WHERE id=?', (watch_id,)).fetchone()
             if not owner or owner[0] != project_id:
                 raise KeyError('question not found')
+            if owner[2] == 'relation':
+                raise ValueError('standing relation is not a research question')
             if not include_internal and owner[1] != 'public':
                 raise KeyError('question not found')
             visibility = assessment.visibility or ('public' if actor == 'system' or not include_internal else 'internal')
@@ -235,13 +238,18 @@ class QuestionLedger:
     def _consume(db, project_id, watch_id, events, *, check_only=False):
         for event in events:
             for item_id, hit_at in event['_question_hits']:
-                current = db.execute('''SELECT 1 FROM studio_watch_hits h JOIN studio_items i ON i.id=h.item_id
+                current = db.execute('''SELECT h.match_fingerprint FROM studio_watch_hits h JOIN studio_items i ON i.id=h.item_id
                     JOIN studio_events e ON e.id=i.event_id JOIN studio_watchpoints w ON w.id=h.watch_id
                     WHERE h.watch_id=? AND h.item_id=? AND h.created_at=? AND i.event_id=? AND e.updated_at=?
                     AND i.project_id=? AND e.project_id=? AND w.project_id=? AND i.relevant=1 AND e.status!='dismissed' ''',
                     (watch_id, item_id, hit_at, event['id'], event['updated_at'], project_id, project_id, project_id)).fetchone()
                 if not current:
                     raise ValueError('question input changed before commit')
+                if current[0]:
+                    row = next((r for r in QuestionLedger.public_event_rows(db, project_id, event['id'])
+                                if r["id"] == item_id), None)
+                    if row is None or QuestionLedger.public_row_fingerprint(row) != current[0]:
+                        raise ValueError('question input changed before commit')
                 if not check_only:
                     db.execute('INSERT OR IGNORE INTO studio_question_consumed_hits VALUES (?,?,?,?,?)',
                                (watch_id, item_id, hit_at, event['id'], event['updated_at']))
@@ -272,7 +280,7 @@ class QuestionLedger:
         for watch in self.monitor.watchpoints(project_id):
             if not include_internal and watch['visibility'] != 'public':
                 continue
-            if watch.get('status') == 'retired':  # closed plan items keep their history but leave the tracked list
+            if watch.get('status') == 'retired' or watch.get('scope_kind') == 'relation':
                 continue
             latest = {}
             with closing(self.store._connect()) as db:
@@ -355,6 +363,185 @@ class QuestionLedger:
     @staticmethod
     def _term_match(term, text):
         return re.search(r'(?<![A-Za-z0-9_-])' + re.escape(term) + r'(?![A-Za-z0-9_-])', text) if term.isascii() else re.search(re.escape(term), text)
+
+    @classmethod
+    def public_focus_matches(cls, watch, project, text):
+        """Public topic relevance, not semantic support. Internal routing is unchanged."""
+        if watch.get("scope_kind") in ("relation", "question"):
+            targets = cls.relation_terms(watch)
+            matched = any(re.search(cls.relation_pattern(watch, t), text.casefold()) or
+                          (cls.policy_service_pattern(watch, t) and
+                           re.search(cls.policy_service_pattern(watch, t), text.casefold())) for t in targets)
+            if watch.get("scope_kind") == "relation":
+                return matched
+            if targets and not matched:
+                return False
+        question = " ".join(str(watch.get(k) or "") for k in ("text", "label", "criteria"))
+        question, text = question.casefold(), text.casefold()
+        # Trigger on the question, never its broad search query. Subject/industry
+        # words alone cannot match an outcome-specific question.
+        families = (
+            ("医保", "医保 支付标准 报销 reimbursement"),
+            ("IPO 科创板 上市审核", "IPO 科创板 问询 上会 注册发行 上市审核 上市申请 提交注册"),
+            ("注册 拿证 许可 获批", "注册 拿证 许可 获批 审批 批准 临床试验 临床注册 创新医疗器械绿色通道 创新医疗器械特别审查"),
+            ("销售 收入 订单", "销售 收入 订单 交付 营收 revenue"),
+            ("亏损 费用率", "亏损 费用率 盈利 利润 毛利 loss"),
+            ("临床结果 临床效果 疗效", "临床结果 临床效果 疗效 试验结果 研究结果 安全性 有效性 clinical"),
+        )
+        focus = []
+        for triggers, alternatives in families:
+            if triggers == "注册 拿证 许可 获批" and any(
+                    cls._term_match(t, question) for t in ("ipo", "科创板", "上市审核")):
+                continue  # Securities registration is not product approval.
+            if triggers == "销售 收入 订单" and "费用率" in question:
+                continue  # Selling expenses are not a product sales milestone.
+            if any(cls._term_match(t.casefold(), question) for t in triggers.split()):
+                focus.extend(alternatives.casefold().split())
+        if focus:
+            return any(cls._term_match(t, text) for t in focus)
+        terms = [t.casefold() for t in cls._material_terms(watch, project) if cls._term_match(t.casefold(), question)]
+        return any(cls._term_match(t, text) for t in terms)
+
+    @staticmethod
+    def relation_terms(watch):
+        aliases = watch.get("relation_aliases") or []
+        if isinstance(aliases, str):
+            aliases = json.loads(aliases)
+        return list(dict.fromkeys(str(t).strip() for t in
+                    [watch.get("relation_target") or "", *aliases] if len(str(t).strip()) >= 2))
+
+    @staticmethod
+    def relation_pattern(watch, term):
+        """Bounded lexical variants, never a broad industry/semantic match.
+
+        Pricing-project wording can include the descriptor 医疗服务. Preserve
+        the complete subject prefix; do not normalize company/product names or
+        silently persist inferred aliases on the watch.
+        """
+        term = term.casefold()
+        policy = watch.get("relation_type") == "policy" or (
+            watch.get("scope_kind") == "question" and not watch.get("relation_type")
+            and watch.get("axis") == "rules")  # Older children inherit target/aliases, not relation_type.
+        if policy:
+            parts = re.fullmatch(r"(.{2,}?)相关(?:医疗服务)?价格项目", term)
+            if parts:
+                return re.escape(parts[1]) + r"相关(?:医疗服务)?价格项目"
+        return (r"(?<![A-Za-z0-9_-])" + re.escape(term) + r"(?![A-Za-z0-9_-])"
+                if term.isascii() else re.escape(term))
+
+    @staticmethod
+    def policy_service_pattern(watch, term):
+        """An explicit subject/service/policy construction, not sector co-occurrence.
+
+        The subject comes only from a saved pricing-policy target or alias.
+        No arbitrary intervening words, other subjects, or sentence boundaries
+        may connect it to the service relation. Plans and negations are relevant
+        leads too; matching does not assert that coverage has taken effect.
+        """
+        policy = watch.get("relation_type") == "policy" or (
+            watch.get("scope_kind") == "question" and not watch.get("relation_type")
+            and watch.get("axis") == "rules")
+        parts = re.fullmatch(r"(.{2,}?)相关(?:医疗服务)?价格项目", term.casefold()) if policy else None
+        if not parts:
+            return None
+        subject = parts[1]
+        anchor = (r"(?<![A-Za-z0-9_-])" + re.escape(subject) + r"(?![A-Za-z0-9_-])"
+                  if subject.isascii() else re.escape(subject))
+        service = r"(?:相关)?(?:医疗|诊疗)?服务(?:项目)?"
+        inclusion = r"(?:按规定)?(?:拟|将|计划|暂不|尚未|未|不|已)?(?:纳入|列入)"
+        destination = r"(?:医疗服务价格项目|(?:基本)?医保(?:支付|报销)(?:范围)?)"
+        pricing = r"(?:等|相关)?医疗服务价格项目|(?:的)?(?:收费|价格)(?:项目|标准|路径|政策)"
+        payment = r"(?:的)?(?:基本)?医保(?:支付|报销)(?:范围|类别)?"
+        classified = inclusion + r"(?:甲|乙|丙)类(?:基本)?医保"
+        return anchor + r"[ \t]{0,4}(?:" + pricing + "|" + payment + "|" + classified + "|" + service + inclusion + destination + ")"
+
+    @classmethod
+    def public_row_match(cls, watch, project, row):
+        """Literal association with a bounded, attributable excerpt; not a verdict."""
+        terms = cls.relation_terms(watch)
+        headers = " ".join(str(row.get(k) or "") for k in ("title", "summary", "event_title", "event_summary"))
+        candidates = [("summary", headers)]
+        scope_basis = {"article_body": "full_body", "partial_body": "partial_body", "search_summary": "search_summary"}
+        if watch.get("scope_kind") in ("relation", "question") and row.get("body_status") in scope_basis:
+            # A saved search excerpt can route a lead, but is never full-text verification.
+            candidates.append((scope_basis[row["body_status"]], str(row.get("body") or "")))
+        for basis, text in candidates:
+            if not terms:
+                if cls.public_focus_matches(watch, project, text):
+                    return {"basis": basis, "matched_term": "", "excerpt": text[:500]}
+                continue
+            # Require the research outcome close to the subject, rather than in
+            # an unrelated section elsewhere in a long article/report.
+            lower = text.casefold()
+            for term in terms:
+                pattern = cls.relation_pattern(watch, term)
+                for match in re.finditer(pattern, lower):
+                    excerpt = text[max(0, match.start() - 180):match.end() + 320]
+                    if cls.public_focus_matches(watch, project, excerpt):
+                        return {"basis": basis, "matched_term": term, "excerpt": excerpt}
+            if basis == "summary":
+                continue  # A generated headline/summary cannot establish a new structural link.
+            for term in terms:
+                pattern = cls.policy_service_pattern(watch, term)
+                if not pattern:
+                    continue
+                for sentence in re.finditer(r"[^。！？!?；;\n]+", text):
+                    for match in re.finditer(pattern, sentence[0].casefold()):
+                        excerpt = sentence[0][max(0, match.start() - 180):match.end() + 320]
+                        if cls.public_focus_matches(watch, project, excerpt):
+                            return {"basis": basis, "matched_term": term, "excerpt": excerpt,
+                                    "match_rule": "policy_service_link", "matched_text": match[0]}
+        return None
+
+    @staticmethod
+    def public_row_fingerprint(row):
+        return hashlib.sha256(json.dumps(
+            [row[k] or "" for k in ("title", "summary", "event_title", "event_summary")]
+            + [row["body"] if row["body_status"] in ("article_body", "partial_body", "search_summary") else ""],
+            ensure_ascii=False).encode()).hexdigest()
+
+    @staticmethod
+    def public_event_rows(db, project_id, event_id=None):
+        rows = db.execute("""SELECT i.id,i.event_id,i.title,i.summary,i.snippet,i.body,i.body_status,i.url,i.source,
+            e.title AS event_title,e.summary AS event_summary,e.event_at,ev.record AS evidence_record,
+            EXISTS(SELECT 1 FROM studio_evidence_lifecycle l WHERE l.project_id=i.project_id
+                AND l.evidence_version_id=ev.id AND l.status='withdrawn') AS withdrawn
+            FROM studio_items i JOIN studio_events e ON e.id=i.event_id
+            LEFT JOIN studio_item_evidence ie ON ie.item_id=i.id AND ie.project_id=i.project_id
+            LEFT JOIN studio_evidence_versions ev ON ev.id=ie.evidence_version_id AND ev.project_id=i.project_id
+                AND ev.visibility='public'
+            WHERE i.project_id=? AND e.project_id=? AND i.relevant=1 AND e.status!='dismissed'
+            AND (? IS NULL OR e.id=?) ORDER BY COALESCE(e.event_at,e.created_at) DESC,i.id""",
+            (project_id, project_id, event_id, event_id)).fetchall()
+        result = []
+        for raw in rows:
+            row = dict(raw)
+            if row.pop("withdrawn"):
+                continue
+            record = json.loads(row.pop("evidence_record") or "{}")
+            if row["body_status"] in ("article_body", "partial_body", "search_summary") and record.get("parts"):
+                # studio_items.body is only a 12k preview. Match all saved parts
+                # locally, then expose only the relevant bounded excerpt.
+                row["body"] = "\n".join(p["text"] for p in record["parts"])
+            result.append(row)
+        return result
+
+    def public_event_match(self, watch, project, event, *, rows=None):
+        if "body_status" in event:
+            return self.public_row_match(watch, project, event)
+        if watch.get("scope_kind") in ("relation", "question"):
+            if rows is None:
+                event_id = event.get("event_id") or event.get("id")
+                if not event_id:
+                    return None
+                with closing(self.store._connect()) as db:
+                    rows = self.public_event_rows(db, watch["project_id"], event_id)
+            for row in rows:
+                match = self.public_row_match(watch, project, dict(row))
+                if match:
+                    return {**match, "source": row["source"], "url": row["url"], "item_id": row["id"]}
+            return None
+        return self.public_row_match(watch, project, event)
 
     @staticmethod
     def _material_windows(terms, text):
@@ -446,7 +633,7 @@ class QuestionLedger:
                         refs[len(refs)] = {'source_id': row['source_id'], 'evidence_version_id': row['id'], 'part_index': index}
         return self.route_materials(project_id, refs, source_ids, binding=binding, watch_ids=watch_ids)
 
-    def route_existing_events(self, project_id, watch_ids):
+    def route_existing_events(self, project_id, watch_ids, *, focused=False):
         """Attach existing relevant public events to newly-created questions.
 
         Literal relevance only, like material routing; never a judgement or an
@@ -457,18 +644,31 @@ class QuestionLedger:
         added = 0
         with closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            rows = db.execute('''SELECT i.id,i.title,i.summary,e.title AS event_title,e.summary AS event_summary
-                FROM studio_items i JOIN studio_events e ON e.id=i.event_id
-                WHERE i.project_id=? AND e.project_id=? AND i.relevant=1 AND e.status!='dismissed' ''',
-                (project_id, project_id)).fetchall()
+            rows = self.public_event_rows(db, project_id)
             for watch in watches:
                 self._check_question(db, project_id, watch['id'], self._question_fingerprint(watch))
                 terms = self._material_terms(watch, project)
                 for row in rows:
                     text = ' '.join(str(row[k] or '') for k in ('title', 'summary', 'event_title', 'event_summary'))
-                    if any(self._term_match(term, text) for term in terms):
+                    matches = (self.public_row_match(watch, project, dict(row))
+                               if watch.get("scope_kind") in ("relation", "question") else
+                               self.public_focus_matches(watch, project, text) if focused else
+                               any(self._term_match(term, text) for term in terms))
+                    if matches:
+                        fingerprint = ""
+                        if watch.get("scope_kind") in ("relation", "question"):
+                            fingerprint = self.public_row_fingerprint(row)
+                        old = db.execute("SELECT match_fingerprint FROM studio_watch_hits WHERE watch_id=? AND item_id=?",
+                                         (watch["id"], row["id"])).fetchone()
                         count = db.execute('INSERT OR IGNORE INTO studio_watch_hits(watch_id,item_id,created_at) VALUES (?,?,?)',
                                            (watch['id'], row['id'], _now())).rowcount
+                        if fingerprint:
+                            if old and old[0] and old[0] != fingerprint:
+                                db.execute("UPDATE studio_watch_hits SET created_at=? WHERE watch_id=? AND item_id=?",
+                                           (_now(), watch["id"], row["id"]))
+                                count = 1
+                            db.execute("UPDATE studio_watch_hits SET match_fingerprint=? WHERE watch_id=? AND item_id=?",
+                                       (fingerprint, watch["id"], row["id"]))
                         added += count
                         if count:
                             db.execute('UPDATE studio_watchpoints SET last_hit_at=? WHERE id=?', (_now(), watch['id']))
@@ -547,20 +747,59 @@ class QuestionLedger:
                 ORDER BY coalesce(e.event_at,e.created_at) DESC,e.id LIMIT ?''',
                 (watch_id, project_id, project_id, project_id, -1 if limit is None else limit)).fetchall()
             events = self.store.list_events(project_id=project_id, event_ids=[r[0] for r in rows], limit=len(rows))
-            for event in events:
-                event['_question_hits'] = [tuple(r) for r in db.execute('''SELECT h.item_id,h.created_at
+            hits = {}
+            for row in db.execute('''SELECT i.event_id,h.item_id,h.created_at
                     FROM studio_watch_hits h JOIN studio_items i ON i.id=h.item_id
-                    WHERE h.watch_id=? AND i.project_id=? AND i.event_id=? AND i.relevant=1''',
-                    (watch_id, project_id, event['id']))]
+                    WHERE h.watch_id=? AND i.project_id=? AND i.relevant=1''', (watch_id, project_id)):
+                hits.setdefault(row[0], []).append(tuple(row)[1:])
+            for event in events:
+                event['_question_hits'] = hits.get(event['id'], [])
             return events
 
     def _numbers_supported(self, project_id: str, note: str, event_ids, material_quotes=()) -> bool:
+        return not self._unsupported_numbers(project_id, note, event_ids, material_quotes)
+
+    def _unsupported_numbers(self, project_id: str, note: str, event_ids, material_quotes=()) -> list[str]:
         """Bounded numeric-token/unit existence check, not semantic claim verification."""
         token = re.compile(r'(?<![\w.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?(?![\d.])', re.ASCII)
         unit = re.compile(r'\s*(%|％|个百分点|亿元|万元|亿美元|万美元|亿|万|元|台|颗|例|人|家|套|倍|年|月|日)')
 
         def figures_in(text):
+            # Compare a complete calendar date as one value. Never borrow its
+            # year/month/day from separate dates or source blocks.
+            calendar = re.compile(r'(?<![\w.])((?:19|20)\d{2})(?:年(\d{1,2})月(\d{1,2})日|([-\/])(\d{1,2})\4(\d{1,2}))(?=T\d{2}:|[^\w.]|$)', re.ASCII)
+            spans = []
+            for match in calendar.finditer(text):
+                year, month, day = int(match[1]), int(match[2] or match[5]), int(match[3] or match[6])
+                negated = bool(re.search(r'(?:未实现|未达|没有|并未|不是|未|否认)[^，。；;!?！？]{0,8}$',
+                                         text[max(0, match.start()-12):match.start()]))
+                try:
+                    value = date(year, month, day).isoformat()
+                except ValueError:
+                    value = 'invalid:' + match[0]
+                yield value, '日期', negated
+                if not value.startswith('invalid:'):
+                    yield f'{year:04d}-{month:02d}', '年月', negated
+                    yield str(year), '年', negated
+                    yield str(month), '月', negated
+                    yield str(day), '日', negated
+                spans.append(match.span())
+            period = re.compile(r'(?<![\w.])((?:19|20)\d{2})(?:年(\d{1,2})月|[-/](\d{1,2}))(?![\w.])', re.ASCII)
+            for match in period.finditer(text):
+                if any(start <= match.start() < end for start, end in spans):
+                    continue
+                year, month = int(match[1]), int(match[2] or match[3])
+                negated = bool(re.search(r'(?:未实现|未达|没有|并未|不是|未|否认)[^，。；;!?！？]{0,8}$',
+                                         text[max(0, match.start()-12):match.start()]))
+                value = f'{year:04d}-{month:02d}' if 1 <= month <= 12 else 'invalid:' + match[0]
+                yield value, '年月', negated
+                if not value.startswith('invalid:'):
+                    yield str(year), '年', negated
+                    yield str(month), '月', negated
+                spans.append(match.span())
             for match in token.finditer(text):
+                if any(start <= match.start() < end for start, end in spans):
+                    continue
                 after = text[match.end():]
                 # Do not borrow digits inside product names or identifiers.
                 if after[:1].isascii() and after[:1].isalpha():
@@ -579,7 +818,7 @@ class QuestionLedger:
 
         figures = set(figures_in(note))
         if not figures:
-            return True
+            return []
         ids = list(event_ids)
         marks = ','.join('?' * len(ids))
         with closing(self.store._connect()) as db:
@@ -590,9 +829,11 @@ class QuestionLedger:
                 f'SELECT title,snippet,summary,body FROM studio_items WHERE project_id=? AND event_id IN ({marks})',
                 (project_id, *ids)) for v in row]
         blocks += list(material_quotes)
-        available = {figure for block in blocks for figure in figures_in(block)}
-        return all((f, u, negated) in available if u else any(n == f and negative == negated for n, _, negative in available)
-                   for f, u, negated in figures)
+        available = {figure for block in blocks for figure in figures_in(block)
+                     if not figure[0].startswith('invalid:')}
+        return sorted(f"{'否定:' if negated else ''}{f}{u}" for f, u, negated in figures
+                      if not ((f, u, negated) in available if u else
+                              any(n == f and negative == negated for n, _, negative in available)))
 
     # ------------------------------------------------------------ advisor rounds
     def suggest(self, advisor, llm, project_id: str, project: dict, plan: dict, profile: dict | None) -> int:
@@ -614,7 +855,7 @@ class QuestionLedger:
                 continue
             from project_watch.studio.monitoring_plan import MonitoringPlan
 
-            # System suggestions enter the plan as revertible, low-cadence trials (owner confirms in 监控方案).
+            # Suggestions are revertible trials; confidence does not override cadence.
             watch = MonitoringPlan(self.monitor).add(project_id, {
                 'text': text, 'label': str(row.get('label') or text[:8])[:12], 'queries': queries, 'alert': False,
                 'criteria': str(row.get('criteria') or f'与“{text}”直接相关的消息')[:200],
@@ -638,7 +879,7 @@ class QuestionLedger:
         exploration = Explorations(self.monitor)
         states = exploration.view(project_id)
         for watch in self.monitor.watchpoints(project_id):
-            if watch.get('status') == 'retired':
+            if watch.get('status') == 'retired' or watch.get('scope_kind') == 'relation':
                 continue
             if exploration.managed(watch) and watch['id'] in states and not exploration.runnable(watch):
                 continue

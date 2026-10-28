@@ -7,6 +7,7 @@ never matching secret values. License metadata needs human rights review.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import re
@@ -22,7 +23,7 @@ from packaging.utils import canonicalize_name
 
 _TEXT_SUFFIXES = {
     ".py", ".html", ".css", ".js", ".mjs", ".ts", ".tsx", ".cmd", ".sql", ".md", ".txt", ".toml", ".svg",
-    ".yml", ".yaml", ".ps1",
+    ".yml", ".yaml", ".ps1", ".cs", ".nsi", ".command", ".sh",
 }
 _SOURCE_SUFFIXES = _TEXT_SUFFIXES | {".json"}
 _SOURCE_BASENAMES = {
@@ -41,6 +42,11 @@ _STUDIO_FONT_ASSETS = {
     "project_watch/web/assets/noto-serif-sc-chinese-simplified-600-normal.woff2",
 }
 _STUDIO_LICENSE_ASSET = "project_watch/web/assets/THIRD-PARTY-LICENSES.txt"
+# Reviewed, reproducible brand exports only; do not admit arbitrary PNG uploads.
+_BRAND_ASSETS = {
+    "project_watch/static/brand-desktop.png": "b897622a7baa06c93cc2803a121877e2f3f3afe8566e3d644954cf4709da8ef6",
+    "project_watch/static/brand-tray.png": "b74c11e8a3c01e552d8d210b710114d0b31ad735186a3a333a4776ed4337eda1",
+}
 
 
 def _secret_findings(data: bytes, label: str) -> list[str]:
@@ -77,13 +83,15 @@ def audit_wheel(path: Path) -> tuple[int, list[str]]:
                 PurePosixPath(name).name in {"METADATA", "WHEEL", "RECORD", "top_level.txt"}
                 or "/licenses/" in name
             )
-            studio_asset = name in _STUDIO_FONT_ASSETS or name == _STUDIO_LICENSE_ASSET
+            studio_asset = name in _STUDIO_FONT_ASSETS or name == _STUDIO_LICENSE_ASSET or name in _BRAND_ASSETS
             if not package_file and not metadata_file and not studio_asset:
                 findings.append(f"{name}: unexpected wheel member")
                 continue
             if member.file_size > _MAX_MEMBER_BYTES:
                 findings.append(f"{name}: member too large")
                 continue
+            if name in _BRAND_ASSETS and hashlib.sha256(archive.read(member)).hexdigest() != _BRAND_ASSETS[name]:
+                findings.append(f"{name}: unreviewed brand asset")
             if name in _STUDIO_FONT_ASSETS:
                 with archive.open(member) as font:
                     if font.read(4) != b"wOF2":

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -18,6 +19,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import ValidationError
@@ -513,20 +515,26 @@ class Pipeline:
         if execution:
             def classify(url):
                 host = urlsplit(url).hostname or "unknown"
+                if host == "api.deepseek.com" and urlsplit(url).path in ("/v1/tools/search", "/v1/tools/fetch"):
+                    operation = "search" if urlsplit(url).path.endswith("/search") else "page"
+                    return operation, host + operation + settings.search.credentials().get("deepseek", "")
                 if host == urlsplit(settings.model.base_url).hostname:
                     return "model", host + settings.model.api_key
                 search_hosts = {"api.bochaai.com", "api.tavily.com", "api.search.brave.com"}
                 return ("search" if host in search_hosts else "open_data"), host + json.dumps(settings.search.credentials(), sort_keys=True)
-            http = execution.http(http, classify)
+            from project_watch.studio.collection_pages import public_read_request
+
+            http = execution.http(http, classify, public_read=public_read_request)
         else:
             from project_watch.studio.usage import direct_http
 
             model_host = urlsplit(settings.model.base_url).hostname
             http = direct_http(self.store, http,
-                is_model=lambda url: bool(model_host) and urlsplit(url).hostname == model_host,
+                is_model=lambda url: bool(model_host) and urlsplit(url).hostname == model_host
+                    and urlsplit(url).path not in ("/v1/tools/search", "/v1/tools/fetch"),
                 provider=(model_host or '') + settings.model.api_key)
             paid_hosts = {model_host, 'api.bochaai.com', 'api.tavily.com',
-                          'api.search.brave.com', 'open.api.tianyancha.com'} - {None, ''}
+                          'api.search.brave.com', 'api.deepseek.com', 'open.api.tianyancha.com'} - {None, ''}
             http = self.direct_operations.http(http, is_paid=lambda url: urlsplit(url).hostname in paid_hosts)
         llm = LLM(settings.model, http)
         cache = self.search_cache
@@ -1442,7 +1450,10 @@ class Pipeline:
             + self._triage_excerpt(b)
             for b in batch)
         try:
-            data = llm.json(_TRIAGE_SYSTEM, f"{context}\n\n待判断信息：\n{listing}", max_tokens=TRIAGE_MAX_TOKENS)
+            binding_rule = ('\n每条结果必须额外返回 source_title（该 id 对应的完整原标题）与 source_quote'
+                            '（从该条正文或标题原样摘录一段支持摘要的连续原文，至少12个字符；原文不足12字则全文）。'
+                            '逐条处理，不得把其他条目的摘要、分类、影响或 watch 标记绑定到当前 id。')
+            data = llm.json(_TRIAGE_SYSTEM + binding_rule, f"{context}\n\n待判断信息：\n{listing}", max_tokens=TRIAGE_MAX_TOKENS)
             results = data.get("results", []) if isinstance(data, dict) else None
             if not isinstance(results, list) or any(not isinstance(r, dict) for r in results):
                 raise ModelError("模型返回的信息列表格式不正确，需要重新整理", code="model_output_invalid_shape")
@@ -1456,7 +1467,39 @@ class Pipeline:
                 return []
             half = len(batch) // 2
             return self._triage_results(llm, context, batch[:half]) + self._triage_results(llm, context, batch[half:])
-        return results
+        return self._bound_triage_results(batch, results)
+
+    def _bound_triage_results(self, batch: list[dict], results: list[dict]) -> list[dict]:
+        """Require a title and verbatim anchor from the same item, with no paid repair.
+
+        This is a binding check, not a claim that semantic accuracy is proven.
+        Old cached/unbound replies remain visible as original titles, never as
+        generated claims. Duplicate IDs are ambiguous, not last-write-wins.
+        """
+        def normalized(value):
+            return " ".join(str(value or "").split())
+
+        out = []
+        for item in batch:
+            matches = [r for r in results if r.get("id") == item["id"]]
+            row = matches[0] if matches else {}
+            source = normalized(item["title"] + "\n" + self._triage_excerpt(item))
+            quote = normalized(row.get("source_quote"))
+            if len(matches) > 1:
+                reason = "duplicate_id"
+            elif not row.get("source_title") or not quote:
+                reason = "missing_binding"
+            elif normalized(row["source_title"]) != normalized(item["title"]):
+                reason = "title_mismatch"
+            elif len(quote) < min(12, len(normalized(item["title"]))) or quote not in source:
+                reason = "quote_mismatch"
+            else:
+                out.append({**row, "triage_binding": {"version": 1, "status": "bound"}})
+                continue
+            out.append({"id": item["id"], "relevant": True, "importance": "routine",
+                        "summary": item["title"][:200], "impact": "", "category": item["category"],
+                        "triage_binding": {"version": 1, "status": reason}})
+        return out
 
     def _internal_background(self, project_id: str, limit: int = 1600, *, llm=None) -> str:
         """Plans, key numbers and risks from internal material, so 'impact' can name what is affected."""
@@ -1793,6 +1836,37 @@ class Pipeline:
         """Company-first delivery releases the worker before full-track collection."""
         project_id = job["project_id"]
         execution = getattr(self._execution_state, 'current', None)
+        # Operator opt-in, first public bootstrap only. DSH owns research choices;
+        # never silently fall back to the legacy collector on failure.
+        dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
+        if execution and (execution.read_checkpoint('collection_request_v1') or {}).get('mode') == 'topic':
+            from project_watch.studio.dsh_runtime import run_monitor
+            from project_watch.studio.public_executor import require_available
+
+            require_available()
+            if not dsh_root or os.environ.get('PROJECT_WATCH_DSH_MONITOR') != '1':
+                raise ValueError('bounded topic requires DSH monitoring runtime')
+            run_monitor(self, execution, Path(dsh_root))
+            return
+        if (dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1"
+                and self.store.get_project(project_id).get("last_external_at")):
+            from project_watch.studio.dsh_runtime import run_monitor
+
+            run_monitor(self, execution, Path(dsh_root))
+            return
+        project = self.store.get_project(project_id)
+        if dsh_root and execution and project and (
+                execution.read_checkpoint("dsh_binding") or not project.get("last_external_at")):
+            from project_watch.studio.dsh_runtime import run_bootstrap
+
+            run_bootstrap(self, execution, Path(dsh_root))
+            if os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
+                self.store.enqueue(project_id, "external_followup", automatic=True, input_version=job["id"])
+            return
+        # DSH chosen but unavailable: hold with a visible reason, never the legacy collector.
+        from project_watch.studio.public_executor import require_available
+
+        require_available()
         if execution and execution.read_checkpoint('external_first_ready'):
             return
         _settings, _http, llm, collectors = self.tools()
@@ -1877,6 +1951,15 @@ class Pipeline:
         execution = getattr(self._execution_state, 'current', None)
         if execution is None:
             raise ValueError('补全任务需要有效的持久任务记录')
+        dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
+        if dsh_root and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
+            from project_watch.studio.dsh_runtime import run_monitor
+
+            run_monitor(self, execution, Path(dsh_root))
+            return
+        from project_watch.studio.public_executor import require_available
+
+        require_available()
         saved = execution.read_checkpoint('external_followup_input')
         if not saved:
             raise ValueError('补全记录缺失，请重新更新项目')
@@ -1929,8 +2012,8 @@ class Pipeline:
 
         stage("更新事件线索")
         mon.update_threads(self.monitor, self.store, llm, project_id, project)
-        self._question_round(project_id, project, plan, llm, stage)
-        self._replan(project_id, llm, stage, trigger="external")
+        # Seed the first monitoring plan with products, people and business
+        # facts, not just the identity description and the first news titles.
         if not self.store.get_public_profile(project_id):
             try:
                 self.run_public_profile(job)
@@ -1939,6 +2022,8 @@ class Pipeline:
                         or any(u['unknown'] for u in execution.usage().values())):
                     raise
                 _log.info("public profile unavailable; external monitoring continues")
+        self._question_round(project_id, project, plan, llm, stage)
+        self._replan(project_id, llm, stage, trigger="external")
         if any(u['unknown'] for u in execution.usage().values()):
             raise HttpError('request_outcome_unknown')
         current_project = self.store.get_project(project_id)
@@ -2154,6 +2239,8 @@ class Pipeline:
 
     # ------------------------------------------------------------------ brief
     def run_brief(self, job: dict) -> None:
+        if job.get('id'):
+            self.store.set_stage(job['id'], '生成当前判断')
         project_id = job["project_id"]
         _settings, _http, llm, _ = self.tools()
         if not llm.ready:
@@ -2250,6 +2337,18 @@ class Pipeline:
     # ------------------------------------------------------------------ deep analysis
     def run_insight(self, job: dict) -> None:
         """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
+        dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
+        execution = getattr(self._execution_state, 'current', None)
+        if dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
+            from project_watch.studio.dsh_runtime import run_monitor
+
+            run_monitor(self, execution, Path(dsh_root), analysis_only=True)
+            return
+        from project_watch.studio.public_executor import require_available
+
+        require_available()
+        if job.get('id'):
+            self.store.set_stage(job['id'], '深度分析')
         if self.insight_generator is None:
             raise ValueError('insight_unavailable: 当前安装未包含深度分析生成器')
 
@@ -2259,7 +2358,13 @@ class Pipeline:
         self.insight_generator.run(self, llm, job["project_id"])
 
     def schedule_insight(self, project_id: str) -> dict | None:
-        """Automatic re-analysis after sources change materially, at most once per ~day per project."""
+        """Analyse settled new evidence once, without holding it behind a daily gate."""
+        from project_watch.studio.public_executor import unavailable_reason
+
+        if unavailable_reason() or (os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1"):
+            # The DSH external round owns its public judgment. The legacy
+            # all-source fingerprint must not enqueue a second, paid loop.
+            return None
         if self.insight_generator is None:
             return None
 
@@ -2268,7 +2373,7 @@ class Pipeline:
             return None
         checked = self._insight_checked.get(project_id)
         moment = datetime.now(UTC)
-        if checked and moment - checked < timedelta(minutes=10):
+        if checked and moment - checked < timedelta(seconds=60):
             return None  # Gathering reads every source; do not repeat it on each 5-second tick.
         self._insight_checked[project_id] = moment
         fingerprint = self.insight_generator.due(self, project_id, now=moment)
@@ -2578,6 +2683,12 @@ class Pipeline:
                 if execution:
                     if job['kind'] != 'internal' and (self.store.get_project(job['project_id']) or {}).get('status') == 'paused':
                         raise HttpError('project_paused')
+                    from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE
+
+                    with closing(self.store._connect()) as db:
+                        pending_model = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job['id'],)).fetchone()
+                    if pending_model:
+                        raise HttpError('model_http_5xx')
                     execution.checkpoint("dispatch_completed", {"completed": True})
         except (ModelError, HttpError, ValueError) as exc:
             if execution and job['kind'] == 'external_followup' and getattr(exc, 'code', '') != 'project_paused':

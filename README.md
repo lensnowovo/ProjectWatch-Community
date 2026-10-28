@@ -27,7 +27,7 @@
 它跑在你自己的电脑上，用你自己的模型与搜索配置。分析尽量附带来源，缺失信息保留为空；模型输出仍可能出错，重要结论请查看原始材料。
 
 > [!NOTE]
-> 当前版本为 **v0.2.0-alpha.1 开发者预览版**，维护者 **qzqzqz**。已有分析实现、提示词、规则与页面全部保留，不依赖另一个私有分析包。
+> 当前公开发布为 **v0.2.0-alpha.1 开发者预览版**，维护者 **qzqzqz**。已有分析实现、提示词、规则与页面全部保留，不依赖另一个私有分析包。新的 Windows `0.2.0rc2` 仍在私下验收，进度见[发布准备状态](docs/release-readiness.md)。
 > 完整功能不代表所有场景都已生产验收；没有 Key 时可看界面，不能进行真实模型分析。
 
 <br>
@@ -67,15 +67,35 @@
 
 ## 快速开始
 
-以下是已发布的开发者版安装方式，仍需要 Python。免 Python、免终端的 Windows 用户版正在制作，尚未发布。
+### 普通用户版：Windows 公开预览准备中
 
-推荐 Windows x64、Python 3.12、Node.js 22+。先克隆仓库，再在源码根目录运行：
+维护者正在准备 Windows 公开预览版，不是稳定版。实际下载入口在最终批准后更新；
+当前候选的已知分析错误与未覆盖项见[候选说明](docs/releases/0.2.0rc2-draft.md)。
+如需让自己的 Agent 排查或贡献修复，请先读[贡献入口](CONTRIBUTING.md)。
+
+| 平台 | 本轮状态 |
+| --- | --- |
+| Windows x64 | 自带 Python / Node / DSH 的标准安装器；最终候选验收中，尚未公开发布 |
+| Apple Silicon Mac（M 系列） | 已有中间应用包；实机验收暂缓，本轮先收尾 Windows，尚未公开发布 |
+| Intel Mac | 正式发行暂缓，不把历史候选当已验证版本 |
+
+正式资产会在批准后的 Release 中提供；当前顶部下载链接仍是开发者预览，不是上述桌面安装包。详见 [支持矩阵](docs/release-support-matrix.md)。
+
+安装、首次配置、退出、备份和升级步骤见 [Windows 使用指南](docs/windows-user-guide.md)。Windows 桌面包不要求安装 Python、Node 或打开终端；源码方式仍需要开发环境。
+
+用户版目标流程：安装并打开 → 配置自己的模型与搜索服务，或按说明连接已有 Agent → 输入公司名/上传获准材料并确认主体。已有 Agent 的交互授权能力不等同无人值守后台 API 模式。账号费用与材料披露范围由使用者确认。
+
+### 源码开发者
+
+以下是已发布的开发者版安装方式，仍需要 Python。Mac 源码方式见 [开发指南](docs/macos-developer.md)，用户包构建见 [Mac 用户版](docs/macos-user-build.md)；构建成功不代表实机通过。
+
+开发回归使用 Windows x64、Python 3.12；当前候选构建固定 Node.js 24.22.1。先克隆仓库，再在源码根目录运行：
 
 ```powershell
 git clone https://github.com/lensnowovo/ProjectWatch-Community.git
 cd ProjectWatch-Community
 py -3.12 -m venv .venv-developer
-.\.venv-developer\Scripts\python.exe -m pip install --upgrade "pip>=26.2"
+.\.venv-developer\Scripts\python.exe -m pip install --upgrade "pip>=26.2.2"
 .\.venv-developer\Scripts\python.exe -m pip install -e ".[dev,team,mcp,postgres]" build ruff
 npm --prefix frontend ci
 npm --prefix frontend run build
@@ -140,6 +160,8 @@ flowchart LR
 | [已知边界](docs/developer-known-limitations.md) | 哪些能力尚未生产验收 |
 | [参与开发](docs/contributing.md) | 提交、测试与贡献授权 |
 | [安全问题反馈](docs/security-reporting.md) | 漏洞报告渠道 |
+| [使用帮助与反馈](SUPPORT.md) | 安装、功能、分析质量和结果不明的安全处理 |
+| [维护流程](docs/maintenance.md) | 问题复现、回归、补丁和回滚 |
 
 <br>
 

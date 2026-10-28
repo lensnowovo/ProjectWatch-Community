@@ -59,5 +59,5 @@ test("shorter evidence notes preserve uncertainty and fact boundaries", () => {
   assert.match(source("landscape.tsx"), /预测 \/ 估计/);
   assert.match(source("metrics.tsx"), /比率与现金跑道按公式计算/);
   assert.match(source("signals.tsx"), /AI 对照仅作追问线索/);
-  assert.match(source("pages/Feed.tsx"), /未检索到信息不代表没有变化/);
+  assert.match(source("pages/Feed.tsx"), /暂无收录动态/); // Describes collected records, not absence of real events.
 });

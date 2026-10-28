@@ -205,22 +205,25 @@ test("five sections (8945) group the original pages; old ?tab= links still land 
   const { CompanyOverview } = load("../src/overview.tsx");
   const html = render(CompanyOverview, { detail: { ...detail, profile: { one_liner: "合成公司做什么", sections: [], highlights: [], milestones: [] },
     brief: { headline: "合成判断标题", tone: "watch", summary: "合成判断", updated_at: "2026-10-01" } }, onReload() {} });
-  assert.match(html, /合成公司做什么/); assert.match(html, /公司档案/);
+  assert.match(html, /id="dossier-intro" aria-labelledby="cd-intro-title"/);
+  assert.equal((html.match(/合成公司做什么/g) || []).length, 1); // Fixed company template shows the introduction once.
+  assert.match(html, /公司档案/); assert.match(html, /业务与产品/);
   assert.doesNotMatch(html, /合成判断标题|本期变化|跟踪问题/);
 });
 
-test("overview only truncates a summary when it also offers expansion", () => {
+test("overview keeps the full company summary in its fixed reading chapter", () => {
   const { CompanyOverview } = load("../src/overview.tsx");
   const overview = (summary) => render(CompanyOverview, { detail: { ...detail,
     profile: { one_liner: "合成公司介绍", summary, sections: [], highlights: [], milestones: [] } }, onReload() {} });
   const short = overview("合成摘要".repeat(25));
   assert.doesNotMatch(short, /class="clamp-3"/);
   const long = overview("合成摘要".repeat(40));
-  assert.match(long, /class="clamp-3"/);
-  assert.match(long, /aria-expanded="false"[^>]*>阅读全文/);
+  assert.match(long, /<p class="cd-introduction">/);
+  assert.doesNotMatch(long, /class="clamp-3"|<details class="cd-abstract"/);
+  assert.ok(long.includes("合成摘要".repeat(40)));
 });
 
-test("工商档案 remains open beside the company narrative and distinguishes registration from headquarters", () => {
+test("工商档案 folds below the dossier and distinguishes registration from headquarters", () => {
   const facts = [
     { kind: "location", label: "总部", text: "总部位于合成市", refs: [] },
     { kind: "location", label: "注册地址", text: "合成市合成区合成路1号", refs: [{ url: "https://example.invalid/r", source: "合成登记站", title: "", quote: "合成路1号" }] },
@@ -230,17 +233,18 @@ test("工商档案 remains open beside the company narrative and distinguishes r
   assert.match(html, /注册地址.*合成市合成区合成路1号.*合成登记站/s);
   assert.match(html, /所在地.*总部位于合成市/s);
   assert.match(html, /合成项目有限公司/);
-  assert.match(render(CompanyRegistry, { detail }), /注册地址.*暂无/s);
+  assert.match(render(CompanyRegistry, { detail }), /注册地址.*尚未取得/s);
   const { CompanyOverview } = load("../src/overview.tsx");
   const overview = render(CompanyOverview, { detail: { ...detail, public_profile: { facts, updated_at: "2026-10-10" } }, onReload() {} });
   assert.match(overview, /aria-label="工商档案"/);
   assert.match(overview, /注册地址.*合成市合成区合成路1号.*合成登记站/s);
-  assert.match(overview, /业务与进展/);
+  assert.match(overview, /业务与产品/);
 });
 
 test("外部信息 is navigated by its count strip: one cell per page, research pages read structured fields", () => {
   const project = readFileSync(new URL("../src/pages/Project.tsx", import.meta.url), "utf8");
-  assert.match(project, /\{ page: "industry", label: "行业与政策", cats: \["industry", "policy"\], always: true \}/);
+  assert.match(project, /\{ page: "industry", label: "宏观环境", cats: \["industry", "policy"\], always: true \}/);
+  for (const label of ['行业监控', '政策监控', '技术监控']) assert.ok(project.includes(label));
   // 内部信息 and 外部信息 use the same count strip, so their sub-navigation looks and works alike
   assert.match(project, /section\.id !== "external" && section\.id !== "internal" && <nav className="subtabs"/);
   assert.match(project, /<PageStrip label="内部信息分区"/);

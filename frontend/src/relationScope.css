@@ -1,0 +1,27 @@
+.relation-scope { background: var(--paper, #fbf9f3); border: 1px solid var(--line, #e5dfd0); border-radius: 14px; padding: 22px 26px; margin: 24px 0; }
+.relation-scope > header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+.relation-scope h3 { margin: 0; font-size: 18px; }
+.relation-scope table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.relation-scope th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 18px 12px 0; border-bottom: 1px solid var(--line, #e5dfd0); }
+.relation-scope td { vertical-align: top; padding: 18px 20px 18px 0; border-bottom: 1px solid var(--line, #e5dfd0); overflow-wrap: anywhere; }
+.relation-scope tr:last-child td { border-bottom: 0; }
+.rs-type { font-size: 11px; color: var(--muted); display: block; margin-bottom: 5px; }
+.rs-target { display: flex; width: 100%; text-align: left; justify-content: space-between; gap: 10px; border: 0; background: none; color: inherit; padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
+.rs-target > span { color: var(--muted); font-weight: 400; }
+.rs-alias { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; color: var(--muted); margin-top: 5px; }
+.rs-state { margin-top: 12px; font-size: 12px; }
+.rs-reason { margin: 0 0 8px; font-size: 14px; line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.rs-news { font-size: 14px; line-height: 1.65; color: inherit; text-decoration: none; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.rs-news:hover { text-decoration: underline; }
+.rs-meta { color: var(--muted); font-size: 11px; margin: 8px 0; }
+.rs-branches { display: grid; gap: 10px; }
+.rs-branches > button { background: transparent; border: 0; border-left: 2px solid var(--line, #e5dfd0); padding: 0 0 0 10px; text-align: left; font: inherit; font-size: 13px; color: inherit; cursor: pointer; }
+.rs-branches small { display: block; color: var(--muted); margin-top: 4px; font-size: 11px; }
+.rs-expanded > td { padding: 18px; background: var(--paper-2); }
+.rs-evidence { display: grid; gap: 12px; margin-bottom: 20px; }
+.rs-evidence article { border-left: 2px solid var(--line, #d7cebb); padding-left: 14px; font-size: 13px; }
+.rs-evidence small { display: block; color: var(--muted); margin-top: 5px; }
+.rs-evidence p { margin: 7px 0 0; line-height: 1.7; }
+.relation-scope button:focus-visible, .relation-scope a:focus-visible { outline: 2px solid var(--accent, #9c803d); outline-offset: 3px; }
+.relation-legacy > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 16px 0; }
+@media (max-width: 800px) { .relation-scope { padding: 18px; } .relation-scope table { min-width: 760px; } }

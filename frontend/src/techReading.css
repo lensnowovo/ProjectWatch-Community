@@ -1,0 +1,26 @@
+/* A readable full-width source list, independent of the chart's height. */
+.macro-reading .tech-panel .tech-body{grid-template-columns:minmax(0,1fr);align-items:start;gap:24px}
+.macro-reading .tech-panel .tech-side{border-left:0;border-top:1px solid var(--line);padding:20px 0 0}
+.tech-panel .tech-main,.tech-panel .tech-chart{align-content:start}
+.tech-panel .tech-new-table{width:100%;table-layout:fixed;font-size:13px}
+.tech-name-col{width:28%}.tech-date-col{width:15%}
+.tech-panel .tech-new-table th,.tech-panel .tech-new-table td{vertical-align:top;line-height:1.65;text-transform:none;letter-spacing:normal;padding:14px 12px}
+.tech-panel .tech-new-table th[scope="row"]{white-space:normal;min-width:0;font-weight:500}
+.tech-entrant-name{display:block;overflow-wrap:anywhere}
+.tech-topic summary>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.tech-entrant-note{display:block;margin-top:5px;overflow-wrap:anywhere}
+.tech-panel .tech-new-table .tech-entrant-date{white-space:nowrap;text-align:left;color:var(--muted);font-size:12px}
+.tech-topic summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px;color:var(--ink-2)}
+.tech-topic summary::-webkit-details-marker{display:none}
+.tech-topic summary small{font-size:11px;color:var(--muted);white-space:nowrap}
+.tech-topic[open] summary small{visibility:hidden}
+.tech-topic p{margin:10px 0;line-height:1.75;overflow-wrap:anywhere}
+.tech-topic a{font-size:12px}.tech-entrants-more{margin-top:14px}
+.tech-topic summary:focus-visible{outline:2px solid var(--brass);outline-offset:4px}
+@media(hover:hover){.tech-topic summary:hover{color:var(--ink)}}
+@media(max-width:760px){
+  .tech-panel .tech-new-table{display:block;overflow:visible}.tech-new-table colgroup,.tech-new-table thead{display:none}
+  .tech-new-table tbody{display:block}.tech-new-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:16px 0;border-top:1px solid var(--line)}
+  .tech-panel .tech-new-table th,.tech-panel .tech-new-table td{display:block;padding:0;border:0}
+  .tech-new-table td:last-child{grid-column:1/-1}.tech-topic summary{gap:8px}.tech-entrant-note{font-size:11px}
+}

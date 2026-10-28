@@ -285,7 +285,7 @@ def create_postgres_team_app(
 
     @app.get("/", include_in_schema=False)
     def root() -> FileResponse:
-        return FileResponse(static_root / "index.html")
+        return FileResponse(static_root / "index.html", media_type="text/html")
 
     @app.post("/api/auth/login", response_model=TeamSessionView)
     def login(body: TeamLogin, request: Request, response: Response) -> TeamSessionView:

@@ -28,4 +28,5 @@ def read_page(execution, reader, url):
             safe['links'] = safe_article_links(safe['resolved_url'] or url, result.get('links', []))
         return Response(200, {'content-type': 'application/json'}, json.dumps(safe).encode())
     key = hashlib.sha256(url.encode()).hexdigest()
-    return json.loads(execution.call('page', key, read, provider='guarded_public_reader', read_only=True).body)
+    return json.loads(execution.call('page', key, read, provider='guarded_public_reader',
+                                    read_only=True, public_read=True).body)

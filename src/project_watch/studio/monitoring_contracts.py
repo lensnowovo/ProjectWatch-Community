@@ -20,7 +20,7 @@ class EvidenceInput(BaseModel):
     project_id: str = Field(min_length=1, max_length=100)
     source_key: str = Field(min_length=1, max_length=500)
     extraction_version: str = Field(min_length=1, max_length=100)
-    source_type: Literal["document", "public_page", "search_summary"] = "document"
+    source_type: Literal["document", "public_page", "search_summary", "structured_record"] = "document"
     visibility: Literal["internal", "public"] = "internal"
     origin: Literal["company_self", "regulator", "partner", "media", "unknown"] = "unknown"
     read_scope: Literal["full", "partial", "fragmented", "summary"]
@@ -38,6 +38,11 @@ class EvidenceInput(BaseModel):
             raise ValueError("search summaries only have stored-text locators and summary scope")
         if self.source_type == "public_page" and any(p.locator_kind != "stored_text" for p in self.parts):
             raise ValueError("unstructured public pages cannot claim PDF/slide/cell coordinates")
+        if self.source_type == "structured_record" and (
+            self.visibility != "public" or self.read_scope != "partial"
+            or any(p.locator_kind != "stored_text" for p in self.parts)
+        ):
+            raise ValueError("structured records retain public source fields, not full page text")
         return self
 
 

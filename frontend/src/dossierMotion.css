@@ -1,0 +1,39 @@
+/* Saved-content receipts: same editorial surfaces, never simulated progress. */
+.dossier-live-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:28px; align-items:start; }
+.dossier-live-layout:has(.dossier-rail) { grid-template-columns:minmax(0,1fr) 190px; }
+.dossier-live-content { min-width:0; }
+.dossier-rail { position:sticky; top:32px; padding:5px 20px 16px 0; min-width:0; min-height:200px; overflow:clip; color:var(--ink); }
+.dossier-rail header { display:flex; gap:8px; align-items:center; font:12px var(--sans); color:var(--muted); margin-bottom:12px; }
+.dr-dot { width:5px;height:5px;border-radius:50%;background:var(--brass); }
+.dr-state { font-size:13px; line-height:1.75; overflow-wrap:anywhere; }
+.dr-stage,.dr-note,.dr-warning { font-size:11px;line-height:1.8;margin:10px 0;color:var(--muted);overflow-wrap:anywhere; }
+.dr-warning { color:var(--warn,var(--ink-2)); }
+.dr-track { position:absolute;top:40px;bottom:16px;right:3px;width:1px;background:var(--line);pointer-events:none; }
+.dr-beam,.dr-glow { display:none;position:absolute; }
+.dr-beam { top:0;left:-1px;width:3px;height:65px;background:linear-gradient(transparent,var(--brass),transparent); }
+.dr-glow { top:32px;left:-22px;width:45px;height:45px;background:radial-gradient(circle,color-mix(in srgb,var(--brass) 28%,transparent),transparent 70%); }
+.dossier-rail[data-flowing="true"] .dr-beam { display:block;animation:dr-flow 3.2s ease-in-out infinite; }
+.dossier-rail[data-flowing="true"] .dr-glow { display:block;animation:dr-breathe 2.8s ease-in-out infinite; }
+.dr-waiting_response .dr-glow { display:block;opacity:.5; }
+.dr-receipt { position:relative;margin:18px 0 14px;padding:12px;background:var(--paper);border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 18px color-mix(in srgb,var(--brass) 15%,transparent);transform-origin:right center;animation:dr-receipt 4.6s ease both;pointer-events:none; }
+.dr-receipt strong { display:block;font-size:12px;font-weight:500;line-height:1.7; }
+.dr-receipt span { display:block;font-size:11px;color:var(--muted);margin-top:3px; }
+.dr-saved { margin-top:22px; }
+.dr-saved>small { font-size:11px;color:var(--muted); }
+.dr-saved ul { list-style:none;padding:0;margin:8px 0 16px; }
+.dr-saved li+li { border-top:1px solid var(--line); }
+.dr-saved a { display:flex;gap:10px;justify-content:space-between;text-decoration:none;font-size:12px;padding:9px 0; }
+.dr-saved a span { font-size:11px;color:var(--muted);white-space:nowrap; }
+.dr-task-link { font-size:11px;text-underline-offset:4px; }
+.cd-arrival { animation:dr-card 2.6s ease-out both; }
+.cd-overview[data-arrivals~="business"] #dossier-business,.cd-overview[data-arrivals~="team"] #dossier-team,.cd-overview[data-arrivals~="capital"] #dossier-capital,.cd-overview[data-arrivals~="history"] #dossier-history { animation:dr-card 2.6s ease-out both; }
+.dossier-rail:not([data-flowing="true"]):not(.dr-waiting_response):not(.dr-stopping) .dr-track { opacity:0; }
+.cd-arrival-note { color:var(--brass);font-size:11px;margin-left:auto; }
+.dossier-live-layout:has(.dossier-rail) .cd-business-layout { grid-template-columns:minmax(0,1fr); }
+@keyframes dr-flow { 0%{transform:translateY(0);opacity:0} 20%{opacity:.75} 85%{opacity:.6} 100%{transform:translateY(85px);opacity:0} }
+@keyframes dr-breathe { 0%,100%{opacity:.35;transform:scale(.85)} 50%{opacity:.8;transform:scale(1.1)} }
+@keyframes dr-receipt { 0%{opacity:0;transform:translate(-8px,5px)} 12%,78%{opacity:1;transform:none;filter:none} 100%{opacity:0;transform:translateX(55px) scale(.35,.6);filter:blur(1px)} }
+@keyframes dr-card { 0%{box-shadow:0 0 0 1px color-mix(in srgb,var(--brass) 70%,transparent),0 0 22px color-mix(in srgb,var(--brass) 17%,transparent)} 100%{box-shadow:none} }
+@media(max-width:1000px) {.dossier-live-layout:has(.dossier-rail){grid-template-columns:minmax(0,1fr) 165px;gap:20px}}
+@media(max-width:760px) {.dossier-live-layout:has(.dossier-rail){display:flex;flex-direction:column;gap:18px}.dossier-live-content{width:100%}.dossier-rail{order:-1;position:relative;top:auto;width:100%;min-height:0;padding:0 20px 12px 0;border-bottom:1px solid var(--line)}.dr-saved{margin-top:12px}.dr-saved ul{display:flex;flex-wrap:wrap;gap:0 18px;margin-bottom:10px}.dr-saved li+li{border:0}.dr-receipt{max-width:260px;margin-block:12px}.dr-track{top:0;bottom:8px}}
+@media(prefers-reduced-motion:reduce){.dossier-rail .dr-beam,.dossier-rail .dr-glow{display:none!important}.dr-receipt,.cd-arrival,.cd-overview[data-arrivals] section{animation:none!important;transform:none!important;filter:none!important}}

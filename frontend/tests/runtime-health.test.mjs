@@ -8,7 +8,10 @@ test('runtime UI distinguishes stalled work and provider waits without an invent
   assert.match(tasks, /runtime\?\.restart_required/);
   assert.match(tasks, /runtime\?\.label/);
   assert.match(tasks, /runtime\?\.progress_at/);
-  assert.match(tasks, /runtime\?\.state === "stalled"/);
-  assert.match(project, /health\?\.restart_required/);
-  assert.match(project, /查看运行状态/);
+  const state = readFileSync(new URL('../src/workState.ts', import.meta.url), 'utf8');
+  const ui = readFileSync(new URL('../src/Operational.tsx', import.meta.url), 'utf8');
+  assert.match(tasks, /WorkIndicator state=\{error \? "unavailable" : j.runtime\?\.state/);
+  assert.match(state, /health\?\.restart_required/);
+  assert.match(project, /ProjectActivity detail=/);
+  assert.match(ui, /查看运行状态/);
 });

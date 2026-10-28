@@ -108,6 +108,12 @@ class CheckPatch(BaseModel):
     status: Literal["open", "resolved", "dismissed"]
 
 
+class SourceDecisionIn(BaseModel):
+    selection: Literal['enabled', 'disabled', 'not_applicable']
+    reason: str = Field(min_length=1, max_length=600)
+    expected_version: int = Field(strict=True, ge=0)
+
+
 def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
     def monitor():
         return pipeline.monitor
@@ -209,6 +215,25 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
         project_or_404(project_id)
         return plan().view(project_id)
 
+    @app.get('/api/studio/projects/{project_id}/collection-sources')
+    def collection_source_view(project_id: str):
+        from project_watch.studio.collection_targets import SOURCE_ADAPTERS, source_decisions
+
+        project_or_404(project_id)
+        return dict(adapters=sorted(SOURCE_ADAPTERS), decisions=source_decisions(store, project_id))
+
+    @app.put('/api/studio/projects/{project_id}/collection-sources/{adapter}')
+    def collection_source_decision(project_id: str, adapter: str, body: SourceDecisionIn):
+        from project_watch.studio.collection_targets import DecisionConflict, decide_source
+
+        project_or_404(project_id)
+        try:
+            return decide_source(store, project_id, adapter=adapter, **body.model_dump())
+        except DecisionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @app.post("/api/studio/projects/{project_id}/monitoring-plan/items", status_code=201)
     def plan_add(project_id: str, body: PlanItemIn):
         project_or_404(project_id)
@@ -307,6 +332,8 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
     @app.post("/api/studio/projects/{project_id}/watchpoints", status_code=201)
     def add_watchpoint(project_id: str, body: WatchIn, response: Response):
         project = project_or_404(project_id)
+        if project.get('execution_mode') == 'agent':
+            raise HTTPException(409, '此项目由 Agent 更新，请在连接的 Agent 中调整关注点')
         if project.get('status') == 'removed':
             raise HTTPException(404, '项目不存在')
         from project_watch.studio.monitoring_plan import MAX_ITEMS

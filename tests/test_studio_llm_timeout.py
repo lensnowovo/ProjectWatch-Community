@@ -26,9 +26,11 @@ def test_json_reasoning_is_provider_model_and_protocol_scoped(host, model, proto
     llm = LLM(ModelConfig(protocol, 'https://' + host + '/v1', model, 'synthetic'), Http(send))
     assert llm.json('s', 'u') == {'ok': True}
     assert payloads[0].get('reasoning_effort') == expected
+    assert payloads[0].get('response_format') == ({'type': 'json_object'} if expected else None)
     assert 'thinking' not in payloads[0]
     llm.complete('s', 'u')
     assert 'reasoning_effort' not in payloads[1]
+    assert 'response_format' not in payloads[1]
 
 
 def test_read_timeout_is_not_repeated_or_exposed(monkeypatch):

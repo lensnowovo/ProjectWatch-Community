@@ -2,12 +2,14 @@ import ast
 import tomllib
 from pathlib import Path
 
+from packaging.version import Version
+
 import project_watch
 from scripts.check_layer_boundaries import audit, load_map
 
 
 def test_package_has_own_version() -> None:
-    assert project_watch.__version__ == "0.2.0a1"
+    assert str(Version(project_watch.__version__)) == project_watch.__version__
     manifest = Path(__file__).resolve().parents[1] / "pyproject.toml"
     assert project_watch.__version__ == tomllib.loads(manifest.read_text())["project"]["version"]
 

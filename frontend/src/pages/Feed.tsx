@@ -8,6 +8,8 @@ import { Page, useToast } from "../motion";
 import { CATEGORY_LABEL, Empty, ErrorNote, byNewest, dayLabel, seenAt, useAsync } from "../ui";
 import { Kpi, Seg } from "../widgets";
 import PageHeader from "../PageHeader";
+import { useStagedRead } from "../Operational";
+import { projectListWork, isMoving } from "../workState";
 
 const RANGES = [
   { days: 7, label: "7 天" },
@@ -30,6 +32,10 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
   );
 
   const attention = useAsync(() => (projects.length ? api.attention(7) : Promise.resolve(null)), [projects.length]);
+  const staged = useStagedRead(`${days}:${level}:${category}:${projectId}`, () => api.feed({ days,
+    importance: level || undefined, category: category || undefined, project_id: projectId || undefined, limit: 150 }),
+    next => next.some(item => !(data ?? []).some(old => old.id === item.id)), !!data);
+  const added = staged.pending?.filter(item => !(data ?? []).some(old => old.id === item.id)).length ?? 0;
   const update = (changed: Item) =>
     setData((items) => (items ?? []).map((i) => (i.id === changed.id ? changed : i))
       .filter((i) => i.status !== "dismissed"));
@@ -58,7 +64,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
   const majorRecent = projects.reduce((n, p) => n + (p.major_recent ?? 0), 0);
   const unread = projects.reduce((n, p) => n + (p.unread ?? 0), 0);
   const todo = (attention.data?.totals.crosscheck ?? 0) + (attention.data?.totals.silence ?? 0);
-  const updating = projects.filter((p) => p.job_status === "running" && p.worker_state !== "stopped").length;
+  const updating = projects.filter(p => isMoving(projectListWork(p).state)).length;
   const today = new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" });
 
   return (
@@ -92,11 +98,13 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
         {unreadHere > 0 && <button className="btn btn-sm btn-ghost" onClick={readAll}>全部标为已读</button>}
       </div>
       <ErrorNote error={error} />
+      {staged.failed && <p className="muted small">新动态暂时无法检查，当前列表保留。</p>}
+      {added > 0 && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); attention.reload(); }}>新增 {added} 条 · 点击查看</button>}
       {loading && !data && <Skeleton lines={8} />}
       {data && items.length === 0 && unreadOnly && all.length > 0 && <Empty title="都读完了">“全部”中可回看已读动态。</Empty>}
       {data && all.length === 0 && (
         <Empty title="这段时间没有新动态">
-          首次采集可能需几分钟。未检索到信息不代表没有变化。
+          暂无收录动态。
         </Empty>
       )}
       <div className="feed-list">

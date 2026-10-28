@@ -76,11 +76,25 @@ def peers_for(project: dict, plan: dict | None, relationships: dict | None, limi
         if not company_name(name):
             return False
         return not any(company_core(n) in excluded | own for n in [name, *identity_names(name)])
+
+    core_owners: dict[str, set[str]] = {}
+    for oid, names in identities.items():
+        for name in names:
+            core_owners.setdefault(company_core(name).casefold(), set()).add(oid)
+
+    def key_for(name, oid=None):
+        if oid in identities:
+            return 'id:' + oid
+        ids = owners.get(name.casefold()) or core_owners.get(company_core(name).casefold(), set())
+        if len(ids) == 1:
+            return 'id:' + next(iter(ids))
+        return 'name:' + company_core(name).casefold()
+
     out: dict[str, dict] = {}
     for row in (relationships or {}).get("items") or []:
         if row.get("origin") == "user_override" or (row.get("support") == "supported" and row.get("status") == "current"):
             name = row.get("peer_name") or ""
-            core = company_core(name)
+            core = key_for(name, row.get('peer_id'))
             if name and allowed(name) and core not in out:
                 known_names = identities.get(row.get('peer_id'))
                 aliases = [n for n in row.get("peer_names") or [] if n != name
@@ -90,10 +104,12 @@ def peers_for(project: dict, plan: dict | None, relationships: dict | None, limi
                              "relation_type": row.get('relation_type') or 'unknown'}
     for c in (plan or {}).get("competitors") or []:
         name = c.get("name") or ""
-        core = company_core(name)
+        core = key_for(name)
         if name and allowed(name) and core not in out:
             out[core] = {"name": name, "aliases": [], "note": (c.get("reason") or "监控方案中的竞对")[:24],
                          "relation_type": 'unknown'}
+        elif name and allowed(name) and core in out and name != out[core]['name']:
+            out[core]['aliases'].append(name)
     for peer in out.values():
         peer['aliases'] = list(dict.fromkeys([*peer['aliases'], *identity_names(peer['name'])]))
         peer['aliases'] = [n for n in peer['aliases'] if n != peer['name'] and

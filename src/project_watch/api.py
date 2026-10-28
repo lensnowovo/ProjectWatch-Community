@@ -928,7 +928,7 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def web_preview() -> FileResponse:
-        return FileResponse(static_root / "index.html")
+        return FileResponse(static_root / "index.html", media_type="text/html")
 
     @app.get("/api/runtime")
     def runtime_info() -> dict:

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from contextlib import closing
 from dataclasses import asdict
+from datetime import UTC, datetime
 
 from project_watch.studio.store import now
 
@@ -74,6 +76,33 @@ def unknown_queries(db, project_id, job_id):
          AND n.rowid>u.rowid AND n.outcome!='held')""", (project_id, job_id)).fetchall()
 
 
+def other_pending_requests(db, project_id, job_id):
+    """Safe diagnostics for project-wide DSH holds; never returns payloads or keys."""
+    return [dict(row) for row in db.execute(f"""SELECT c.job_id,c.kind,c.status,c.response_status
+        FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
+        WHERE j.project_id=? AND c.job_id<>?
+        AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE})) ORDER BY c.rowid""", (project_id, job_id))]
+
+
+def pending_reason(rows):
+    models = sum(row['kind'] == 'model' and row['status'] == 'completed' for row in rows)
+    parts = []
+    if models:
+        parts.append(f'{models} 条模型服务错误回执（已收到 HTTP 5xx，但没有可用回答，计费待核）')
+    if len(rows) > models:
+        parts.append(f'{len(rows) - models} 条结果不明的请求')
+    return '同项目其他任务还有' + '、'.join(parts) + '。本次恢复不包含这些请求，请先处理对应条目；未自动重发。'
+
+
+def received_models_only(rows):
+    return all(row['kind'] == 'model' and row['status'] == 'completed'
+               and row['response_status'] in (500, 502, 503, 504, 529) for row in rows)
+
+
+def dsh_enabled():
+    return bool(os.environ.get('PROJECT_WATCH_DSH_RUNTIME')) and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
+
+
 def _preview(pipeline, project_id, job_id, db):
     job = db.execute('SELECT * FROM studio_jobs WHERE id=? AND project_id=?', (job_id, project_id)).fetchone()
     if not job:
@@ -81,14 +110,31 @@ def _preview(pipeline, project_id, job_id, db):
     calls = db.execute(f'SELECT c.call_key,c.kind,c.status,c.response_status FROM studio_job_calls c '
                        f'WHERE c.job_id=? AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))',
                        (job_id,)).fetchall()
+    # Presentation only: started is a safety fence, not proof of a lost reply.
+    # Never change UNRESOLVED or the request journal/admission checks to fix UI.
+    from project_watch.studio.runtime_health import expired_reason
+
+    at = datetime.now(UTC)
+    in_flight = (job['status'] == 'running' and job['lease_token'] and job['lease_until']
+                 and job['lease_until'] > at.isoformat() and not expired_reason(db, job, at))
+    waiting_response = in_flight and any(c['status'] == 'started' for c in calls)
+    if in_flight:
+        calls = [c for c in calls if c['status'] != 'started']
     queries = unknown_queries(db, project_id, job_id)
     binding = input_binding(pipeline, project_id, db)
     saved = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='recovery_inputs'", (job_id,)).fetchone()
     saved_binding = json.loads(saved[0]).get('binding') if saved else None
     project = pipeline.store.get_project(project_id) or {}
     reason = ''
-    if job['status'] != 'failed':
-        reason = '这次更新没有等待恢复的失败'
+    terminal = (job['status'] == 'done' and job['kind'] in ('external', 'external_followup')
+                and len(calls) == 1 and calls[0]['kind'] == 'model' and not queries and dsh_enabled())
+    if job['status'] != 'failed' and not terminal:
+        if job['status'] in ('running', 'queued') and (calls or queries):
+            reason = '仍有待核对的请求，请等待任务收尾后再确认恢复；未自动重发'
+        elif waiting_response:
+            reason = '请求正在执行，等待响应；请勿重复恢复'
+        else:
+            reason = '这次更新没有等待恢复的失败'
     elif job['kind'] not in KINDS:
         reason = '这类请求需在对应来源中处理'
     elif not calls and not queries:
@@ -99,8 +145,10 @@ def _preview(pipeline, project_id, job_id, db):
         reason = '公司、材料或服务配置已变化，请开始新一轮更新'
     elif not project.get('activated') or project.get('status') != 'active':
         reason = '请先恢复项目监控'
+    elif project.get('execution_mode') == 'agent':
+        reason = '当前为 Agent 模式，请在 Agent 中处理'
     elif db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND kind=? AND id<>? "
-                    "AND status IN ('queued','running')", (project_id, job['kind'], job_id)).fetchone():
+                    "AND status IN ('queued','running')", (project_id, 'external_followup' if terminal else job['kind'], job_id)).fetchone():
         reason = '另一轮同类更新正在等待或执行'
     requests = {}
     for call in calls:
@@ -109,11 +157,32 @@ def _preview(pipeline, project_id, job_id, db):
         requests['search'] = len(queries)
     if requests.get('model') and not pipeline.settings_store.load().model.ready:
         reason = reason or '请先连接模型服务'
+    blockers = []
+    if dsh_enabled() and (requests.get('site') or requests.get('model')):
+        blockers = other_pending_requests(db, project_id, job_id)
+        # An exact authorized GET can settle before a received model failure.
+        # This does NOT admit tools/models or cross any unknown request.
+        if blockers and not (set(requests) == {'site'} and received_models_only(blockers)):
+            reason = reason or pending_reason(blockers)
+    linked = db.execute("SELECT j.id,j.status FROM studio_job_checkpoints p JOIN studio_jobs j ON j.id=p.job_id "
+                        "WHERE p.stage='recovery_origin' AND j.project_id=? AND json_extract(p.data,'$.job_id')=? "
+                        "ORDER BY j.rowid DESC LIMIT 1", (project_id, job_id)).fetchone() if terminal else None
+    if linked and linked['status'] != 'failed':
+        reason = reason or '已建立独立续跑任务，请查看该任务状态；不会重复安排'
     version = digest({'job': dict(job), 'calls': [dict(c) for c in calls],
-                      'queries': [q['id'] for q in queries], 'binding': binding})
+                      'queries': [q['id'] for q in queries], 'binding': binding, 'blocking_requests': blockers,
+                      'linked': dict(linked) if linked else None})
+    model_resume = (dsh_enabled() and requests == {'model': 1} and not queries
+                    and job['kind'] in ('external', 'external_followup')
+                    and db.execute("SELECT 1 FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_state'",
+                                   (job_id,)).fetchone() is not None)
     public = {'job_id': job_id, 'kind': job['kind'], 'version': version,
               'can_recover': not reason, 'reason': reason, 'requests': requests,
-              'requires_duplicate_cost_consent': True}
+              'requires_duplicate_cost_consent': True, 'job_status': job['status'],
+              'mode': 'checkpoint_continuation' if terminal else 'model_continuation' if model_resume else 'resume',
+              'continuation_job_id': linked['id'] if linked else None,
+              'notice': ('只恢复这条网页请求，模型错误仍需另行确认，完整链路暂不继续。'
+                         if blockers and not reason else '')}
     return public, calls, queries
 
 
@@ -121,6 +190,84 @@ def preview(pipeline, project_id, job_id):
     with closing(pipeline.store._connect()) as db:
         db.execute('BEGIN')
         return _preview(pipeline, project_id, job_id, db)[0]
+
+
+def project_preview(pipeline, project_id):
+    """Locate receipts across ALL jobs, including dismissed or terminal history."""
+    with closing(pipeline.store._connect()) as db:
+        db.execute('BEGIN')
+        ids = [row[0] for row in db.execute(f"""SELECT DISTINCT c.job_id FROM studio_job_calls c
+            JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=?
+            AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))""", (project_id,))]
+        ids += [r[0] for r in db.execute("SELECT DISTINCT u.job_id FROM studio_query_uses u JOIN studio_jobs j ON j.id=u.job_id "
+                                       "WHERE u.project_id=? AND j.project_id=u.project_id AND u.outcome='unknown'", (project_id,))]
+        items = [_preview(pipeline, project_id, jid, db)[0] for jid in dict.fromkeys(ids)]
+        items = [p for p in items if p['requests']]
+        return {'items': sorted(items, key=lambda p: (not p['can_recover'], 'site' not in p['requests'], p['job_id']))}
+
+
+def model_continuation_slot(db, job):
+    """Journal-level check of one pending request and its explicit origin link."""
+    rows = db.execute(f"""SELECT c.job_id,c.call_key,c.kind,c.status FROM studio_job_calls c
+        JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=?
+        AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))""", (job['project_id'],)).fetchall()
+    if len(rows) != 1 or rows[0]['kind'] != 'model' or rows[0]['status'] not in ('unknown', 'completed'):
+        return None
+    call = rows[0]
+    if call['job_id'] != job['id']:
+        marker = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='recovery_origin'", (job['id'],)).fetchone()
+        origin = json.loads(marker[0]) if marker else {}
+        if origin != {'job_id': call['job_id'], 'previous_key': call['call_key']}:
+            return None
+        parent = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND project_id=? AND status='done'", (call['job_id'], job['project_id'])).fetchone()
+        if not parent:
+            return None
+    slot = db.execute('SELECT previous_key,next_key FROM studio_call_recoveries '
+                      'WHERE job_id=? AND previous_key=? AND consumed_at IS NULL', (call['job_id'], call['call_key'])).fetchone()
+    return {**dict(slot), 'origin_job_id': call['job_id']} if slot else None
+
+
+def dsh_model_continuation(pipeline, execution):
+    """One owner-authorized model continuation, not proof of old HTTP success."""
+    with closing(pipeline.store._connect()) as db:
+        execution._guard(db)
+        slot = model_continuation_slot(db, execution.job)
+        if not slot:
+            return None
+        saved = execution.read_checkpoint("recovery_inputs")
+        if not saved or saved.get("binding") != input_binding(pipeline, execution.job["project_id"], db):
+            return None
+        return dict(slot)
+
+
+def dsh_site_recovery(pipeline, execution, db=None):
+    """One exact legacy GET, never a model/tool permission or a new URL grant."""
+    if db is None:
+        with closing(pipeline.store._connect()) as connection:
+            connection.execute('BEGIN')
+            return dsh_site_recovery(pipeline, execution, db=connection)
+    execution._guard(db)
+    rows = db.execute(f"""SELECT c.job_id,c.call_key,c.kind,c.status,c.provider,c.response_status
+        FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
+        WHERE j.project_id=? AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))""",
+        (execution.job['project_id'],)).fetchall()
+    sites = [r for r in rows if r['job_id'] == execution.job['id'] and r['kind'] == 'site' and r['status'] == 'unknown']
+    if len(sites) != 1 or not received_models_only([r for r in rows if r not in sites]):
+        return None
+    call = sites[0]
+    if call['job_id'] != execution.job['id'] or call['kind'] != 'site' or call['status'] != 'unknown':
+        return None
+    slot = db.execute('SELECT base_key,previous_key,next_key FROM studio_call_recoveries '
+                      'WHERE job_id=? AND previous_key=? AND consumed_at IS NULL',
+                      (call['job_id'], call['call_key'])).fetchone()
+    saved = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='recovery_inputs'",
+                       (execution.job['id'],)).fetchone()
+    project = db.execute('SELECT status,consent_at FROM studio_projects WHERE project_id=?',
+                         (execution.job['project_id'],)).fetchone()
+    if (not slot or not saved or not project or project['status'] != 'active' or not project['consent_at']
+            or json.loads(saved[0]).get('binding') != input_binding(pipeline, execution.job['project_id'], db)):
+        return None
+    return {**dict(slot), 'provider': call['provider']}
 
 
 def authorize(pipeline, project_id, job_id, *, expected_version, idempotency_key, accept_duplicate_cost):
@@ -151,9 +298,22 @@ def authorize(pipeline, project_id, job_id, *, expected_version, idempotency_key
         for query in queries:
             db.execute('INSERT OR IGNORE INTO studio_query_recoveries VALUES (?,?,?,?,?)',
                        (project_id, job_id, query['query_key'], query['id'], now()))
-        db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
-                   "lease_token='',lease_until=NULL WHERE id=?", (job_id,))
-        response = {'job_id': job_id, 'status': 'queued', 'recovery_id': idempotency_key}
+        target_id = job_id
+        if state['mode'] == 'checkpoint_continuation':
+            target_id = state['continuation_job_id'] or uuid.uuid4().hex
+            if state['continuation_job_id']:
+                db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
+                           "lease_token='',lease_until=NULL WHERE id=? AND status='failed'", (target_id,))
+            else:
+                db.execute("INSERT INTO studio_jobs(id,project_id,kind,status,created_at,input_version) "
+                           "VALUES (?,?,'external_followup','queued',?,?)", (target_id, project_id, now(), 'recovery:' + job_id))
+                db.executemany('INSERT INTO studio_job_checkpoints VALUES (?,?,?)', [
+                    (target_id, 'recovery_origin', json.dumps({'job_id': job_id, 'previous_key': calls[0]['call_key']})),
+                    (target_id, 'recovery_inputs', json.dumps({'binding': input_binding(pipeline, project_id, db)}))])
+        else:
+            db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
+                       "lease_token='',lease_until=NULL WHERE id=?", (job_id,))
+        response = {'job_id': target_id, 'status': 'queued', 'recovery_id': idempotency_key}
         db.execute('INSERT INTO studio_recovery_actions VALUES (?,?,?,?,?,?)',
                    (idempotency_key, project_id, job_id, request_hash, json.dumps(response), now()))
         return response

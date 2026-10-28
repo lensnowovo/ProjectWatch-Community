@@ -111,6 +111,65 @@ def test_timestamps_reworded_summary_and_reposts_do_not_wake(env):
     assert loop.view(pid) == before
 
 
+@pytest.mark.parametrize('legacy_baseline', [False, True])
+@pytest.mark.parametrize('body_length', [1200, 13000])
+def test_agent_replay_of_collected_body_does_not_wake(tmp_path, legacy_baseline, body_length):
+    """Real scoped intake differs in snippet length/binding, not source content."""
+    import hashlib
+
+    from test_studio_application_parity import headers, setup_app
+
+    app, web, pid, grant = setup_app(tmp_path)
+    p = app.state.studio_pipeline
+    plan = p.monitoring_plan
+    parent = plan.add(pid, {'text': '合成资产交付', 'objects': ['合成资产'], 'scope_kind': 'relation',
+                           'relation_type': 'product', 'relation_target': '合成资产',
+                           'reason': '合成公司销售该资产', 'sources': 'https://example.invalid/product',
+                           'queries': ['合成资产']}, actor='human', origin='human', visibility='public')
+    topic = plan.add(pid, {'text': '合成资产销售交付是否完成', 'objects': ['合成资产'], 'scope_kind': 'question',
+                          'queries': ['合成资产交付'],
+                          'tier': 'topic', 'parent_id': parent['id'], 'exit_rule': '取得交付记录'},
+                     actor='system', origin='system', visibility='public')
+    loop = plan.explorations
+    title = '合成资产交付进展'
+    body = ('合成资产已完成交付，仍需核查验收文件。' * body_length)[:body_length]
+    original = event(p, pid, topic, 'collected', title=title)
+    p.store.save_body(original['id'], 'search_summary', body)
+    loop.refresh(pid, p.questions)
+    loop.stop(topic, 'answered')
+    if legacy_baseline:
+        # Simulate an already-stopped database created by the previous release.
+        with p.store._connect() as db, db:
+            digest = db.execute('SELECT ev.content_hash FROM studio_item_evidence ie JOIN '
+                                'studio_evidence_versions ev ON ev.id=ie.evidence_version_id '
+                                'WHERE ie.item_id=?', (original['id'],)).fetchone()[0]
+            db.execute('DELETE FROM studio_exploration_seen WHERE watch_id=?', (topic['id'],))
+            db.execute('INSERT INTO studio_exploration_seen VALUES (?,?)',
+                       (topic['id'], 'event:' + hashlib.sha256(digest.encode()).hexdigest()))
+    before = loop.view(pid)
+    version = web.get(f'/api/studio/projects/{pid}').json()['project']['config_version']
+    payload = {'expected_version': version, 'idempotency_key': 'synthetic-replay', 'producer': 'synthetic',
+               'sources': [{'id': 'S1', 'kind': 'public', 'title': title, 'url': original['url'],
+                            'text': body, 'read_scope': 'summary'}],
+               'news': [{'key': 'replay', 'title': title, 'summary': title, 'category': 'company', 'refs': ['S1']}]}
+    response = web.post(f'/api/studio/agent/projects/{pid}/results', headers=headers(grant), json=payload)
+    assert response.status_code == 201, response.text
+    p.questions.route_existing_events(pid, [topic['id']], focused=True)
+    with p.store._connect() as db:
+        assert db.execute('SELECT count(*) FROM studio_watch_hits WHERE watch_id=?', (topic['id'],)).fetchone()[0] == 2
+    for _ in range(3):
+        loop.refresh(pid, p.questions)
+        assert loop.view(pid) == before
+    # Same URL, genuinely changed source content must still wake exactly once.
+    p.store.save_body(original['id'], 'search_summary', body + '新增：验收文件已公开。')
+    loop.refresh(pid, p.questions)
+    after = loop.view(pid)[topic['id']]
+    assert after['generation'] == before[topic['id']]['generation'] + 1
+    assert after['reason'] == 'new_evidence'
+    loop.refresh(pid, p.questions)
+    assert loop.view(pid)[topic['id']] == after
+
+
 @pytest.mark.parametrize('reason', ['source_failure', 'waiting_recovery'])
 def test_failed_round_is_not_exhaustion_and_unknown_only_resumes_same_cycle(env, reason):
     p, pid, plan, loop, topic, _ = env

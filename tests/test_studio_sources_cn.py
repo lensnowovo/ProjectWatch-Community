@@ -166,8 +166,9 @@ def test_pipeline_triage_applies_the_filing_rule(tmp_path):
         ready = True
 
         def json(self, system, user, max_tokens=0):
-            return {"results": [{"id": i, "relevant": True, "category": "company", "importance": "major",
-                                 "summary": "s", "impact": ""} for i in re.findall(r"id=([0-9a-f]+)", user)]}
+            return {"results": [{"id": i, "source_title": t, "source_quote": t, "relevant": True, "category": "company", "importance": "major",
+                                 "summary": "s", "impact": ""}
+                                for i, t in zip(re.findall(r"id=([0-9a-f]+)", user), re.findall(r"标题：(.*)", user), strict=True)]}
 
     repo = ProjectRepository(tmp_path / "db.sqlite3")
     project = repo.create_project("光启视界")

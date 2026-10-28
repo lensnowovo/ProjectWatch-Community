@@ -184,6 +184,10 @@ def now() -> str:
 UNREAD_DAYS = 14
 
 
+class FollowupSuperseded(ValueError):
+    """The failed follow-up's inputs changed; recover with a fresh round, never by resuming it."""
+
+
 class StudioStore:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -191,6 +195,8 @@ class StudioStore:
         with closing(self._connect()) as db, db:
             db.executescript(SCHEMA)
             project_columns = {r[1] for r in db.execute("PRAGMA table_info(studio_projects)")}
+            if 'execution_mode' not in project_columns:
+                db.execute("ALTER TABLE studio_projects ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'api'")
             if "config_version" not in project_columns:
                 db.execute("ALTER TABLE studio_projects ADD COLUMN config_version INTEGER NOT NULL DEFAULT 1")
             # Both legacy web mutations and application/Agent writes advance
@@ -632,6 +638,40 @@ class StudioStore:
     def get_plan(self, project_id: str) -> dict | None:
         return self._get_blob("studio_plan", project_id)
 
+    def merge_public_plan(self, project_id: str, fields: dict, competitors: list[dict]) -> None:
+        """Incremental research never replaces a competitor list with a subset.
+
+        Merge against the latest row in one transaction. Existing names, reasons,
+        manual fields and evidence survive an empty round or alias-only update.
+        Explicit exclusions remain the relationship ledger's responsibility.
+        """
+        from project_watch.studio.peer_names import company_core
+
+        if "competitors" in fields:
+            raise ValueError("competitors must be merged, not replaced")
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM studio_plan WHERE project_id=?", (project_id,)).fetchone()
+            plan = json.loads(row["data"]) if row else {}
+            peers = list(plan.get("competitors") or [])
+            known = {company_core(p["name"]).casefold(): p for p in peers}
+            for peer in competitors:
+                key = company_core(peer["name"]).casefold()
+                if key not in known:
+                    peers.append(dict(peer))
+                    known[key] = peers[-1]
+                else:
+                    current = known[key]
+                    refs = list(current.get("evidence") or [])
+                    for ref in peer.get("evidence") or []:
+                        if ref not in refs:
+                            refs.append(ref)
+                    if refs:
+                        current["evidence"] = refs
+            data = {**plan, **fields, "competitors": peers}
+            db.execute("INSERT OR REPLACE INTO studio_plan VALUES (?,?,?)",
+                       (project_id, json.dumps(data, ensure_ascii=False), now()))
+
     def put_brief(self, project_id: str, data: dict) -> None:
         self._put_blob("studio_brief", project_id, data)
 
@@ -729,6 +769,11 @@ class StudioStore:
                   r.get("importance") if r.get("importance") in IMPORTANCE else "routine",
                   str(r.get("summary", ""))[:600], str(r.get("impact", ""))[:600],
                   r.get("category"), r["id"]) for r in results])
+            for r in results:
+                if isinstance(r.get("triage_binding"), dict):
+                    db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
+                               "'$.triage_binding',json(?)) WHERE id=?",
+                               (json.dumps(r["triage_binding"]), r["id"]))
 
     def list_items(self, *, project_id: str | None = None, category: str | None = None,
                    importance: str | None = None, include_dismissed: bool = False,
@@ -1100,6 +1145,9 @@ class StudioStore:
         with (closing(self._connect()) if own_connection else nullcontext(db)) as db, (db if own_connection else nullcontext()):
             if own_connection:
                 db.execute("BEGIN IMMEDIATE")
+            mode = db.execute('SELECT execution_mode FROM studio_projects WHERE project_id=?', (project_id,)).fetchone()
+            if mode and mode[0] == 'agent':
+                return {'id': None, 'project_id': project_id, 'kind': kind, 'status': 'agent_required'}
             if kind == 'external':
                 continuation = db.execute("SELECT * FROM studio_jobs WHERE project_id=? "
                     "AND kind='external_followup' AND status IN ('queued','running') "
@@ -1120,6 +1168,14 @@ class StudioStore:
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id, project_id, kind, status, created_at,input_version) "
                        "VALUES (?,?,?,'queued',?,?)", (job_id, project_id, kind, now(), input_version))
+            if kind in ('external', 'external_followup'):
+                # Persist intent with admission, not by guessing from a later
+                # empty input_version. Reusing an active job above never edits
+                # its frozen mode or turns a scheduled job into manual work.
+                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
+                           (job_id, 'collection_request_v1', json.dumps(dict(
+                               schema_version=1, mode='incremental' if automatic else 'refresh',
+                               origin='scheduler' if automatic else 'owner'))))
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
     def queue_external_followup(self, job: dict, data: dict) -> dict:
@@ -1174,7 +1230,11 @@ class StudioStore:
                 raise ValueError('补全已完成，请重新更新项目')
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED}",
                                  (job['id'],)).fetchone()
-            if unknown or job['retry_after'] == '9999-12-31':
+            if unknown:
+                raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
+            if job['retry_after'] == '9999-12-31':
+                if '监控依据已变化' in (job['error'] or ''):
+                    raise FollowupSuperseded('监控依据已变化，请按最新信息重新更新项目')
                 raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
             db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
                        "lease_token='',lease_until=NULL WHERE id=?", (job['id'],))
@@ -1201,10 +1261,17 @@ class StudioStore:
             prefer_brief = int(burst[0] if burst else 0) < 2
             row = db.execute("""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
-                WHERE j.status='queued' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief')
+                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief')
                     OR COALESCE(p.status,'active')='active')
                 AND (j.kind!='external_followup' OR EXISTS (SELECT 1 FROM studio_jobs parent
-                     WHERE parent.id=j.input_version AND parent.project_id=j.project_id AND parent.kind='external' AND parent.status='done'))
+                     WHERE parent.id=j.input_version AND parent.project_id=j.project_id AND parent.kind='external' AND parent.status='done')
+                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints link JOIN studio_jobs parent
+                       ON parent.id=json_extract(link.data,'$.job_id')
+                       JOIN studio_call_recoveries grant ON grant.job_id=parent.id
+                         AND grant.previous_key=json_extract(link.data,'$.previous_key')
+                       WHERE link.job_id=j.id AND link.stage='recovery_origin' AND parent.project_id=j.project_id
+                         AND parent.kind IN ('external','external_followup') AND parent.status='done'
+                         AND j.input_version='recovery:'||parent.id))
                 AND (j.kind!='external' OR NOT EXISTS (SELECT 1 FROM studio_jobs material
                      WHERE material.project_id=j.project_id AND material.kind='internal' AND material.status IN ('queued','running')))
                 ORDER BY CASE WHEN ? AND j.kind='brief' THEN 0 ELSE 1 END,
@@ -1245,14 +1312,17 @@ class StudioStore:
                 (job['id'], job['lease_token'], now())).rowcount)
 
     def finish(self, job_id: str, *, error: str = "", lease_token: str | None = None) -> bool:
-        from project_watch.studio.recovery import UNRESOLVED
+        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
 
         with closing(self._connect()) as db, db:
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (job_id,)).fetchone()
             if unknown and not error:
                 error = 'request_outcome_unknown: 已保留已有结果，等待确认未返回的请求'
+            model_failure = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job_id,)).fetchone()
+            if model_failure and not error:
+                error = 'model_http_5xx: 已保留已有结果，模型请求未取得可用回答，等待确认恢复'
             business = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN ('business','competition','details')", (job_id,)).fetchone()
-            held = 'request_outcome_unknown' in error or '监控依据已变化' in error
+            held = bool(model_failure) or 'request_outcome_unknown' in error or '监控依据已变化' in error
             retry_after = "9999-12-31" if error and (unknown or business or held) else (datetime.now(UTC) + timedelta(minutes=30)).isoformat() if error else None
             return bool(db.execute("UPDATE studio_jobs SET status=?,error=?,finished_at=?,stage='',retry_after=?,lease_token='' "
                        "WHERE id=? AND (? IS NULL OR (status='running' AND lease_token=? AND lease_until>?))",

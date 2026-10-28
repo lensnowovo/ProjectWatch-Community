@@ -69,7 +69,7 @@ test("working routes stay free of line artwork and retain a real home link", () 
   appModule.paths = require.resolve.paths("react");
   appModule._compile(buildSync({
     entryPoints: [appEntry], bundle: true, write: false, platform: "node", format: "cjs",
-    packages: "external", loader: { ".css": "empty" },
+    packages: "external", loader: { ".css": "empty", ".svg": "dataurl" },
   }).outputFiles[0].text, appEntry);
   for (const location of ["/feed", "/projects", "/digest", "/projects/synthetic", "/new", "/settings"]) {
     const html = renderToStaticMarkup(React.createElement(StaticRouter, { location },

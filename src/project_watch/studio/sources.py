@@ -351,7 +351,7 @@ class Collectors:
         providers = self.search_config.enabled()
         if self.search_config.mode == "auto":
             preferred = "bocha" if re.search(r"[\u3400-\u9fff]", query) else "tavily"
-            providers = sorted(providers, key=lambda p: p != preferred)
+            providers = sorted(providers, key=lambda p: (p != "deepseek", p != preferred))
         for provider in providers:
             key = keys.get(provider, "")
             try:
@@ -372,9 +372,15 @@ class Collectors:
                 self.search_checks.append(check)
                 for hit in hits:
                     if hit["key"] in seen:
-                        provenance = seen[hit["key"]]["extra"]["search_providers"]
+                        saved = seen[hit["key"]]["extra"]
+                        provenance = saved["search_providers"]
                         if provider not in provenance:
                             provenance.append(provider)
+                        locators = saved.setdefault("source_urls", [seen[hit["key"]]["url"]])
+                        if hit["url"] not in locators:
+                            locators.append(hit["url"])
+                        if not saved.get("search_content") and hit["extra"].get("search_content"):
+                            saved["search_content"] = hit["extra"]["search_content"]
                     else:
                         hit["extra"]["search_providers"] = [provider]
                         seen[hit["key"]] = hit
@@ -385,7 +391,8 @@ class Collectors:
                     break
             except (HttpError, ValueError, KeyError, TypeError) as exc:
                 if isinstance(exc, HttpError) and exc.code in (
-                    "request_outcome_unknown", "request_budget", "provider_backoff"
+                    "request_outcome_unknown", "connection_failed", "response_too_large",
+                    "unsafe_redirect", "request_budget", "provider_backoff"
                 ):
                     raise  # Do not route an uncertain/held paid request to a second provider.
                 error = HttpError(getattr(exc, "code", "invalid_search_response"),
@@ -399,6 +406,35 @@ class Collectors:
 
     def _provider_search(self, provider: str, key: str, query: str, *,
                          news: bool, count: int) -> list[dict]:
+        if provider == "deepseek":
+            # Do not silently truncate a query (especially site/date operators).
+            if not 1 <= len(query.strip()) <= 128 or not 1 <= count <= 50:
+                raise HttpError("search_query_invalid")
+            data = self._ok(self.http.post_json(
+                "https://api.deepseek.com/v1/tools/search",
+                {"query": query.strip(), "count": count, "need_content": True},
+                headers={"Authorization": f"Bearer {key}"}, timeout=60))
+            pages = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(pages, list) or any(not isinstance(p, dict) for p in pages):
+                raise HttpError("invalid_search_response")
+            hits = []
+            for p in pages:
+                if any(p.get(field) is not None and not isinstance(p[field], str)
+                       for field in ("title", "url", "summary", "snippet", "content", "site_name", "date")):
+                    raise HttpError("invalid_search_response")
+                url = p.get("url")
+                if not isinstance(url, str) or urlsplit(url).scheme not in ("http", "https"):
+                    continue
+                # API timestamps are not authoritative report/event dates.
+                hits.append(_item("web", p.get("title") or "", url,
+                    source=p.get("site_name") or urlsplit(url).netloc,
+                    snippet=p.get("summary") or p.get("snippet") or "",
+                    extra={"provider_date": p.get("date"), "retrieval_provider": "deepseek",
+                           "search_summary": p.get("summary") or "",
+                           "search_content": p.get("content") or "",
+                           "authority": p.get("authority"), "rerank_score": p.get("rerank_score"),
+                           "source_url": url}))
+            return hits
         if provider == "bocha":
             data = self._ok(self.http.post_json(
                 "https://api.bochaai.com/v1/web-search",
@@ -432,8 +468,36 @@ class Collectors:
                           published_at=r.get("published_date")) for r in data.get("results") or []]
         return []
 
+    def deepseek_fetch(self, url: str) -> dict | None:
+        """Read only a caller-validated public source through the paid journal."""
+        if "deepseek" not in self.search_config.enabled():
+            return None
+        key = self.search_config.credentials().get("deepseek")
+        if not key:
+            return None
+        import ipaddress
+
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        try:
+            public = ipaddress.ip_address(host).is_global
+        except ValueError:
+            public = "." in host and not host.endswith((".localhost", ".local", ".internal"))
+        if (parsed.scheme not in ("http", "https") or not public or parsed.username
+                or parsed.password or len(url) > 8192):
+            raise HttpError("disallowed_url")
+        data = self._ok(self.http.post_json(
+            "https://api.deepseek.com/v1/tools/fetch", {"url": url},
+            headers={"Authorization": f"Bearer {key}"}, timeout=60))
+        if not isinstance(data, dict) or not isinstance(data.get("content"), str):
+            raise HttpError("invalid_search_response")
+        return {"text": data["content"], "status": "partial_body" if data["content"] else "empty",
+                "provider": "deepseek"}  # API 200 is not the origin site's HTTP status.
+
     @staticmethod
     def _ok(response):
+        if response.status == 402:
+            raise HttpError("search_quota_exhausted", status=response.status)
         if response.status == 401:
             raise HttpError("search_key_invalid", status=response.status)
         if response.status == 403:

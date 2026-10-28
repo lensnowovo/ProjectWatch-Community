@@ -141,7 +141,7 @@ export default function ProjectsPage({ onChanged }: { onChanged?: () => void }) 
                 <div className="pc-headline">
                   {p.headline ? (
                     <>{p.tone && <span className={`tone tone-${p.tone}`}>{TONE_LABEL[p.tone as keyof typeof TONE_LABEL]}</span>}{p.headline}</>
-                  ) : <span className="muted">{p.job_status === "running" || p.job_status === "queued" ? "正在整理…" : "暂无判断"}</span>}
+                  ) : <span className="muted">{projectListWork(p).state === "idle" ? "暂无判断" : projectListWork(p).label}</span>}
                 </div>
                 <div className="pc-foot">
                   <span className="truncate">{p.last_event || "暂无外部动态"}</span>
@@ -181,7 +181,7 @@ export default function ProjectsPage({ onChanged }: { onChanged?: () => void }) 
                       <div className="muted small" title={[p.industry, p.stage].filter(Boolean).join(" · ")}>{[p.industry, p.stage].filter(Boolean).join(" · ") || "—"}</div></td>
                     <td className="cell-wide">
                       {p.headline ? <>{p.tone && <span className={`tone tone-${p.tone}`}>{TONE_LABEL[p.tone as keyof typeof TONE_LABEL]}</span>}<span className="truncate-2">{p.headline}</span></>
-                        : <span className="muted">{p.job_status === "running" || p.job_status === "queued" ? "正在整理…" : "暂无"}</span>}
+                        : <span className="muted">{projectListWork(p).state === "idle" ? "暂无判断" : projectListWork(p).label}</span>}
                     </td>
                     <td title={signals[p.id]?.entries.slice(0, 3).map((e) => e.title).join("\n")}><SignalChips counts={signals[p.id]?.counts} /></td>
                     <td className="num">{p.major_recent ? <strong className="text-major">{p.major_recent}</strong> : <span className="muted">0</span>}</td>
@@ -213,3 +213,4 @@ function SortTh({ k, sort, setSort, num, children }: {
     </th>
   );
 }
+import { projectListWork } from "../workState";

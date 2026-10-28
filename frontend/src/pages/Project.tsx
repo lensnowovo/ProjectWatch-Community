@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { collectionChannelExecution, collectionExecutionLabel } from "../externalCollection";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, type Category, type BodyCoverage, type Job, type ProjectDetail } from "../api";
+import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
 import { CompetitionView, IndustryView, NewsView } from "../landscape";
 import { MetricsView } from "../metrics";
 import { Columns, Figure, Reference, Skeleton, TabSkeleton, VerdictBand } from "../frame";
@@ -11,20 +12,24 @@ import { UploadDialog } from "../upload";
 import { EASE, Page, Reveal, useToast } from "../motion";
 import { CompanyOverview, CurrentBrief, KeyFigures, OWN_CATEGORIES, type Tab } from "../overview";
 import { PlanView } from "../plan";
-import { Drawer, ErrorNote, Spinner, Working, errorMessage, locatorLabel, relTime, useAsync } from "../ui";
+import { Drawer, ErrorNote, Spinner, errorMessage, locatorLabel, relTime, useAsync } from "../ui";
 import ProjectHeader from "../ProjectHeader";
 import CommercialSources from "../CommercialSources";
 import { RaceBoard } from "../race";
 import { raceRevision } from '../raceData';
 import { TrackBoard } from "../track";
 import { TechRoutes } from "../tech";
-import { monitoringLabel } from "../MonitoringProgress";
-import { jobWorkState, WORK_LABEL } from "../workState";
+import { projectWork, needsAttention, isMoving } from "../workState";
+import { ProjectActivity, useVisiblePoll } from "../Operational";
 import { RecoveryDialog } from '../RecoveryDialog';
-import { IndustryJudgment, TechnologyJudgment, useInsight } from "../judgment";
+import { IndustryJudgment, TechnologyJudgment } from "../judgment";
+import { insightRevision, workRevision } from "../workState";
 import { ClinicalView, PapersView, PatentsView } from "../researchPages";
 import { BusinessView, OperationsView, RisksView, internalCounts } from "../internalPages";
 import { FinanceAnalysisView } from "../financeAnalysis";
+import { useDossierMotion } from '../DossierMotion';
+import { ScopeReading, scopeRelations, scopeReports } from '../ScopeReading';
+import { externalCollection } from '../externalCollection';
 
 /** Five sections (8945); each holds one or more of the original pages, which stay the URL's ?tab= values so every
  * existing link keeps working. */
@@ -32,15 +37,14 @@ type Section = "home" | "internal" | "external" | "scope" | "analysis";
 const SECTIONS: { id: Section; label: string; pages: { id: Tab; label: string }[] }[] = [
   { id: "analysis", label: "当前判断", pages: [{ id: "brief", label: "按问题看判断" }] },
   { id: "home", label: "项目总览", pages: [{ id: "overview", label: "公司概览" }] },
+  { id: "external", label: "外部信息", pages: [{ id: "external", label: "公司进展" }, { id: "trials", label: "临床" }, { id: "papers", label: "论文" },
+    { id: "patents", label: "专利与注册" }, { id: "competition", label: "竞争对手" }, { id: "chain", label: "产业链动态" }, { id: "industry", label: "宏观环境" }] },
   { id: "internal", label: "内部信息", pages: [{ id: "ops", label: "经营概览" }, { id: "business", label: "业务与研发" }, { id: "numbers", label: "财务报表" },
     { id: "fin", label: "财务分析" }, { id: "risks", label: "风险与核对" }, { id: "documents", label: "资料与版本" }] },
-  { id: "external", label: "外部信息", pages: [{ id: "external", label: "公司进展" }, { id: "trials", label: "临床" }, { id: "papers", label: "论文" },
-    { id: "patents", label: "专利与注册" }, { id: "competition", label: "竞争对手" }, { id: "industry", label: "行业环境" }] },
   { id: "scope", label: "监控范围", pages: [{ id: "plan", label: "监控方案" }] },
 ];
 const sectionOf = (t: Tab) => SECTIONS.find((s) => s.pages.some((p) => p.id === t)) ?? SECTIONS[0];
 
-const JOB_LABEL: Record<Job["kind"], string> = { internal: "分析内部资料", external: "整理首轮信息", external_followup: "补全外部信息", brief: "生成简报", public_profile: "补充公开档案", landscape: "整理竞争与行业", business: "整理产品与用途", competition: "更新竞对资料", details: "整理商业关系与政策条件", commercial: "更新专业来源", insight: "深度分析" };
 
 const ownCount = (d: ProjectDetail) =>
   Object.entries(d.counts).filter(([k]) => OWN_CATEGORIES.has(k)).reduce((n, [, v]) => n + (v ?? 0), 0);
@@ -50,19 +54,17 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
   const [params, setParams] = useSearchParams();
   // Core opens the company overview; explicit saved-judgment links remain readable.
   const raw = params.get("tab") as Tab | null;
-  const { data, error, loading, reload } = useAsync(() => api.project(id), [id]);
+  const { data: loaded, error, loading, reload } = useAsync(() => api.project(id), [id]);
+  const data = useMemo(() => loaded?.project.id === id ? { ...loaded, status_stale: !!error } : null, [loaded, error, id]);
   const defaultTab = data?.capabilities?.insight_generation === true ? "brief" : "overview";
   const tab: Tab = raw && SECTIONS.some((s) => s.pages.some((p) => p.id === raw)) ? raw : defaultTab;
+  const dossierMotion = useDossierMotion(data, tab === 'overview');
   const busy = data?.jobs.some((j) => j.status === "queued" || j.status === "running")
     || data?.documents.some((d) => d.status === "queued" || d.status === "processing")
     || (data?.model_ready && (data?.pending_documents ?? 0) > 0);
 
-  useEffect(() => {
-    if (!busy) return;
-    const stopped = data?.execution?.analysis === "stopped" && data?.execution?.parsing === "stopped";
-    const timer = window.setInterval(() => reload(), stopped ? 30000 : 4000);
-    return () => window.clearInterval(timer);
-  }, [busy, reload, data?.execution?.analysis, data?.execution?.parsing]);
+  const stopped = data?.execution?.analysis === "stopped" && data?.execution?.parsing === "stopped";
+  useVisiblePoll(reload, busy && !stopped ? 4000 : 30000);
 
   if (loading && !data) return <Page className="page-wide page-project"><div className="project-head-skel"><Skeleton lines={2} /></div><TabSkeleton label="加载项目" /></Page>;
   if (error && !data) return <Page><ErrorNote error={error} /></Page>;
@@ -76,9 +78,12 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
     return next;
   });
   const section = sectionOf(tab);
+  const scopeMoving = !data.status_stale && data.jobs.some(j => ['external', 'external_followup', 'public_profile'].includes(j.kind) && j.status === 'running'
+    && isMoving(j.runtime?.state ?? 'unknown'));
 
   return (
     <Page className="page-wide page-project">
+      {!!error && <ErrorNote error="状态暂时无法刷新，以下保留上次读取的结果。" />}
       <Header detail={data} goto={setTab} onReload={() => { reload(); onChanged(); }} onRemoved={onChanged} status={<Progress detail={data} onReload={reload} />} />
       <div className="tabs-row">
       <nav className="tabs" aria-label="项目内容">
@@ -87,13 +92,14 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
             onClick={() => section.id !== sec.id && setTab(sec.pages[0].id)}>
             {section.id === sec.id && <motion.span layoutId="tab-underline" className="tab-underline" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
             <span className="tab-no">0{i + 1}</span>{sec.label}
+            {sec.id === 'scope' && scopeMoving && <span className="scope-running" role="status" aria-label="监控范围正在运行" />}
             {sec.id === "external" && ownCount(data) > 0 && <span className="count">{ownCount(data)}</span>}
             {sec.id === "internal" && data.documents.length > 0 && <span className="count">{data.documents.length}</span>}
           </button>
         ))}
       </nav>
       </div>
-      {section.id === "external" && <CategoryStrip detail={data} page={tab} go={setTab} />}
+      {section.id === "external" && <CategoryStrip key={data.project.id} detail={data} page={tab} go={setTab} />}
       {section.id === "internal" && <PageStrip label="内部信息分区" page={tab} go={setTab} cells={internalCounts(data)} />}
       {section.pages.length > 1 && section.id !== "external" && section.id !== "internal" && <nav className="subtabs" aria-label={`${section.label}分区`}>
         {section.pages.map((p) => <button key={p.id} className={tab === p.id ? "on" : ""} aria-current={tab === p.id ? "page" : undefined} onClick={() => setTab(p.id)}>
@@ -102,7 +108,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div key={tab} className="tab-panel" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: EASE } }}
           exit={{ opacity: 0, transition: { duration: 0.1 } }}>
-          {tab === "overview" && <CompanyOverview detail={data} onReload={reload} />}
+          {tab === "overview" && <CompanyOverview detail={data} onReload={reload} dossierMotion={dossierMotion} />}
           {tab === "plan" && <PlanView projectId={id} company={data.project.short_name || data.project.name} detail={data} />}
           {tab === "brief" && <CurrentBrief detail={data} goto={setTab} onReload={reload}
             aside={<Note projectId={project.id} initial={project.note ?? ""} onSaved={reload} />} />}
@@ -119,8 +125,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
           {tab === "competition" && <CompetitionView detail={data} onReload={reload}
             race={data.capabilities?.insight_projections === true && <RaceBoard projectId={id} revision={raceRevision(data)} />}
             financing={<CommercialSources projectId={id} revision={commercialRevision} peers onChanged={reload} />} />}
-          {tab === "industry" && (data.capabilities?.insight_projections === true ? <IndustryFrame projectId={id} revision={`${commercialRevision}|${project.last_external_at ?? ""}`}
-            insightRevision={project.last_external_at ?? ""} details={<IndustryView detail={data} />} /> : <IndustryView detail={data} />)}
+          {tab === "chain" && <ScopeReading key={id} detail={data} />}
+          {tab === "industry" && <MacroEnvironment key={id} detail={data} />}
           {tab === "documents" && <DocumentsTab detail={data} onUploaded={reload} />}
         </motion.div>
       </AnimatePresence>
@@ -169,8 +175,10 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
       </div>}
       <ProjectHeader detail={detail} goto={goto} actions={removed ? null : <>
         <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>
-        <button className="btn" onClick={refresh} disabled={!project.activated}>立即更新</button>
-        <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
+        {project.execution_mode === "agent" ? <Link className="btn" to={`/agents?project=${project.id}`}>用 Agent 更新</Link> : <>
+          <button className="btn" onClick={refresh} disabled={!project.activated}>立即更新</button>
+          <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
+        </>}
       </>} status={status} />
       <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />
       <ErrorNote error={error} />
@@ -180,74 +188,33 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
 
 export function Progress({ detail, onReload }: { detail: ProjectDetail; onReload: () => void }) {
   const [recovering, setRecovering] = useState(false);
-  const active = detail.jobs.filter((j) => j.status === "queued" || j.status === "running");
-  const parsing = detail.documents.filter((d) => d.status === "queued" || d.status === "processing");
-  const failed = detail.jobs.find((j) => j.status === "failed");
-  const lastDone = detail.jobs.find((j) => j.status === "done");
-  const waiting = detail.model_ready ? detail.pending_documents : 0;
-  useEffect(() => { setRecovering(false); }, [detail.project.id, failed?.id, active.length]);
-  if (detail.execution?.health?.restart_required) {
-    return <div className="progress progress-error" role="status"><strong>后台受阻，等待恢复</strong><span>已有结果保留，不会自动重发结果不明的请求。</span><Link to="/tasks">查看运行状态 →</Link></div>;
-  }
-  if (detail.brief?.origin && !active.length && !parsing.length && !failed && detail.project.status === "paused") {
-    return <div className="progress"><strong>{detail.brief.origin.producer} 已更新</strong><span className="muted"> · 自动监控已暂停，本批由外部 Agent 写回</span></div>;
-  }
-  if (active.length || parsing.length || waiting) {
-    const states = active.map(j => jobWorkState(detail, j));
-    const parseRunning = parsing.some(d => d.status === "processing") && detail.execution?.parsing !== "stopped";
-    const executing = parseRunning || states.some(s => s === "running" || s === "stopping");
-    const stopping = !states.includes("running") && !parseRunning && states.includes("stopping");
-    const offline = states.includes("offline") || (parsing.length > 0 && detail.execution?.parsing === "stopped")
-      || (!!waiting && detail.execution?.analysis === "stopped");
-    const paused = states.length > 0 && states.every(s => s === "paused") && !parsing.length && !waiting;
-    const label = executing ? stopping ? "正在结束当前更新" : "正在更新"
-      : paused ? "监控已暂停" : offline ? "自动更新未运行" : "等待更新";
-    return (
-      <motion.div className="progress" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}>
-        <div>
-          {executing ? <Working text={label} /> : <strong>{label}</strong>}
-          <span className="muted">
-            {parsing.length > 0 && ` · ${parseRunning ? "正在解析" : "等待解析"} ${parsing.length} 份资料`}
-            {!parsing.length && waiting > 0 && !active.some((j) => j.kind === "internal") && ` · ${waiting} 份新资料等待分析`}
-            {active.map((j) => {
-              const state = jobWorkState(detail, j);
-              return ` · ${JOB_LABEL[j.kind]}${state === "running" && j.stage ? `：${j.stage}` : `（${WORK_LABEL[state]}）`}`;
-            }).join("")}
-          </span>
-        </div>
-      </motion.div>
-    );
-  }
-  if (failed && (!lastDone || failed.created_at > lastDone.created_at)) {
-    return (
-      <div className="progress progress-error">
-        <strong>上次{JOB_LABEL[failed.kind]}没有完成</strong>
-        <span>{errorMessage(failed.error)}</span>
-        <button className="link" onClick={() => setRecovering(true)}>继续更新 →</button>
-        {recovering && <RecoveryDialog key={`${detail.project.id}:${failed.id}`} projectId={detail.project.id} job={failed}
-          onClose={() => setRecovering(false)} onQueued={onReload} />}
-        {!detail.model_ready && <Link to="/settings">去设置模型 →</Link>}
-      </div>
-    );
-  }
-  if (detail.detail_summary?.status === "partial") {
-    const summary = detail.detail_summary;
-    return <div className="progress progress-idle muted small">
-      商业关系与政策条件：本次整理保留 {summary.fact_count} 条结果
-      {summary.rejected > 0 && ` · ${summary.rejected} 条线索未采纳`}
-      {summary.unquantified > 0 && ` · ${summary.unquantified} 条金额未明确`}
-    </div>;
-  }
-  return (
-    <div className="progress progress-idle muted small">
-      {monitoringLabel(detail.monitoring_progress, detail.project.status === "paused")}
-      {detail.execution?.analysis === "stopped" && detail.project.status !== "paused" && " · 自动更新未运行"}
-      {detail.project.last_external_at && ` · 外部信息更新于 ${relTime(detail.project.last_external_at)}`}
-      {detail.project.last_internal_at && ` · 资料分析于 ${relTime(detail.project.last_internal_at)}`}
-    </div>
-  );
+  const work = projectWork(detail);
+  const failed = work.failures.find(j => j.status === "failed");
+  const recoveryIndex = useAsync(() => api.recoveryProject(detail.project.id),
+    [detail.project.id, detail.jobs.map(j => `${j.id}:${j.status}`).join('|')]);
+  const pendingRecovery = !!recoveryIndex.data?.items.length;
+  const activeCount = detail.jobs.filter(j => j.status === "running" || j.status === "queued").length;
+  useEffect(() => { setRecovering(false); }, [detail.project.id, failed?.id, activeCount]);
+  return <div className="progress op-project-progress">
+    <ProjectActivity detail={detail} />
+    {(needsAttention(work.state) || work.stop || pendingRecovery) && <div className="op-help muted small">
+      已有结果保留。
+      {work.stop ? <span>{errorMessage(work.stop.error)}</span>
+        : failed?.error && <span>{errorMessage(failed.error)}</span>}
+      {pendingRecovery && <span>仍有待确认请求，完整链路尚未恢复。</span>}
+      {(failed || pendingRecovery) && <button className="link" onClick={() => setRecovering(true)}>查看恢复选项 →</button>}
+      {(work.state === "needs_confirmation" || work.stop?.state === "needs_confirmation") && " 不会自动重发结果不明的请求。"}
+    </div>}
+    {recovering && <RecoveryDialog key={detail.project.id} projectId={detail.project.id} job={failed}
+      onClose={() => setRecovering(false)} onQueued={onReload} />}
+    {work.state === "agent" && <Link to={`/agents?project=${detail.project.id}`}>连接 Agent →</Link>}
+    {detail.brief?.origin && <span className="muted small">{detail.brief.origin.producer} · 本批由外部 Agent 写回</span>}
+    {detail.detail_summary?.status === "partial" && !work.moving && <span className="muted small">
+      本次整理保留 {detail.detail_summary.fact_count} 条结果 · {detail.detail_summary.rejected} 条线索未采纳 · {detail.detail_summary.unquantified} 条金额未明确
+    </span>}
+    {detail.project.last_external_at && !work.moving && <span className="muted small">外部信息更新于 {relTime(detail.project.last_external_at)}</span>}
+  </div>;
 }
-
 function Note({ projectId, initial, onSaved }: { projectId: string; initial: string; onSaved: () => void }) {
   const [value, setValue] = useState(initial);
   const [state, setState] = useState<"" | "saving" | "saved">("");
@@ -272,7 +239,7 @@ function Note({ projectId, initial, onSaved }: { projectId: string; initial: str
   );
 }
 
-type CoverageKey = Category | "filing" | "registry" | "cn_trial" | "site" | "watch" | "thread" | "tender" | "license";
+type CoverageKey = Category | "chain" | "technology" | "filing" | "registry" | "cn_trial" | "site" | "watch" | "thread" | "tender" | "license";
 const COVERAGE_ROWS: { key: CoverageKey; label: string; free: boolean }[] = [
   { key: "company", label: "公司新闻", free: true },
   { key: "site", label: "公司官网页面", free: true },
@@ -281,8 +248,10 @@ const COVERAGE_ROWS: { key: CoverageKey; label: string; free: boolean }[] = [
   { key: "tender", label: "招投标（政府采购平台）", free: false },
   { key: "license", label: "资质与许可（监管部门网站）", free: false },
   { key: "competitor", label: "竞品动态", free: true },
+  { key: "chain", label: "产业链动态", free: true },
   { key: "industry", label: "赛道动态", free: true },
   { key: "policy", label: "政策监管", free: true },
+  { key: "technology", label: "技术动态", free: true },
   { key: "paper", label: "论文（OpenAlex）", free: true },
   { key: "trial", label: "临床试验（ClinicalTrials.gov）", free: true },
   { key: "patent", label: "专利", free: false },
@@ -291,7 +260,14 @@ const COVERAGE_ROWS: { key: CoverageKey; label: string; free: boolean }[] = [
   { key: "registry", label: "工商变更", free: false },
 ];
 
-function Coverage({ detail }: { detail: ProjectDetail }) {
+export function Coverage({ detail }: { detail: ProjectDetail }) {
+  const current = detail.collection_report;
+  if (current?.schema_version === 1) return <section className="coverage-block">
+    <p className="muted small">{current.job_status === 'running' || current.job_status === 'queued' ? '本轮采集' : '最近一轮采集'}</p>
+    <table className="coverage"><tbody>{COVERAGE_ROWS.map(row => <tr key={row.key}>
+      <td>{row.label}</td><td>{collectionExecutionLabel(collectionChannelExecution(current, row.key), current.active)}
+        {(current.channels[row.key]?.added ?? 0) > 0 ? ` · 新收录 ${current.channels[row.key].added} 条来源` : null}
+      </td></tr>)}</tbody></table></section>;
   const plan = detail.plan;
   const report = plan?.last_report ?? {};
   // Judge “needs configuring” by today's settings; the round's own flags only say what that round could use.
@@ -307,7 +283,11 @@ function Coverage({ detail }: { detail: ProjectDetail }) {
               {COVERAGE_ROWS.map((row) => {
                 const r = report[row.key];
                 let status: React.ReactNode;
-                if (row.key === "trial" && !plan.is_biomed) status = <span className="muted">不适用</span>;
+                if (r?.execution) status = <span>{collectionExecutionLabel(r.execution)}
+                  {r.added > 0 ? ` · 新收录 ${r.added} 条来源` : null}</span>;
+                else if (plan.collection_report?.schema_version === 1 && plan.collection_report.job_id === plan.round_id)
+                  status = <span className="muted">本轮未纳入</span>;
+                else if (row.key === "trial" && !plan.is_biomed) status = <span className="muted">不适用</span>;
                 else if (row.key === "cn_trial" && !plan.is_biomed) status = <span className="muted">不适用</span>;
                 else if ((row.key === "patent" || row.key === "cn_trial" || row.key === "tender" || row.key === "license") && !hasSearch) status = <Link to="/settings" className="muted">需配置搜索服务</Link>;
                 else if (row.key === "registry" && !hasRegistry) status = <Link to="/settings" className="muted">需配置工商数据服务</Link>;
@@ -322,7 +302,6 @@ function Coverage({ detail }: { detail: ProjectDetail }) {
             </tbody>
           </table>
         )}
-        <p className="muted small">未检索到不代表未发生；覆盖受网络与来源限制。</p>
       </section>
     </>
   );
@@ -512,48 +491,74 @@ function MonitorCadence({ detail }: { detail: ProjectDetail }) {
 
 /** 行业环境 reads the same AI cross-analysis as the cover; each part renders nothing until it exists. */
 function IndustryInsight({ projectId, revision, part, onSettled }: { projectId: string; revision: string; part: "industry" | "technology"; onSettled?: () => void }) {
-  const { data, loading } = useInsight(projectId, revision);
+  const { data, loading, error, reload } = useAsync(() => api.insight(projectId), [projectId, revision]);
   const settled = !loading || !!data;
   useEffect(() => { if (settled) onSettled?.(); }, [settled]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!settled) return null;  // the frame shows nothing below until this settles, so there is nothing to push
-  return part === "industry" ? <IndustryJudgment view={data} /> : <TechnologyJudgment view={data} />;
+  if (!settled) return null; // Analysis sections settle in order; the independent news list stays available.
+  if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存判断</button></div>;
+  if(!data?.record)return <p className="scope-quiet">暂无分析判断。</p>;
+  return part === "industry" ? <IndustryJudgment view={data} compact /> : <TechnologyJudgment view={data} compact />;
 }
 
 /** 外部信息 at a glance (8945) and its navigation: one cell per page with the count of what was collected for it. */
-const STRIP: { page: Tab; label: string; cats: Category[]; always?: boolean }[] = [
+const STRIP: { page: Tab; label: string; cats: Category[]; always: true }[] = [
   { page: "external", label: "公司进展", cats: ["company"], always: true },
-  { page: "trials", label: "临床", cats: ["trial"] },
-  { page: "papers", label: "论文", cats: ["paper"] },
-  { page: "patents", label: "专利与注册", cats: ["patent"] },
+  { page: "trials", label: "临床", cats: ["trial"], always: true },
+  { page: "papers", label: "论文", cats: ["paper"], always: true },
+  { page: "patents", label: "专利与注册", cats: ["patent"], always: true },
   { page: "competition", label: "竞品动态", cats: ["competitor"], always: true },
-  { page: "industry", label: "行业与政策", cats: ["industry", "policy"], always: true },
+  { page: "chain", label: "产业链动态", cats: [], always: true },
+  { page: "industry", label: "宏观环境", cats: ["industry", "policy"], always: true },
 ];
 
-function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
-  const cells = STRIP.map((s) => ({ ...s, n: s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0) })).filter((s) => s.always || s.n > 0 || s.page === page);
+export function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
+  const {data:plan,error,loading}=useAsync(()=>api.monitoringPlan(detail.project.id),[detail.project.id,workRevision(detail)]);
+  const chainCount=plan&&!error&&!loading?scopeReports(plan,scopeRelations(plan,detail.project.id,'chain')).length:null;
+  const cells = STRIP.map((s) => {
+    const collection=externalCollection(detail, s.page==='chain'?['chain']:s.page==='industry'?['industry','policy','technology']:s.cats);
+    return ({ ...s,
+    n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0),
+    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):s.cats.every(c => !(detail.counts[c]??0))?collection.label:undefined,
+    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':s.cats.every(c => !(detail.counts[c]??0))?`本栏目暂无收录。${collection.description}`:undefined,
+  }); });
   return <PageStrip label="外部信息分区" page={page} go={go} cells={cells} />;
 }
 
 /** One strip for every multi-page section: each cell is a page and the count of what it reads. */
-function PageStrip({ label, page, go, cells }: { label: string; page: Tab; go: (page: Tab) => void; cells: { page: Tab; label: string; n: number }[] }) {
+export function PageStrip({ label, page, go, cells }: { label: string; page: Tab; go: (page: Tab) => void; cells: { page: Tab; label: string; n: number|null; note?:string; hint?:string }[] }) {
   return <nav className="cat-strip" aria-label={label}>
     {cells.map((c) => <button key={c.page} className={page === c.page ? "on" : ""} aria-current={page === c.page ? "page" : undefined}
-      onClick={() => go(c.page)}><span>{c.label}</span><b>{c.n}</b></button>)}
+      title={c.hint} onClick={() => go(c.page)}><span>{c.label}</span><b>{c.n??'—'}{c.note && <small className="cat-count-note">{c.note}</small>}</b></button>)}
   </nav>;
 }
 
-/** 行业环境 reveals top to bottom: a block appears only once the one above has settled, so nothing already on screen
- * is pushed down by a slower block arriving above it. */
-function IndustryFrame({ projectId, revision, insightRevision, details }: { projectId: string; revision: string; insightRevision: string; details: ReactNode }) {
-  const [track, setTrack] = useState(false);
-  const [judged, setJudged] = useState(false);
-  const [tech, setTech] = useState(false);
-  useEffect(() => { setTrack(false); setJudged(false); setTech(false); }, [projectId]);
-  return <div className="tab-frame industry-frame">
-    <TrackBoard projectId={projectId} revision={revision} onSettled={() => setTrack(true)} />
-    {track && <IndustryInsight projectId={projectId} revision={insightRevision} part="industry" onSettled={() => setJudged(true)} />}
-    {track && judged && <TechRoutes projectId={projectId} revision={insightRevision} onSettled={() => setTech(true)} />}
-    {track && judged && tech && <IndustryInsight projectId={projectId} revision={insightRevision} part="technology" />}
-    {track && judged && tech && <Reference items={[{ key: "industry", title: "行业细节：市场指标、资本动态、政策与赛道报道", note: "上方结论的依据", body: details }]} />}
+export const MACRO_TABS = [{id:'industry',label:'行业监控'},{id:'policy',label:'政策监控'},{id:'technology',label:'技术监控'}] as const;
+export type MacroTab = typeof MACRO_TABS[number]['id'];
+export const macroTab = (value:string|null):MacroTab => MACRO_TABS.find(t=>t.id===value)?.id??'industry';
+export function MacroEnvironment({detail}: {detail:ProjectDetail}) {
+  const [params,setParams]=useSearchParams();
+  const selected=macroTab(params.get('macro'));
+  const select=(id:MacroTab)=>setParams(previous=>{const next=new URLSearchParams(previous);next.set('tab','industry');next.set('macro',id);return next;});
+  const projections=detail.capabilities?.insight_projections===true;
+  const details=selected==='technology'?<ScopeReading key={detail.project.id} detail={detail} scope="science"/>:<IndustryView key={`${detail.project.id}-${selected}`} detail={detail} part={selected} compact={projections}/>;
+  return <section aria-label="宏观环境">
+    <nav className="macro-navigation" role="tablist" aria-label="宏观环境分区">{MACRO_TABS.map((t,i)=><button key={t.id} id={`macro-${t.id}`} role="tab" aria-selected={t.id===selected} aria-controls="macro-panel" tabIndex={t.id===selected?0:-1} onClick={()=>select(t.id)} onKeyDown={e=>{
+      const index=e.key==='Home'?0:e.key==='End'?2:e.key==='ArrowRight'?(i+1)%3:e.key==='ArrowLeft'?(i+2)%3:-1;
+      if(index<0)return;e.preventDefault();select(MACRO_TABS[index].id);document.getElementById(`macro-${MACRO_TABS[index].id}`)?.focus();
+    }}>{t.label}</button>)}</nav>
+    <div id="macro-panel" role="tabpanel" aria-labelledby={`macro-${selected}`} key={selected}>
+      <header className="scope-reading-head macro-reading-head"><div><span className="eyebrow">宏观环境 · 已收录信息</span><h2>{MACRO_TABS.find(t=>t.id===selected)?.label}</h2><p>{selected==='industry'?'从需求、价格与资本变化，理解公司的外部环境。':selected==='policy'?'先看政策记录与适用影响，再核对文件和报道。':'结合技术路线判断与材料提及趋势，观察研究和产业信号。'}</p></div></header>
+      {projections?<IndustryFrame projectId={detail.project.id} revision={`${detail.project.last_external_at??''}|${detail.jobs.map(j=>`${j.id}:${j.status}`).join('|')}`} insightRevision={insightRevision(detail)} part={selected} details={details}/>:<div className="macro-reading">{selected==='technology' && <p className="muted small">当前版本尚无技术路线分析；以下保留已纳入的技术关联报道。</p>}{details}</div>}
+    </div>
+  </section>;
+}
+
+/** Only the selected subject mounts. Stored news never waits for analysis to finish. */
+export function IndustryFrame({ projectId, revision, insightRevision, details, part='industry' }: { projectId: string; revision: string; insightRevision: string; details: ReactNode; part?:MacroTab }) {
+  return <div className="tab-frame industry-frame macro-reading">
+    {part==='industry' && <><IndustryInsight projectId={projectId} revision={insightRevision} part="industry"/><TrackBoard projectId={projectId} revision={revision} keys={['demand','capital','price']}/></>}
+    {part==='policy' && <TrackBoard projectId={projectId} revision={revision} keys={['policy']}/>}
+    {part==='technology' && <><IndustryInsight projectId={projectId} revision={insightRevision} part="technology"/><TechRoutes projectId={projectId} revision={insightRevision}/></>}
+    {details}
   </div>;
 }

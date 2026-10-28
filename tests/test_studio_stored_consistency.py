@@ -171,3 +171,15 @@ def test_race_get_reads_public_aliases_without_jobs_or_provider_requests(tmp_pat
         assert peer["stage"]["label"] == "定点"
         assert peer["stage"]["url"] == "https://source.example/a"
     assert client.get(f"/api/studio/projects/{pid}").json()["jobs"] == before
+
+
+def test_peer_list_merges_public_aliases_before_applying_limit():
+    from project_watch.studio.peer_names import peers_for
+
+    obj = {"id": "peer-a", "kind": "company", "visibility": "public", "name": "合成神经科技",
+           "aliases": [{"name": "SynNeuro", "visibility": "public"}]}
+    rows = {"items": [{"peer_id": "peer-a", "peer_name": "合成神经科技", "origin": "user_override"}]}
+    peers = peers_for({"name": "本公司"}, {"competitors": [{"name": "SynNeuro"}, {"name": "合成对手乙"}]},
+                     rows, limit=2, public_objects=[obj])
+    assert [p["name"] for p in peers] == ["合成神经科技", "合成对手乙"]
+    assert "SynNeuro" in peers[0]["aliases"]

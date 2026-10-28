@@ -86,6 +86,17 @@ def test_completed_observed_checks_allow_bounded_quiet_statement(app):
     assert TestClient(app).get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'observed'
 
 
+def test_successful_zero_in_one_channel_does_not_hide_incomplete_host_collection(app):
+    store, pid = seed(app)
+    complete(store, pid)
+    stored = store.get_plan(pid)
+    store.put_plan(pid, {**stored, 'round_id': 'synthetic-round', 'collection_report': {
+        'schema_version': 1, 'job_id': 'synthetic-round', 'status': 'partial', 'channels': {}}})
+    data = digest.build_digest(store)
+    assert data['quiet'] == [] and data['incomplete'][0]['state'] == 'partial'
+    assert TestClient(app).get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'partial'
+
+
 def test_failed_refresh_retains_saved_events_and_is_visible_in_digest(app):
     store, pid = seed(app)
     complete(store, pid)
@@ -116,3 +127,20 @@ def test_unrelated_done_job_never_masks_external_failure_and_reads_do_not_schedu
         assert client.get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'failed'
         assert client.get('/api/studio/digest').json()['incomplete'][0]['state'] == 'failed'
     assert store.jobs(pid) == before
+
+
+def test_round_number_counts_external_rounds_not_other_work(app):
+    from project_watch.studio import progress
+
+    store, pid = seed(app)
+    assert progress.read(store, pid)['round'] == 0
+    complete(store, pid)
+    store.enqueue(pid, 'brief')
+    assert progress.read(store, pid)['round'] == 1
+    complete(store, pid)
+    assert progress.read(store, pid)['round'] == 2
+    # A follow-up continues its round; asking for another external round meanwhile joins it.
+    store.enqueue(pid, 'external_followup')
+    store.enqueue(pid, 'external')
+    assert progress.read(store, pid)['round'] == 2
+    assert progress.read(store, 'missing-project')['round'] == 0

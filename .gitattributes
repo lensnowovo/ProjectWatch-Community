@@ -8,3 +8,8 @@
 *.md text eol=lf
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
+*.command text eol=lf
+# Lock inputs are canonical LF. Byte-pinned upstream notices are stored without
+# text conversion so Git blobs/source ZIPs and checkouts retain identical bytes.
+packaging/dsh/*.json text eol=lf
+packaging/dsh/upstream-licenses/*.txt -text

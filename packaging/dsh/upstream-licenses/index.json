@@ -1,0 +1,169 @@
+{
+ "brotli@1.3.3": {
+  "declared": "MIT",
+  "author": "Devon Govett <devongovett@gmail.com>",
+  "kind": "standard_text_for_declared_license",
+  "source": "https://github.com/devongovett/brotli.js (readme.md: \"License MIT\")",
+  "pinned_to_version": false,
+  "note": "Upstream ships no license file; standard MIT text is used with the author named in package.json.",
+  "file": "brotli_at_1.3.3.txt",
+  "sha256": "71e54dfe13396c490776542c130bb4f1cfc0866cdf0a4bd08709b50a64f598dc"
+ },
+ "data-uri-to-buffer@4.0.1": {
+  "declared": "MIT",
+  "author": "Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/)",
+  "kind": "upstream_file_later_home",
+  "source": "https://raw.githubusercontent.com/TooTallNate/proxy-agents/main/packages/data-uri-to-buffer/LICENSE",
+  "pinned_to_version": false,
+  "note": "The 4.0.1 repository (archived) has no license file; the package later moved to this monorepo, same author and MIT.",
+  "file": "data-uri-to-buffer_at_4.0.1.txt",
+  "sha256": "29308c08926e2139ce2c6dc389fc7d6ac801927df4941c19fa92de4a8b18da12"
+ },
+ "dfa@1.2.0": {
+  "declared": "MIT",
+  "author": "Devon Govett <devongovett@gmail.com>",
+  "kind": "standard_text_for_declared_license",
+  "source": "https://github.com/devongovett/dfa (README.md: \"License MIT\")",
+  "pinned_to_version": false,
+  "note": "Upstream ships no license file; standard MIT text is used with the author named in package.json.",
+  "file": "dfa_at_1.2.0.txt",
+  "sha256": "71e54dfe13396c490776542c130bb4f1cfc0866cdf0a4bd08709b50a64f598dc"
+ },
+ "fontkit@2.0.4": {
+  "declared": "MIT",
+  "author": "Devon Govett <devongovett@gmail.com>",
+  "kind": "standard_text_for_declared_license",
+  "source": "https://github.com/foliojs/fontkit (README.md: \"License MIT\")",
+  "pinned_to_version": false,
+  "note": "Upstream ships no license file; standard MIT text is used with the author named in package.json.",
+  "file": "fontkit_at_2.0.4.txt",
+  "sha256": "71e54dfe13396c490776542c130bb4f1cfc0866cdf0a4bd08709b50a64f598dc"
+ },
+ "proxy-agent-negotiate@1.1.0": {
+  "declared": "MIT",
+  "author": "Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/)",
+  "kind": "standard_text_for_declared_license",
+  "source": "https://github.com/TooTallNate/proxy-agents/tree/main/packages/negotiate (package.json: \"license\": \"MIT\"; no license file in the repository)",
+  "pinned_to_version": false,
+  "note": "Upstream ships no license file; standard MIT text is used with the author named in package.json.",
+  "file": "proxy-agent-negotiate_at_1.1.0.txt",
+  "sha256": "71e54dfe13396c490776542c130bb4f1cfc0866cdf0a4bd08709b50a64f598dc"
+ },
+ "saxes@6.0.0": {
+  "declared": "ISC",
+  "author": "Louis-Dominique Dubeau <ldd@lddubeau.com>",
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/lddubeau/saxes/v6.0.0/LICENSE",
+  "pinned_to_version": true,
+  "file": "saxes_at_6.0.0.txt",
+  "sha256": "0fac2374380621b22e6b50451057721a9c52935b02d16d106a9f04897f061d0e"
+ },
+ "standardwebhooks@1.1.1": {
+  "declared": "MIT",
+  "author": "Standard Webhooks",
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/HEAD/LICENSE",
+  "pinned_to_version": false,
+  "note": "package.json declares MIT, but the only license file in the upstream repository is Apache-2.0 (repository root). Maintainer decision 2026-10-22: treated as Apache-2.0.",
+  "file": "standardwebhooks_at_1.1.1.txt",
+  "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+ },
+ "@aws-sdk/credential-provider-http@3.972.77": {
+  "declared": "Apache-2.0",
+  "author": {
+   "name": "AWS SDK for JavaScript Team",
+   "url": "https://aws.amazon.com/sdk-for-javascript/"
+  },
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/aws/aws-sdk-js-v3/HEAD/LICENSE",
+  "pinned_to_version": false,
+  "file": "_at_aws-sdk__credential-provider-http_at_3.972.77.txt",
+  "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d"
+ },
+ "@aws-sdk/credential-provider-login@3.972.82": {
+  "declared": "Apache-2.0",
+  "author": {
+   "name": "AWS SDK for JavaScript Team",
+   "url": "https://aws.amazon.com/sdk-for-javascript/"
+  },
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/aws/aws-sdk-js-v3/HEAD/LICENSE",
+  "pinned_to_version": false,
+  "file": "_at_aws-sdk__credential-provider-login_at_3.972.82.txt",
+  "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d"
+ },
+ "@aws-sdk/nested-clients@3.997.49": {
+  "declared": "Apache-2.0",
+  "author": {
+   "name": "AWS SDK for JavaScript Team",
+   "url": "https://aws.amazon.com/sdk-for-javascript/"
+  },
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/aws/aws-sdk-js-v3/HEAD/LICENSE",
+  "pinned_to_version": false,
+  "file": "_at_aws-sdk__nested-clients_at_3.997.49.txt",
+  "sha256": "edea91454b811f127fbdea3d86f378f6719bd372ed440abf82b232f6fca06c3d"
+ },
+ "@earendil-works/pi-ai@1.3.0": {
+  "declared": "MIT",
+  "author": "Mario Zechner",
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/earendil-works/pi/v1.3.0/LICENSE",
+  "pinned_to_version": true,
+  "file": "_at_earendil-works__pi-ai_at_1.3.0.txt",
+  "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48"
+ },
+ "@earendil-works/pi-telemetry@1.3.0": {
+  "declared": "MIT",
+  "author": "Mario Zechner",
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/earendil-works/pi/v1.3.0/LICENSE",
+  "pinned_to_version": true,
+  "file": "_at_earendil-works__pi-telemetry_at_1.3.0.txt",
+  "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48"
+ },
+ "@koromix/koffi-darwin-arm64@3.1.1": {
+  "declared": "MIT",
+  "author": "Niels Martignène <niels.martignene@protonmail.com>",
+  "kind": "same_version_parent_package_file",
+  "source": "https://registry.npmjs.org/koffi/-/koffi-3.1.1.tgz",
+  "pinned_to_version": true,
+  "note": "LICENSE.txt from the lockfile-pinned koffi@3.1.1 parent, which explicitly depends on @koromix/koffi-darwin-arm64@3.1.1. The native child declares MIT but ships no license text. Maintainer approved this supplemental text and provenance on 2026-10-23; not a publication authorization.",
+  "file": "koffi-3.1.1.txt",
+  "sha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290"
+ },
+ "@koromix/koffi-win32-x64@3.1.1": {
+  "declared": "MIT",
+  "author": {
+   "name": "Niels Martignène",
+   "email": "niels.martignene@protonmail.com",
+   "url": "https://koromix.dev/"
+  },
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/Koromix/koffi/HEAD/LICENSE.txt",
+  "pinned_to_version": false,
+  "file": "_at_koromix__koffi-win32-x64_at_3.1.1.txt",
+  "sha256": "54abb741a2ba1a7fa89e98d2d3199575e548c8708885eeadab0f5bb83ad22e0e"
+ },
+ "@xterm/addon-serialize@0.14.0": {
+  "declared": "MIT",
+  "author": {
+   "name": "The xterm.js authors",
+   "url": "https://xtermjs.org/"
+  },
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/xtermjs/xterm.js/HEAD/LICENSE",
+  "pinned_to_version": false,
+  "file": "_at_xterm__addon-serialize_at_0.14.0.txt",
+  "sha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd"
+ },
+ "@xterm/headless@6.0.0": {
+  "declared": "MIT",
+  "author": null,
+  "kind": "upstream_file",
+  "source": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/LICENSE",
+  "pinned_to_version": true,
+  "file": "_at_xterm__headless_at_6.0.0.txt",
+  "sha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd"
+ }
+}

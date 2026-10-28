@@ -1,0 +1,37 @@
+{
+  "comment": "ProjectWatch drives DSH only through its loopback gateway with five scoped tools. These parts are never loaded on that path; tests against the official runtime verify the pruned result. Platform-native optional packages DSH needs at start (koffi, emnapi, addon loader) are kept; unused native ones are listed here.",
+  "remove_packages": [
+    "@deepseek-ai/dsh-experimental-inspector",
+    "@deepseek-ai/dsh-client-ui-sidebar-documentpreview",
+    "@deepseek-ai/libreoffice-kit",
+    "node-pty",
+    "sherpa-onnx-node",
+    "@google/genai",
+    "@anthropic-ai/sdk",
+    "@deepseek-ai/libreoffice-kit-win32-x64",
+    "sherpa-onnx-win-x64",
+    "@img/sharp-win32-x64",
+    "@img/sharp-wasm32",
+    "@vscode/ripgrep-win32-x64"
+  ],
+  "remove_paths": [
+    "@deepseek-ai/dsh-agent-preset/skills/cordis-plugin-development/templates"
+  ],
+  "remove_suffixes": [
+    ".map",
+    ".pdb",
+    ".d.ts",
+    ".d.cts",
+    ".d.mts",
+    ".ts",
+    ".cts",
+    ".mts",
+    ".md"
+  ],
+  "keep_prefixes": [
+    "license",
+    "licence",
+    "copying",
+    "notice"
+  ]
+}

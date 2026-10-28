@@ -53,7 +53,8 @@ test('Core opens overview and does not mount private remote projections', () => 
   const src = read('pages/Project.tsx');
   assert.match(src, /insight_generation === true \? "brief" : "overview"/);
   assert.match(src, /insight_projections === true && <RaceBoard/);
-  assert.match(src, /insight_projections === true \? <IndustryFrame/);
+  assert.match(src, /const projections=detail\.capabilities\?\.insight_projections===true/);
+  assert.match(src, /projections\?<IndustryFrame/);
   assert.match(read('overview.tsx'), /insight_projections === true\s*\? <PositionLine/);
   assert.match(read('landscape.tsx'), /insight_projections === true && <RedFlags/);
 });

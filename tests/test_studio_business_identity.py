@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from test_studio_competition_profile import profile_inputs
@@ -65,10 +65,17 @@ def test_current_scoped_alias_extracts_product(tmp_path, actor, mapping):
     (Alias(name=SHORT, visibility='public'), 'automatic', None),
     (Alias(name=SHORT, visibility='public'), 'automatic', FULL + '与合成光学集团合作。'),
     (Alias(name=SHORT, visibility='internal'), 'user', None),
-    (Alias(name=SHORT, visibility='public', valid_to=date.today()-timedelta(days=1)), 'user', None),
-    (Alias(name=SHORT, visibility='public', valid_from=date.today()+timedelta(days=1)), 'user', None),
+    (Alias(name=SHORT, visibility='public', valid_to=date(2026, 1, 14)), 'user', None),
+    (Alias(name=SHORT, visibility='public', valid_from=date(2026, 1, 16)), 'user', None),
 ])
-def test_unproven_private_or_out_of_date_alias_does_not_establish_ownership(tmp_path, alias, actor, mapping):
+def test_unproven_private_or_out_of_date_alias_does_not_establish_ownership(tmp_path, monkeypatch, alias, actor, mapping):
+    # Collection and execution may straddle midnight during a full release run.
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 1, 15)
+
+    monkeypatch.setattr('project_watch.studio.business_identity.date', FixedDate)
     service, pid, _, profiles = setup(tmp_path, alias=alias, actor=actor, mapping=mapping)
     _, _, result = extract(service, pid, profiles)
     assert result['accepted'] == 0

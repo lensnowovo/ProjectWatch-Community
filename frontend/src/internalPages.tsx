@@ -208,7 +208,7 @@ export function RisksView({ detail, go, extra }: { detail: ProjectDetail; go: Go
         {issues.length > 0 && <IssueList issues={issues} compact />}
         <SignalsPanel data={signals.data ?? null} hideSilence onChange={(next) => signals.setData(() => next)} />
       </Block>
-      {questions.length > 0 && <Block title="值得追问" note="由资料缺口整理，可直接用于下次沟通">
+      {questions.length > 0 && <Block title="值得追问">
         <ol className="questions">{questions.map((q, i) => <li key={i}>{q}</li>)}</ol>
       </Block>}
       {extra}

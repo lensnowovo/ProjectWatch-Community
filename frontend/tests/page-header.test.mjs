@@ -42,7 +42,7 @@ test("optional footer and action leave no empty UI", () => {
 test("feed with existing projects preserves updating status in the new header", () => {
   const Feed = load("../src/pages/Feed.tsx");
   const html = renderToStaticMarkup(React.createElement(StaticRouter, { location: "/feed" },
-    React.createElement(Feed, { projects: [{ id: "synthetic", name: "合成公司", job_status: "running" }] })));
+    React.createElement(Feed, { projects: [{ id: "synthetic", name: "合成公司", job_status: "running", worker_state: "running" }] })));
   assert.match(html, /<h1><span class="header-blur-text" aria-label="今日动态">/);
   assert.match(html, /1 个项目正在更新/);
   assert.match(html, /只看未读/);
@@ -74,7 +74,8 @@ test("project header keeps company identity, portfolio navigation, actions and u
   assert.match(html, /href="https:\/\/example\.com\/?"/);
   for (const fact of ["合成测试行业", "测试城市"]) assert.match(html, new RegExp(fact));
   assert.match(html, /A 轮/);
-  assert.doesNotMatch(html, /2024年5月完成|2020-01-01|synthetic-code/);
+  assert.match(html, /title="A 轮（2024年5月完成）"/);
+  assert.doesNotMatch(html, /2020-01-01|synthetic-code/);
   assert.match(html, /<button>上传资料<\/button>/);
   assert.match(html, /role="status">正在整理新资料<\/p>/);
 });
@@ -95,7 +96,8 @@ test("header leaves detailed judgments, operating numbers and milestones to the 
       runway: { months: 20.4, status: "ok" }, revenue: null, revenue_growth: null,
       net_profit: { value: -5308, unit: "万元", period: "2025", refs: [] } } },
   });
-  assert.doesNotMatch(html, /合成的一句话判断|合成业务概括|合成项目描述|合成中期读数/);
+  assert.match(html, /合成业务概括/);
+  assert.doesNotMatch(html, /合成的一句话判断|合成项目描述|合成中期读数/);
   assert.doesNotMatch(html, /账上现金|现金跑道|净亏损|四圈判断|下一节点/);
 });
 

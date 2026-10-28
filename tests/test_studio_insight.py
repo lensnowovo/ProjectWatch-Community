@@ -95,7 +95,7 @@ def test_run_saves_record_and_history(tmp_path):
     assert insight.history(store, project.id)[0]["position"] == "on_par"
 
 
-def test_due_waits_for_change_and_spacing(tmp_path):
+def test_due_waits_for_change_not_twenty_hours(tmp_path):
     project, store, pipeline = _setup(tmp_path)
     now = datetime.now(UTC)
     assert insight_generation.due(pipeline, project.id, now=now)  # never analysed
@@ -104,10 +104,64 @@ def test_due_waits_for_change_and_spacing(tmp_path):
     store.add_items(project.id, "paper", [{"key": "a2", "title": "体内 CAR-T 新进展", "url": "https://p.example/a2",
                                            "source": "OpenAlex", "snippet": "", "published_at": "2026-06-01"}])
     _triage(store)
-    assert insight_generation.due(pipeline, project.id, now=now + timedelta(hours=2)) is None  # too soon after the last run
+    assert insight_generation.due(pipeline, project.id, now=now + timedelta(seconds=2))  # fresh evidence, no daily gate
     assert insight_generation.due(pipeline, project.id, now=now + timedelta(hours=30))
     store.enqueue(project.id, "external")
     assert insight_generation.due(pipeline, project.id, now=now + timedelta(hours=30)) is None  # collection still running
+
+
+def test_due_waits_for_every_followup_and_does_not_retry_failed_input(tmp_path):
+    from contextlib import closing
+
+    project, store, pipeline = _setup(tmp_path)
+    fingerprint = insight_generation.due(pipeline, project.id)
+    for kind in ("details", "competition", "business", "commercial"):
+        job = store.enqueue(project.id, kind)
+        assert insight_generation.due(pipeline, project.id) is None
+        with closing(store._connect()) as db, db:
+            db.execute("UPDATE studio_jobs SET status='done' WHERE id=?", (job["id"],))
+    assert insight_generation.due(pipeline, project.id) == fingerprint
+    job = store.enqueue(project.id, "insight", input_version=fingerprint)
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='failed',retry_after=NULL WHERE id=?", (job["id"],))
+    assert insight_generation.due(pipeline, project.id) is None
+
+
+def test_fingerprint_includes_source_identity_and_company_context(tmp_path):
+    from contextlib import closing
+
+    project, store, pipeline = _setup(tmp_path)
+    before = insight_generation.gather(pipeline, project.id)["fingerprint"]
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_items SET url='https://p.example/corrected-source' WHERE category='paper'")
+    after = insight_generation.gather(pipeline, project.id)["fingerprint"]
+    assert after != before
+    store.upsert_project(project.id, {"legal_name": "合成细胞治疗新主体"}, consent=True)
+    assert insight_generation.gather(pipeline, project.id)["fingerprint"] != after
+
+
+def test_scheduler_queues_once_and_respects_pause_and_agent_mode(tmp_path):
+    from contextlib import closing
+
+    project, store, pipeline = _setup(tmp_path)
+    pipeline.insight_generator = insight_generation
+    pipeline.settings_store.update({'model': {'provider': 'openai', 'api_key': 'synthetic-key',
+                                             'base_url': 'https://example.invalid/v1', 'model': 'synthetic'}})
+    store.upsert_project(project.id, {'legal_name': project.name}, consent=True)
+    store.set_status(project.id, 'paused')
+    assert pipeline.schedule_insight(project.id) is None
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_projects SET status='active',execution_mode='agent' WHERE project_id=?", (project.id,))
+    assert pipeline.schedule_insight(project.id)["status"] == "agent_required"
+    assert not store.jobs(project.id)
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_projects SET execution_mode='api' WHERE project_id=?", (project.id,))
+    pipeline._insight_checked.clear()
+    job = pipeline.schedule_insight(project.id)
+    assert job["status"] == "queued"
+    pipeline._insight_checked.clear()
+    assert pipeline.schedule_insight(project.id) is None  # the queued job coalesces changes
+    assert len([j for j in store.jobs(project.id) if j["kind"] == "insight"]) == 1
 
 
 def test_api_returns_record_and_manual_refresh_needs_a_model(tmp_path):

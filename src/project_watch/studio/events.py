@@ -246,5 +246,8 @@ def summarise(group: Group) -> dict:
     importance = min((i.get("importance") or "routine" for i in group.items), key=lambda v: RANK.get(v, 2))
     impact = next((i["impact"] for i in sorted(group.items, key=lambda i: RANK.get(i.get("importance"), 2))
                    if i.get("impact")), "")
+    # Collected time may bound clustering, but is never evidence of occurrence.
+    dated = [i['published_at'] for i in group.items if parse_time(i.get('published_at'))]
+    when = min(dated, key=parse_time) if dated else None
     return {"title": lead["title"], "summary": lead.get("summary") or "", "impact": impact,
-            "importance": importance, "category": lead["category"], "event_at": group.when}
+            "importance": importance, "category": lead["category"], "event_at": when}

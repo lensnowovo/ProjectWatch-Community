@@ -107,6 +107,8 @@ class MonitorStore:
             if "evidence" not in change_columns:
                 db.execute("ALTER TABLE studio_plan_changes ADD COLUMN evidence TEXT NOT NULL DEFAULT '[]'")
             columns = {r[1] for r in db.execute("PRAGMA table_info(studio_watchpoints)")}
+            if "match_fingerprint" not in {r[1] for r in db.execute("PRAGMA table_info(studio_watch_hits)")}:
+                db.execute("ALTER TABLE studio_watch_hits ADD COLUMN match_fingerprint TEXT NOT NULL DEFAULT ''")
             # Monitoring-plan fields (see monitoring_plan.py); older rows read as active core questions.
             for name, default in (("origin", "human"), ("visibility", "internal"), ("axis", "self"), ("objects", "[]"),
                                   ("reason", ""), ("current_state", ""), ("sources", ""), ("cadence", "medium"),
@@ -114,7 +116,9 @@ class MonitorStore:
                                   ("plan_origin", ""), ("updated_at", ""), ("last_run_at", ""),
                                   ("view", "evidence"), ("view_params", "{}"),
                                   ("reviewed_at", ""), ("last_attempt_at", ""), ("completed_queries", "[]"),
-                                  ("hop", "0"), ("parent_id", ""), ("lifecycle_version", "0")):
+                                  ("hop", "0"), ("parent_id", ""), ("lifecycle_version", "0"),
+                                  ("scope_kind", ""), ("relation_type", ""), ("relation_target", ""),
+                                  ("relation_aliases", "[]")):
                 if name not in columns:
                     db.execute(f"ALTER TABLE studio_watchpoints ADD COLUMN {name} TEXT NOT NULL DEFAULT '{default}'")
             if "reviewed_at" not in columns:
@@ -236,7 +240,8 @@ class MonitorStore:
             rows = db.execute("""SELECT w.*, (SELECT count(*) FROM studio_watch_hits h WHERE h.watch_id=w.id) AS hits
                                  FROM studio_watchpoints w WHERE project_id=? ORDER BY created_at""", (project_id,)).fetchall()
         return [{**dict(r), "queries": json.loads(r["queries"]), "alert": bool(r["alert"]),
-                 "objects": json.loads(r["objects"] or "[]"), "view_params": json.loads(r["view_params"] or "{}")} for r in rows]
+                 "objects": json.loads(r["objects"] or "[]"), "view_params": json.loads(r["view_params"] or "{}"),
+                 "relation_aliases": json.loads(r["relation_aliases"] or "[]")} for r in rows]
 
     def add_watchpoint(self, project_id: str, text: str, label: str, queries: list[str], criteria: str, alert: bool,
                        *, origin: str = "human", visibility: str = "internal", db=None) -> dict:
@@ -546,31 +551,38 @@ def site_discovery(store, project_id: str) -> dict:
 
 def check_sites(monitor: MonitorStore, transport, project_id: str, website: str | None,
                 stage=lambda _t: None, *, execution=None, candidates: list[str] | None = None,
-                names: list[str] | None = None) -> dict:
+                names: list[str] | None = None, recovery_key: str | None = None,
+                force: bool = False, record_changes: bool = True, on_snapshot=None, guard=None,
+                journal_requests: bool = True) -> dict:
     """Discover pages (first run), then read due pages and record changes. Returns a small report.
 
     Without a website, ``candidates`` are possible homepages from a search: one is adopted only when
-    its page source carries one of ``names``; the report then says which (``found``) and why."""
+    its page source carries one of ``names``; the report then says which (``found``) and why.
+    Host collection can force snapshots without diff events. It disables this
+    logical-request journal only when its transport journals each physical GET."""
     from project_watch.feeds import FeedError
     from project_watch.studio.http import HttpError, Response
 
     report = {"checked": 0, "changed": 0, "errors": []}
     fetched = {}
-    # While trying search candidates, a transport failure is just "not this site": recorded as a
-    # completed unreadable read (status 599), never as an unknown outcome that would hold the project.
-    tolerant = {"on": False}
+    existing = monitor.pages(project_id)
+    finding_site = bool(not website and not existing and candidates)
+    # Only this guarded, credential-free public GET path may turn a source
+    # failure into a durable unreadable receipt. This is NOT an HTTP success
+    # or permission to retry; paid model/search/commercial journals are unchanged.
 
     def fetch(url: str):
+        if guard:
+            guard()
         if url in fetched:
             return fetched[url]
         def request():
             from project_watch.feeds import GuardedHTTPS
             from project_watch.host_network import HostArticleTransport
 
-            if isinstance(transport, HostArticleTransport):
-                raise FeedError("robots_redirect_guard_unavailable")
-
             try:
+                if isinstance(transport, HostArticleTransport):
+                    raise FeedError("robots_redirect_guard_unavailable")
                 if isinstance(transport, GuardedHTTPS):
                     # Keep public-IP pinning and robots-before-redirect enforcement.
                     def allowed(target):
@@ -584,35 +596,64 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
             except FeedError as exc:
                 if str(exc) == 'http_failure' and exc.status is not None:
                     return Response(exc.status, {}, b'')
-                if tolerant["on"]:
-                    return Response(599, {}, b'')
-                raise
-            except (OSError, ValueError):
-                if tolerant["on"]:
-                    return Response(599, {}, b'')
-                raise
+                if str(exc) == 'rate_limited':
+                    return Response(429, {}, b'')
+                code = str(exc) if re.fullmatch(r'[a-z_]{1,80}', str(exc)) else 'source_unavailable'
+                return Response(599, {}, code.encode('ascii'))
+            except OSError:
+                return Response(599, {}, b'connection_failed')
+            except ValueError:
+                return Response(599, {}, b'invalid_source')
             return Response(200, {'content-type': response.headers.get('content-type', '')}, response.body)
         if execution:
             import hashlib
 
             try:
-                response = execution.call('site', hashlib.sha256(('site:' + url).encode()).hexdigest(),
-                                          request, provider='guarded_site:' + urlsplit(url).netloc)
+                response = (execution.call('site', hashlib.sha256(('site:' + url).encode()).hexdigest(),
+                                           request, provider='guarded_site:' + urlsplit(url).netloc)
+                            if journal_requests else request())
             except Exception as exc:
-                if any(row['unknown'] for row in execution.usage().values()):
+                if isinstance(exc, HttpError) and exc.code in ('provider_backoff', 'request_budget'):
+                    if finding_site or recovery_key:
+                        raise  # Candidate loop records refusal or ends discovery.
+                    # A refused site or exhausted site-only read budget must not
+                    # consume/block the independent search and analysis stages.
+                    response = Response(599, {}, exc.code.encode('ascii'))
+                elif any(row['unknown'] for row in execution.usage().values()):
                     raise HttpError('request_outcome_unknown') from exc
-                raise
+                else:
+                    raise
         else:
             response = request()
+        if response.status == 599:
+            code = response.body.decode('ascii', errors='replace')
+            code = code if re.fullmatch(r'[a-z_]{1,80}', code) else 'source_unavailable'
+            report['errors'].append(f'官网读取：{code}')
         fetched[url] = response.body, response.headers.get("content-type", ""), response.status
         return fetched[url]
 
     robots = sw.Robots(fetch, fatal_errors=(RuntimeError, HttpError) if execution else ())
-    existing = monitor.pages(project_id)
+    if recovery_key:
+        # Reconstruct only persisted targets. Do not search or follow newly found links.
+        import hashlib
+
+        urls = {p['url'] for p in existing}
+        if website and (normalised := sw.normalise_url(website)):
+            urls.add(normalised)
+        urls |= {f'{urlsplit(u).scheme}://{urlsplit(u).netloc}/robots.txt' for u in urls}
+        matches = [u for u in urls if hashlib.sha256(('site:' + hashlib.sha256(
+            ('site:' + u).encode()).hexdigest()).encode()).hexdigest() == recovery_key]
+        if len(matches) != 1 or execution is None:
+            raise HttpError('recovery_request_unavailable')
+        target = matches[0]
+        if urlsplit(target).path != '/robots.txt' and not robots.allowed(target):
+            raise HttpError('recovery_robots_unavailable')
+        _body, _ctype, status = fetch(target)
+        # This receipt is not a claim of successful collection or a company update.
+        return {**report, 'recovered': True, 'response_status': status}
     if not website and not existing and candidates:
         stage("确认公司官网")
         report["tried"], report["rejected"] = [], {}
-        tolerant["on"] = True
         for home in candidates:
             report["tried"].append(home)
             try:
@@ -641,7 +682,7 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
                 if execution and isinstance(exc, RuntimeError) and not isinstance(exc, FeedError):
                     raise
                 report["errors"].append(f"确认官网：{type(exc).__name__}")
-        tolerant["on"] = False
+        finding_site = False
     discover_due = not existing or (len(existing) == 1 and existing[0]["added_by"] == "auto" and monitor.due_pages(project_id))
     if website and discover_due:
         home = sw.normalise_url(website)
@@ -660,16 +701,20 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
                 if execution and isinstance(exc, (RuntimeError, HttpError)) and not isinstance(exc, FeedError):
                     raise
                 report["errors"].append(f"发现页面：{type(exc).__name__}")
-    due = monitor.due_pages(project_id)
+    due = monitor.pages(project_id) if force else monitor.due_pages(project_id)
     if due:
         stage(f"检查官网 {len(due)} 个页面")
     for page in due:
         try:
             if not robots.allowed(page["url"]):
                 monitor.save_check(page["id"], status="robots_disallowed", error="robots.txt 未获允许或暂不可读取，本轮未访问页面")
+                report['errors'].append(f"{page['label']}：robots_disallowed")
                 continue
             body, ctype, status = fetch(page["url"])
             if status != 200:
+                if status == 599:
+                    code = body.decode('ascii', errors='replace')
+                    raise FeedError(code if re.fullmatch(r'[a-z_]{1,80}', code) else 'source_unavailable')
                 raise FeedError("http_failure", status=status)
             html = sw.decode(body, ctype)
             if html is None:
@@ -680,13 +725,15 @@ def check_sites(monitor: MonitorStore, transport, project_id: str, website: str 
                 monitor.save_check(page["id"], status="unreadable", error="页面内容需要脚本加载，无法读取")
                 continue
             report["checked"] += 1
+            if on_snapshot:
+                on_snapshot(page, blocks)
             previous = _previous_blocks(monitor, page["id"])
             if previous is None:
                 monitor.save_check(page["id"], status="ok", blocks=blocks)
                 continue
             added, removed = sw.diff(previous, blocks)
             changed = bool(added or removed)
-            if changed:
+            if changed and record_changes:
                 monitor.add_change(project_id, page, added, removed)
                 report["changed"] += 1
             monitor.save_check(page["id"], status="ok", blocks=blocks, changed=changed)

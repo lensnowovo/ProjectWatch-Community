@@ -11,8 +11,8 @@ from collections import Counter
 from collections.abc import Iterable
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 
-from project_watch.financial_vocabulary import FINANCIAL_METRIC_NAMES
 from project_watch.domain import Observation, SourceVersion
+from project_watch.financial_vocabulary import FINANCIAL_METRIC_NAMES
 
 _FINANCIAL_UNITS = frozenset({"元", "万元", "亿元"})
 _CONSOLIDATED_SCOPES = frozenset({"合并", "合并口径"})

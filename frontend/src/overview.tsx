@@ -10,10 +10,13 @@ import { EvidenceGaps } from "./judgment";
 import { QuestionAnalysis } from "./questionAnalysis";
 import { EventContextDrawer } from "./eventContext";
 import MonitoringDetails from "./MonitoringDetails";
-import { monitoringRevision } from "./workState";
+import { insightRevision, monitoringRevision } from "./workState";
+import { DossierOverview } from './CompanyDossierView';
+import { DossierRail, type DossierMotionState } from './DossierMotion';
+import { businessIntro, stageLabel } from './companyDossier';
 import { CATEGORY_LABEL, Drawer, ErrorNote, IMPORTANCE_LABEL, RefChips, locatorLabel, TONE_LABEL, formatAmount, relTime, useAsync, useOpenSource } from "./ui";
 
-export type Tab = "overview" | "brief" | "plan" | "ops" | "business" | "fin" | "risks" | "numbers" | "external" | "trials" | "papers" | "patents" | "competition" | "industry" | "documents";
+export type Tab = "overview" | "brief" | "plan" | "ops" | "business" | "fin" | "risks" | "numbers" | "external" | "trials" | "papers" | "patents" | "competition" | "chain" | "industry" | "documents";
 
 /** Categories that are about the company itself; competitors, industry and policy have their own tabs. */
 export const OWN_CATEGORIES = new Set(["company", "trial", "paper", "patent"]);
@@ -213,10 +216,7 @@ function dossierFacts(detail: ProjectDetail) {
 
 /** What the company does, in one line: internal research first, then a manual description, then the freshest cited business line. */
 export function companyIntro(detail: ProjectDetail): string {
-  const { project, profile } = detail;
-  const recentBusiness = dossierFacts(detail).business.find(f => f.kind === "business" && !/经营范围/.test(f.label) && sourceDay(f));
-  const manualIntro = project.entity_source === "manual" ? project.description : "";
-  return profile?.one_liner || manualIntro || recentBusiness?.text || project.description || "";
+  return businessIntro(detail);
 }
 
 /** 公司简介: what the company does, in one line, with the fuller summary one click away. */
@@ -350,11 +350,11 @@ function registryRows(detail: ProjectDetail): [string, ReactNode][] {
     ["工商全称", project.legal_name || project.name],
     ["统一社会信用代码", project.credit_code ? <span className="mono">{project.credit_code}</span> : ""],
     ["注册地址", address ? <>{address.text}{address.refs?.[0]?.url && <a className="registry-src muted small" href={address.refs[0].url} target="_blank" rel="noreferrer noopener">
-      {address.refs[0].source || "来源"} ↗</a>}</> : <span className="muted">暂无（更新公开档案时查找）</span>],
+      {address.refs[0].source || "来源"} ↗</a>}</> : <span className="muted">尚未取得</span>],
     ["成立", founded],
     ["所在地", place],
     ["行业 / 赛道", project.industry],
-    ["融资阶段", project.stage],
+    [stageLabel(project.stage), project.stage],
     ["官网", site ? <a href={site} target="_blank" rel="noreferrer noopener">{site.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗</a> : ""],
   ] as [string, ReactNode][]).filter(([, v]) => v);
   return rows;
@@ -381,11 +381,10 @@ export function CompanyRegistry({ detail }: { detail: ProjectDetail }) {
 // ------------------------------------------------------------------ page
 
 /** Company overview: an editorial lead, business narrative and a compact reference column. */
-export function CompanyOverview({ detail, onReload }: { detail: ProjectDetail; onReload: () => void }) {
-  const { project, profile } = detail;
+export function CompanyOverview({ detail, onReload, dossierMotion }: { detail: ProjectDetail; onReload: () => void; dossierMotion?: DossierMotionState }) {
+  const { project } = detail;
   const [error, setError] = useState<unknown>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [more, setMore] = useState(false);
   const updateDossier = async () => {
     setRefreshing(true); setError(null);
     try { await api.refresh(project.id, "public_profile"); onReload(); }
@@ -393,39 +392,10 @@ export function CompanyOverview({ detail, onReload }: { detail: ProjectDetail; o
     finally { setRefreshing(false); }
   };
   const basics = { detail, onRefreshDossier: updateDossier, refreshing };
-  const { pick } = dossierFacts(detail);
-  const founded = project.founded || pick("founded")[0]?.text;
-  const place = project.location || pick("location").find((f) => !REGISTERED_ADDRESS.test(f.label))?.text;
-  const intro = companyIntro(detail);
-  const summary = profile?.summary;
-  const cutoff = (profile as { material_cutoff?: { date?: string } } | null)?.material_cutoff?.date;
   return (
-    <div className="tab-frame profile-frame">
-      <section className="profile-lead" aria-labelledby="company-overview-title">
-        <div className="profile-lead-copy">
-          <div className="section-kicker"><span>公司概览</span><span aria-hidden="true">COMPANY PROFILE</span></div>
-          <h2 id="company-overview-title">{intro || <span className="muted">公司介绍尚未补充</span>}</h2>
-          {summary && summary !== intro && <div className="profile-abstract"><p className={!more && summary.length > 140 ? "clamp-3" : ""}>{summary}</p>
-            {summary.length > 140 && <button className="link small" aria-expanded={more} onClick={() => setMore((v) => !v)}>{more ? "收起" : "阅读全文"}</button>}</div>}
-          <div className="profile-provenance">{cutoff && <span>资料截至 {cutoff}</span>}<CompanyBasics {...basics} part="sources" /></div>
-        </div>
-        <dl className="profile-facts" aria-label="公司速览">
-          <div><dt>成立时间</dt><dd>{founded || "未披露"}</dd></div>
-          <div><dt>总部所在地</dt><dd>{place || "未披露"}</dd></div>
-          <div><dt>融资阶段</dt><dd>{project.stage || "未披露"}</dd></div>
-        </dl>
-      </section>
-      <Columns
-        main={<>
-          {!!profile?.highlights?.length && <Block title="关注要点" className="profile-notes"><CompanyBasics {...basics} part="highlights" /></Block>}
-          <Block title="业务与进展" className="profile-business"><CompanyBasics {...basics} part="main" /></Block>
-        </>}
-        side={<div className="company-aside">
-          <Block title="公司档案"><section aria-label="工商档案"><RegistryList detail={detail} /></section></Block>
-          <CompanyBasics {...basics} part="side" />
-        </div>} />
-      <ResearchQuestions projectId={detail.project.id} revision={`${detail.project.last_external_at ?? ""}|${detail.project.last_internal_at ?? ""}`} />
-      <CompanyBasics {...basics} part="milestones" />
+    <div className="dossier-live-layout"><div className="dossier-live-content">
+    <DossierOverview detail={detail} arrivals={dossierMotion?.project===detail.project.id && !detail.status_stale ? dossierMotion.receipts.map(r=>r.group) : []} sources={<CompanyBasics {...basics} part="sources" />} registry={<RegistryList detail={detail} />}>
+      <details className="cd-reference"><summary>研究问题与跟踪记录</summary><ResearchQuestions projectId={detail.project.id} revision={`${detail.project.last_external_at ?? ""}|${detail.project.last_internal_at ?? ""}`} /></details>
       <ErrorNote error={error} />
       {!!detail.trials?.length && (
         <Block card title="临床研究进度" note="ClinicalTrials.gov · 申办方或合作方匹配本公司">
@@ -433,7 +403,8 @@ export function CompanyOverview({ detail, onReload }: { detail: ProjectDetail; o
           <p className="evidence-note">登记阶段不代表已完成或药品获批。</p>
         </Block>
       )}
-      <p className="evidence-note">● 公司资料　○ 公开报道（未经公司确认）</p>
+    </DossierOverview></div>
+    {dossierMotion && <DossierRail detail={detail} state={dossierMotion}/>}
     </div>
   );
 }
@@ -483,7 +454,7 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
 }) {
   const { project, brief } = detail;
   const feed = useAsync(() => api.feed({ project_id: project.id, days: 60, limit: 80 }), [project.id, monitoringRevision(detail)]);
-  const deep = useAsync(() => api.insight(project.id), [project.id, project.last_external_at]);
+  const deep = useAsync(() => api.insight(project.id), [project.id, insightRevision(detail)]);
   const changes = collectChanges(detail, feed.data ?? []);
   const missingOCR = detail.documents.filter((d) => d.status === "needs_ocr" || d.status === "failed");
   const watch = brief?.watch ?? [];
@@ -523,7 +494,7 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
         </>} />
 
       <Reference items={[
-        { key: "evidence", title: "AI 判断的依据与缺口", note: record ? `引用 ${record.analysis.cited.length} 条 · 缺 ${record.analysis.gaps.length} 项` : undefined,
+        { key: "evidence", title: "判断依据", note: record ? `引用 ${record.analysis.cited.length} 条` : undefined,
           body: record ? <EvidenceGaps view={deep.data ?? null} /> : null },
         { key: "questions", title: "跟踪问题与你的判断", note: "问题本身在监控方案里维护",
           body: <QuestionsCard projectId={project.id} revision={`${project.last_external_at ?? ""}|${brief?.updated_at ?? ""}`} /> },
