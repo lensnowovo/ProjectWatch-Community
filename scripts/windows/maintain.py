@@ -239,68 +239,73 @@ def install(payload, root, home, *, move=False):
     site = Path(os.path.abspath(payload))/'runtime/Lib/site-packages'
     if site.is_dir() and str(site) not in sys.path:
         sys.path.append(str(site))  # The installer runs a minimal Python without site-packages.
-    from packaging.version import Version
-
     root, home, payload = *validate_roots(root, home), safe(payload)
     value = manifest(payload)
     version = digest(payload/'bundle-manifest.json')
     with lock(root/'.studio.lock'), lock(home/'desktop-session/.studio.lock'), lock(home/'.studio.lock'):
-        previous = state_at(root)
-        if previous and previous['home'] != display(home):
-            raise ValueError('Data home mismatch')
-        if previous:
-            previous_manifest = manifest(child(root, 'versions/'+previous['active']))
-            previous_version = previous.get('version') or previous_manifest['version']
-            if Version(value['version']) < Version(previous_version):
-                raise ValueError('Downgrade requires a verified matching data restore')
-        # Keep the prior implicit executor on upgrade without rewriting the data
-        # home. Explicit desktop-runtime.json choices take precedence at launch.
-        executor_default = 'dsh' if value.get('dsh') else 'classic'
-        if previous:
-            executor_default = previous.get('public_executor_default') or (
-                'dsh' if previous_manifest.get('dsh') else 'classic')
-            if executor_default not in ('dsh', 'classic'):
-                raise ValueError('Invalid previous executor default')
-        atomic(root/'install-owner.json', json.dumps({'format': 'projectwatch-desktop-owner-v1',
-                                                      'root': display(root), 'home': display(home)}))
-        # The bootstrap is stable for this installer generation. Its binary may
-        # differ between compiler invocations, but source changes need an explicit
-        # installer migration, not a two-file non-atomic activation.
-        launcher = safe(root/'ProjectWatch.exe')
-        if launcher.exists() and digest(launcher) != (previous or {}).get('launcher_sha256', digest(payload/'ProjectWatch.exe')):
-            raise ValueError('Customized launcher; Agent assistance required')
-        if previous and previous.get('launcher_source_sha256') != value.get('launcher_source_sha256'):
-            raise ValueError('Bootstrap changed; explicit installer migration required')
-        backup = snapshot(home, home.parent/'ProjectWatch-Desktop-backups'/uuid.uuid4().hex)
-        # Shared runtimes first: a version is only published once everything it uses exists.
-        for rid, entry in value.get('runtimes', {}).items():
-            install_runtime(payload/'runtimes'/rid, root, rid, entry['files'], move=move)
-        target = child(root, 'versions/'+version)
-        if target.exists():
-            verify_app(target, value)
-        else:
-            stage = child(root, 'versions/staging-'+uuid.uuid4().hex)
-            stage.mkdir(parents=True)
-            place(payload, stage, value['files'], move=move)
-            shutil.copy2(payload/'bundle-manifest.json', stage/'bundle-manifest.json')
-            stage.rename(target)
-        if not launcher.exists():
-            launcher_stage = child(root, 'launcher-'+uuid.uuid4().hex+'.tmp')
-            shutil.copy2(target/'ProjectWatch.exe', launcher_stage)  # The payload copy may have been moved.
-            if digest(launcher_stage) != value['files']['ProjectWatch.exe']:
-                raise ValueError('Launcher copy mismatch')
-            os.replace(launcher_stage, launcher)
-        versions = list(previous['versions']) if previous else []
-        if version not in versions:
-            versions.append(version)
-        state = {'format': 'projectwatch-desktop-install-v1', 'active': version, 'versions': versions,
-                 'version': value['version'],
-                 'public_executor_default': executor_default,
-                 'home': display(home), 'backup': backup, 'launcher_sha256': digest(launcher),
-                 'launcher_source_sha256': value.get('launcher_source_sha256')}
-        # One atomic file is the only launch pointer. Failed staging keeps old state.
-        atomic(root/'install-state.json', json.dumps(state))
-        return {'status': 'installed', 'active': version, 'backup_created': True}
+        return install_locked(payload, root, home, value, version, move=move)
+
+
+def install_locked(payload, root, home, value, version, *, move=False):
+    """Internal transaction: caller MUST hold all three installation/data locks."""
+    from packaging.version import Version
+
+    previous = state_at(root)
+    if previous and previous['home'] != display(home):
+        raise ValueError('Data home mismatch')
+    if previous:
+        previous_manifest = manifest(child(root, 'versions/'+previous['active']))
+        previous_version = previous.get('version') or previous_manifest['version']
+        if Version(value['version']) < Version(previous_version):
+            raise ValueError('Downgrade requires a verified matching data restore')
+    # Keep the prior implicit executor on upgrade without rewriting the data
+    # home. Explicit desktop-runtime.json choices take precedence at launch.
+    executor_default = 'dsh' if value.get('dsh') else 'classic'
+    if previous:
+        executor_default = previous.get('public_executor_default') or (
+            'dsh' if previous_manifest.get('dsh') else 'classic')
+        if executor_default not in ('dsh', 'classic'):
+            raise ValueError('Invalid previous executor default')
+    atomic(root/'install-owner.json', json.dumps({'format': 'projectwatch-desktop-owner-v1',
+                                                  'root': display(root), 'home': display(home)}))
+    # The bootstrap is stable for this installer generation. Its binary may
+    # differ between compiler invocations, but source changes need an explicit
+    # installer migration, not a two-file non-atomic activation.
+    launcher = safe(root/'ProjectWatch.exe')
+    if launcher.exists() and digest(launcher) != (previous or {}).get('launcher_sha256', digest(payload/'ProjectWatch.exe')):
+        raise ValueError('Customized launcher; Agent assistance required')
+    if previous and previous.get('launcher_source_sha256') != value.get('launcher_source_sha256'):
+        raise ValueError('Bootstrap changed; explicit installer migration required')
+    backup = snapshot(home, home.parent/'ProjectWatch-Desktop-backups'/uuid.uuid4().hex)
+    # Shared runtimes first: a version is only published once everything it uses exists.
+    for rid, entry in value.get('runtimes', {}).items():
+        install_runtime(payload/'runtimes'/rid, root, rid, entry['files'], move=move)
+    target = child(root, 'versions/'+version)
+    if target.exists():
+        verify_app(target, value)
+    else:
+        stage = child(root, 'versions/staging-'+uuid.uuid4().hex)
+        stage.mkdir(parents=True)
+        place(payload, stage, value['files'], move=move)
+        shutil.copy2(payload/'bundle-manifest.json', stage/'bundle-manifest.json')
+        stage.rename(target)
+    if not launcher.exists():
+        launcher_stage = child(root, 'launcher-'+uuid.uuid4().hex+'.tmp')
+        shutil.copy2(target/'ProjectWatch.exe', launcher_stage)  # The payload copy may have been moved.
+        if digest(launcher_stage) != value['files']['ProjectWatch.exe']:
+            raise ValueError('Launcher copy mismatch')
+        os.replace(launcher_stage, launcher)
+    versions = list(previous['versions']) if previous else []
+    if version not in versions:
+        versions.append(version)
+    state = {'format': 'projectwatch-desktop-install-v1', 'active': version, 'versions': versions,
+             'version': value['version'],
+             'public_executor_default': executor_default,
+             'home': display(home), 'backup': backup, 'launcher_sha256': digest(launcher),
+             'launcher_source_sha256': value.get('launcher_source_sha256')}
+    # One atomic file is the only launch pointer. Failed staging keeps old state.
+    atomic(root/'install-state.json', json.dumps(state))
+    return {'status': 'installed', 'active': version, 'backup_created': True}
 
 
 def verify_app(root, value):

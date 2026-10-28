@@ -2,7 +2,7 @@
 
 **Goal:** Cache unchanged build components and produce a manually applied, exact-base file update without shipping unchanged Python/DSH/Node bytes.
 
-**Architecture:** Keep the existing full installer and manifest-addressed version directories. A verified build cache holds dependency-only Python runtimes and shared runtime trees; the application wheel is installed separately. An update contains the target manifest, changed/new files, and an offline maintenance runner. Under the existing program/home locks, verify the exact base and local modifications, reconstruct a new payload, back up data and atomically activate through existing maintenance code. Never patch the active files in place.
+**Architecture:** Keep the existing full installer and manifest-addressed version directories. A verified build cache holds dependency-only Python runtimes; DSH reuses its existing separately prepared, verified tree. The application wheel is installed separately. An update contains the target manifest, changed/new files, and an offline maintenance runner. Under the existing program/home locks, verify the exact base and local modifications, reconstruct a new payload, back up data and atomically activate through existing maintenance code. Never patch the active files in place.
 
 **Tech stack:** Python standard library, existing pip/wheel locking, NSIS full installer, Windows command wrapper. No network updater, binary diff, automatic downloads, new business features, or production access.
 
