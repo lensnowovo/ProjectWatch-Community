@@ -814,7 +814,9 @@ class PublicBootstrap:
             item = self.store.item_by_key(self.project_id, key)
             # INSERT OR IGNORE deliberately preserves user state. Append new
             # claims separately so later categories do not erase prior findings.
-            with closing(self.store._connect()) as db, db:
+            from project_watch.studio.event_revisions import changing_items
+
+            with closing(self.store._connect()) as db, db, changing_items(db, [item['id']]):
                 extra = json.loads(db.execute("SELECT extra FROM studio_items WHERE id=?", (item["id"],)).fetchone()[0] or "{}")
                 retained = list(extra.get("dsh_claims") or [])
                 for row in claims:

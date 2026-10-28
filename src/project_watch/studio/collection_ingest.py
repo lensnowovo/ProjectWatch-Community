@@ -79,6 +79,10 @@ class CollectionIngest:
             for statement in SCHEMA:
                 db.execute(statement)
             db.execute(evidence_tasks.SCHEMA)
+            from project_watch.studio.material_ownership import SCHEMA as ownership_schema
+
+            for statement in ownership_schema:
+                db.execute(statement)
 
     def __call__(self, unit, items):
         try:
@@ -158,12 +162,18 @@ class CollectionIngest:
                        (item_id, self.project_id, key, category, item['title'], item['url'], item['source'],
                         item['snippet'], item.get('published_at'), now(), _json(item.get('extra', {}))))
         elif not historical and operation == 'updated':
+            from project_watch.studio.event_revisions import record as record_event
+
+            if existing['event_id']:
+                record_event(db, self.project_id, existing['event_id'])
             extra = json.loads(existing['extra'] or '{}')
             extra.update(item.get('extra', {}))
             db.execute('UPDATE studio_items SET title=?,url=?,source=?,snippet=?,published_at=?,extra=?,triaged=0 '
                        'WHERE id=? AND project_id=?',
                        (item['title'], item['url'], item['source'], item['snippet'], item.get('published_at'),
                         _json(extra), item_id, self.project_id))
+            if existing['event_id']:
+                record_event(db, self.project_id, existing['event_id'])
         if not older_source:
             db.execute('INSERT INTO studio_collection_sources VALUES (?,?,?,?,?) '
                        'ON CONFLICT(project_id,identity) DO UPDATE SET evidence_version_id=excluded.evidence_version_id,'

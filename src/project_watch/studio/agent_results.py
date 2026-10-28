@@ -66,6 +66,9 @@ def submit(service, project_id, body, token):
             event_id = existing_id or uuid.uuid4().hex
             event_ids[news.key] = event_id
             if existing_id:
+                from project_watch.studio.event_revisions import record
+
+                record(db, project_id, event_id)
                 db.execute('UPDATE studio_events SET title=?,summary=?,impact=?,category=?,importance=?,event_at=?,updated_at=? '
                            'WHERE id=? AND project_id=?',
                            (news.title,news.summary,news.impact,news.category,news.importance,
@@ -77,8 +80,14 @@ def submit(service, project_id, body, token):
                             news.event_at.isoformat() if news.event_at else None,ts,ts,ts))
                 _state(db, key, event_id)
             for ref_id in news.refs:
+                from project_watch.studio.event_revisions import previous_memberships
+                from project_watch.studio.event_revisions import record as record_event
+
                 src = sources[ref_id]
                 item_key = 'agent:' + hashlib.sha256((key + ':' + src['url']).encode()).hexdigest()
+                existing_items = [row[0] for row in db.execute('SELECT id FROM studio_items WHERE project_id=? AND key=?',
+                                                              (project_id, item_key))]
+                previous_events = previous_memberships(db, project_id, existing_items)
                 extra = {'agent_result':origin, 'read_scope':src['read_scope'], 'source_published_at':src['published_at'],
                          'assertion':'Agent-submitted source extraction, not server-fetched verification'}
                 db.execute('INSERT INTO studio_items (id,project_id,key,category,title,url,source,snippet,published_at,collected_at,'
@@ -89,6 +98,11 @@ def submit(service, project_id, body, token):
                            (uuid.uuid4().hex,project_id,item_key,news.category,src['title'],src['url'],src['title'],src['text'][:600],
                             src['published_at'],ts,news.importance,news.summary,news.impact,_json(extra),src['text'],
                             'search_summary' if src['read_scope']=='summary' else 'agent_excerpt',event_id))
+                for previous_event in previous_events:
+                    record_event(db, project_id, previous_event)
+            from project_watch.studio.event_revisions import record
+
+            record(db, project_id, event_id)
         record = {'id':uuid.uuid4().hex, 'producer':body.producer, 'actor':actor, 'received_at':ts,
                   'visibility':'internal' if internal else 'public', 'sources':sources,
                   'company':body.company.model_dump() if body.company else None,

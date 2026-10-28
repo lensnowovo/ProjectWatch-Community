@@ -508,10 +508,10 @@ class Pipeline:
 
         return Http(urllib_transport(settings.proxy_url))
 
-    def tools(self, settings: StudioSettings | None = None) -> tuple[StudioSettings, Http, LLM, Collectors]:
+    def tools(self, settings: StudioSettings | None = None, *, execution=None) -> tuple[StudioSettings, Http, LLM, Collectors]:
         settings = settings or self.settings_store.load()
         http = self.http_factory(settings)
-        execution = getattr(self._execution_state, "current", None)
+        execution = execution or getattr(self._execution_state, "current", None)
         if execution:
             def classify(url):
                 host = urlsplit(url).hostname or "unknown"

@@ -38,7 +38,7 @@ def test_ingest_atomically_admits_once_and_replay_does_not_repeat_processing(own
     calls = []
 
     def extract(source, parent):
-        assert parent is execution  # shares original lease, receipt namespace and budget
+        assert parent.job is execution.job  # same lease, receipt namespace and budget
         calls.append(source['task_id'])
         return proposal(source, parent)
 

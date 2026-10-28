@@ -99,20 +99,24 @@ item-format errors. Invalid returned structure affects only that material.
 """
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('invalid material batch size')
+    from project_watch.studio.material_ownership import MaterialExecution, project_guard
+
     with closing(execution.store._connect()) as db:
         execution._guard(db)
         tasks = [dict(row) for row in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
             "AND policy=? AND status='pending' ORDER BY rowid LIMIT ?",
             (execution.job['id'], execution.job['project_id'], POLICY, limit))]
     for task in tasks:
+        material = MaterialExecution(execution, task)
         with closing(execution.store._connect()) as db:
-            execution._guard(db)
+            material._guard(db)
+            project_guard(db, task['project_id'], execution.job['id'])
             withdrawn = _withdrawn(db, task)
         if withdrawn:
             _save(execution, task, 'rejected', {'code': 'source_withdrawn'})
             continue
         source = _input(execution, task)
-        response = extractor(source, execution)
+        response = extractor(source, material)
         try:
             proposed = Proposal.model_validate(response)
             observations = []

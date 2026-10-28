@@ -1,5 +1,8 @@
 """Fresh, bounded DSH material extraction; host retains all business ownership."""
+import hashlib
 import json
+from contextlib import closing
+from copy import copy
 
 from project_watch.studio import dsh_runtime
 from project_watch.studio.evidence_tasks import Proposal
@@ -23,11 +26,16 @@ class Extraction:
         self.session_id = 'extract-' + source['task_id']
         self.runtime_receipt_stage = 'extract_runtime:' + source['task_id']
         self.submission_stage = 'extract_result:' + source['task_id']
+        self.attempt_stage = 'extract_attempt:' + source['task_id']
         self.task = json.dumps(source, ensure_ascii=False, sort_keys=True)
         self.state = {'finished': self.execution.read_checkpoint(self.submission_stage)}
 
     def guard(self):
         self.parent.guard()
+        from project_watch.studio.material_ownership import project_guard
+
+        with closing(self.store._connect()) as db:
+            project_guard(db, self.project_id, self.execution.job['id'])
 
     def hold(self, code):
         self.parent.hold(code)
@@ -63,25 +71,50 @@ class ExtractionGateway(dsh_runtime.Gateway):
             names = [tool.get('function', {}).get('name') for tool in payload.get('tools', [])]
             if names != [TOOL]:
                 raise ValueError('unexpected extraction tool exposure')
-            if self.model_requests >= 2:
+            body = {key: payload[key] for key in ('model', 'messages', 'tools', 'tool_choice') if key in payload}
+            body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 4000))
+            signature = hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
+                                                 sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            attempted = self.research.execution.read_checkpoint(self.research.attempt_stage) or []
+            if self.model_requests >= 2 or (signature not in attempted and len(attempted) >= 2):
                 self.research.tool(TOOL, {'invalid': 'material_turn_limit'})
                 return {'choices': [{'message': {'role': 'assistant', 'content': '本份材料提取已停止。'}, 'finish_reason': 'stop'}]}
             self.advertised_tools.update(names)
-            body = {key: payload[key] for key in ('model', 'messages', 'tools', 'tool_choice') if key in payload}
-            body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 4000))
+            if signature not in attempted:
+                self.research.execution.checkpoint(self.research.attempt_stage, [*attempted, signature])
             # Keep every role in the existing journal and parent budget. The
             # source/task ID in the prompt prevents unrelated material aliasing.
             return self._send_model(body)
 
 
-def extract(parent, source, model, http, runtime_root, directory):
+def extract(parent, source, model, http, runtime_root, directory, *, execution=None):
     """No scheduler entry: invoked by the material processor on an owned job."""
+    if execution is not None:
+        parent = copy(parent)
+        parent.execution = execution
+        # Rebind the existing transport journal to this material, not the
+        # pipeline thread's parent-only HTTP closure. Never wrap it twice.
+        _, http, _, _ = parent.pipeline.tools(execution=execution)
     role = Extraction(parent, source)
     role.guard()
     if role.state['finished'] is not None:
         return role.state['finished']['proposal']
     gateway = ExtractionGateway(role, model, dsh_runtime.guarded_http(role, http))
-    result = dsh_runtime.run_dsh(role, gateway, runtime_root, directory / role.session_id, timeout=180)
+    try:
+        result = dsh_runtime.run_dsh(role, gateway, runtime_root, directory / role.session_id, timeout=180)
+    except HttpError as exc:
+        if exc.code != 'dsh_no_valid_submission':
+            raise
+        # Only a normally ended, fully drained role without a hold can become
+        # a local rejection. Unknown, deadline, lease and budget errors propagate.
+        role.guard()
+        receipt = role.execution.read_checkpoint(role.runtime_receipt_stage) or {}
+        if not (receipt.get('initialized') and receipt.get('prompted') and receipt.get('idle')
+                and receipt.get('drained') and not receipt.get('runtime_failure')
+                and receipt.get('error') == 'dsh_no_valid_submission'):
+            raise
+        role.tool(TOOL, {'invalid': 'no_candidate_submitted'})
+        result = role.state['finished']
     return result['proposal']
 
 

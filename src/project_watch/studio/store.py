@@ -279,6 +279,9 @@ class StudioStore:
         from project_watch.studio.evidence_store import EvidenceStore
 
         self.evidence = EvidenceStore(self)
+        from project_watch.studio.event_revisions import EventRevisions
+
+        self.event_revisions = EventRevisions(self)
 
     def _connect(self) -> sqlite3.Connection:
         from project_watch.studio.write_fencing import FencedConnection
@@ -761,7 +764,9 @@ class StudioStore:
         return [dict(r) for r in rows]
 
     def save_triage(self, results: list[dict]) -> None:
-        with closing(self._connect()) as db, db:
+        from project_watch.studio.event_revisions import changing_items
+
+        with closing(self._connect()) as db, db, changing_items(db, [r['id'] for r in results]):
             db.executemany(
                 """UPDATE studio_items SET triaged=1, relevant=?, importance=?, summary=?, impact=?,
                 category=COALESCE(?, category) WHERE id=?""",
@@ -807,9 +812,11 @@ class StudioStore:
         return out
 
     def set_item_status(self, item_id: str, status: str) -> None:
+        from project_watch.studio.event_revisions import changing_items
+
         if status not in ITEM_STATUS:
             raise ValueError("invalid status")
-        with closing(self._connect()) as db, db:
+        with closing(self._connect()) as db, db, changing_items(db, [item_id]):
             if db.execute("UPDATE studio_items SET status=? WHERE id=?",
                           (status, item_id)).rowcount == 0:
                 raise KeyError(item_id)
@@ -830,8 +837,9 @@ class StudioStore:
 
     def save_body_prefilter(self, decisions: list[dict], *, guard=None) -> None:
         """Store provisional reading choices, never change relevance or triaged state."""
-        with closing(self._connect()) as db, db:
-            db.execute("BEGIN IMMEDIATE")
+        from project_watch.studio.event_revisions import changing_items
+
+        with closing(self._connect()) as db, db, changing_items(db, [r['id'] for r in decisions]):
             if guard:
                 guard(db)
             for decision in decisions:
@@ -854,11 +862,11 @@ class StudioStore:
 
     def save_body(self, item_id: str, status: str, body: str, *, donor: dict | None = None,
                   resolved_url: str | None = None, guard=None) -> None:
+        from project_watch.studio.event_revisions import changing_items
         from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePart
         from project_watch.studio.provenance import provenance
 
-        with closing(self._connect()) as db, db:
-            db.execute("BEGIN IMMEDIATE")
+        with closing(self._connect()) as db, db, changing_items(db, [item_id]):
             if guard:
                 guard(db)
             row = db.execute("SELECT * FROM studio_items WHERE id=?", (item_id,)).fetchone()
@@ -1039,6 +1047,9 @@ class StudioStore:
     @staticmethod
     def _insert_event(db: sqlite3.Connection, project_id: str, event: dict,
                       item_ids: list[str], *, status: str = "new") -> str:
+        from project_watch.studio.event_revisions import previous_memberships, record
+
+        previous = previous_memberships(db, project_id, item_ids)
         ts = now()
         event_id = uuid.uuid4().hex
         db.execute(
@@ -1049,16 +1060,23 @@ class StudioStore:
              event.get("event_at"), ts, ts, status))
         db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
                        [(event_id, i, project_id) for i in item_ids])
+        for old_event in previous:
+            record(db, project_id, old_event)
+        record(db, project_id, event_id)
         return event_id
 
     def attach_to_event(self, event_id: str, item_ids: list[str], *, importance: str,
                         impact: str = "", summary: str = "") -> None:
         rank = {"major": 0, "notable": 1, "routine": 2}
         with closing(self._connect()) as db, db:
-            row = db.execute("SELECT importance, impact, summary FROM studio_events WHERE id=?",
+            row = db.execute("SELECT project_id, importance, impact, summary FROM studio_events WHERE id=?",
                              (event_id,)).fetchone()
             if row is None:
                 raise KeyError(event_id)
+            from project_watch.studio.event_revisions import previous_memberships, record
+
+            record(db, row['project_id'], event_id)
+            previous = previous_memberships(db, row['project_id'], item_ids)
             upgraded = rank.get(importance, 2) < rank.get(row["importance"], 2)
             # A more important report upgrades the event and re-surfaces it as unread.
             new_impact = impact if (upgraded and impact) else (row["impact"] or impact)
@@ -1069,8 +1087,11 @@ class StudioStore:
                 notified_at=CASE WHEN ? THEN NULL ELSE notified_at END WHERE id=?""",
                 (importance if upgraded else row["importance"], new_impact[:600], new_summary[:600],
                  now(), 1 if upgraded else 0, 1 if upgraded and importance == "major" else 0, event_id))
-            db.executemany("UPDATE studio_items SET event_id=? WHERE id=?",
-                           [(event_id, i) for i in item_ids])
+            db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
+                           [(event_id, i, row['project_id']) for i in item_ids])
+            for old_event in previous - {event_id}:
+                record(db, row['project_id'], old_event)
+            record(db, row['project_id'], event_id)
 
     def list_events(self, *, project_id: str | None = None, category: str | None = None,
                     importance: str | None = None, include_dismissed: bool = False,
@@ -1131,11 +1152,19 @@ class StudioStore:
         if status not in ITEM_STATUS:
             raise ValueError("invalid status")
         with closing(self._connect()) as db, db:
+            from project_watch.studio.event_revisions import record
+
+            original = db.execute('SELECT project_id FROM studio_events WHERE id=?', (event_id,)).fetchone()
+            if not original:
+                raise KeyError(event_id)
+            record(db, original[0], event_id)
             if db.execute("UPDATE studio_events SET status=? WHERE id=?",
                           (status, event_id)).rowcount == 0:
                 raise KeyError(event_id)
             if status == "dismissed":
                 db.execute("UPDATE studio_items SET status='dismissed' WHERE event_id=?", (event_id,))
+            project_id = db.execute('SELECT project_id FROM studio_events WHERE id=?', (event_id,)).fetchone()[0]
+            record(db, project_id, event_id)
 
     # ---------- jobs ----------
     def enqueue(self, project_id: str, kind: str, *, automatic: bool = False, input_version: str = "", db=None) -> dict:
