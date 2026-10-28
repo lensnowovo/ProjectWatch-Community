@@ -2,13 +2,14 @@
 from project_watch.studio import collection_continuation, collection_history
 from project_watch.studio.collection_ingest import CollectionIngest
 from project_watch.studio.collection_ledger import STAGE, SUPPLEMENTS, CollectionLedger
+from project_watch.studio.collection_plan import reconcile
 from project_watch.studio.collection_runner import run_collection
 from project_watch.studio.collection_scope import build_collection_plan
 from project_watch.studio.collection_sites import CollectionSites
 from project_watch.studio.collection_sources import CollectionSources
 from project_watch.studio.collection_targets import source_decisions, targets
 from project_watch.studio.dsh_bootstrap import digest
-from project_watch.studio.http import Http
+from project_watch.studio.http import Http, HttpError
 from project_watch.studio.store import now
 
 ADMISSION = 'collection_admission_v1'
@@ -90,11 +91,48 @@ def sources_for(research):
     return sources
 
 
+def restore_for_continuation(research):
+    """Read saved host work before the single authorized model continuation.
+
+    No collection or tool dispatch is admitted by this preparation. The gateway
+    still consumes the existing one-shot slot, and only a valid reply clears hold.
+    """
+    from project_watch.studio.recovery import dsh_model_continuation
+
+    execution = research.execution
+    if not dsh_model_continuation(research.pipeline, execution):
+        return None
+    if (execution.read_checkpoint('dsh_hold') or {}).get('code') != 'request_outcome_unknown':
+        return None
+    previous = research.recovery_admission
+    research.recovery_admission = True
+    try:
+        guard_scope(research)
+    finally:
+        research.recovery_admission = previous
+    frozen, manifest = execution.read_checkpoint(SCOPE), execution.read_checkpoint(STAGE)
+    if not frozen or not manifest:
+        raise HttpError('collection_checkpoint_incomplete')
+    plan = manifest['plan']
+    if (plan['round_id'] != execution.job['id'] or plan['project_id'] != research.project_id
+            or plan['binding'] != digest(frozen)):
+        raise HttpError('collection_checkpoint_mismatch')
+    result = reconcile(plan, manifest['receipts'])
+    if any(row['outcome'] in ('pending', 'running', 'unknown') for row in result['rows']):
+        raise HttpError('collection_checkpoint_incomplete')
+    # Bind the normal guarded clients for later tools, without invoking them.
+    sources_for(research)
+    return result
+
+
 def prepare(research):
     execution = research.execution
     admission = execution.read_checkpoint(ADMISSION)
     if not admission or not admission['enabled']:
         return None
+    restored = restore_for_continuation(research)
+    if restored is not None:
+        return restored
     # pipeline.tools must have created the job's journal/cache, not the direct
     # operation client. Reject incorrect composition before any provider call.
     research.guard()

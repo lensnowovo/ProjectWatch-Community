@@ -415,7 +415,7 @@ export interface RecoveryPreview {
   requests: Record<string, number>;
   requires_duplicate_cost_consent: boolean;
   job_status: string;
-  mode: 'resume' | 'checkpoint_continuation';
+  mode: 'resume' | 'checkpoint_continuation' | 'model_continuation';
   notice: string;
   continuation_job_id?: string | null;
 }

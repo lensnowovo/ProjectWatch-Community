@@ -172,10 +172,14 @@ def _preview(pipeline, project_id, job_id, db):
     version = digest({'job': dict(job), 'calls': [dict(c) for c in calls],
                       'queries': [q['id'] for q in queries], 'binding': binding, 'blocking_requests': blockers,
                       'linked': dict(linked) if linked else None})
+    model_resume = (dsh_enabled() and requests == {'model': 1} and not queries
+                    and job['kind'] in ('external', 'external_followup')
+                    and db.execute("SELECT 1 FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_state'",
+                                   (job_id,)).fetchone() is not None)
     public = {'job_id': job_id, 'kind': job['kind'], 'version': version,
               'can_recover': not reason, 'reason': reason, 'requests': requests,
               'requires_duplicate_cost_consent': True, 'job_status': job['status'],
-              'mode': 'checkpoint_continuation' if terminal else 'resume',
+              'mode': 'checkpoint_continuation' if terminal else 'model_continuation' if model_resume else 'resume',
               'continuation_job_id': linked['id'] if linked else None,
               'notice': ('只恢复这条网页请求，模型错误仍需另行确认，完整链路暂不继续。'
                          if blockers and not reason else '')}

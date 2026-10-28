@@ -64,6 +64,8 @@ export function RecoveryDialog({ projectId, job, onClose, onQueued }: {
       {state?.can_recover && <>
         <p id="recovery-description">{state.mode === 'checkpoint_continuation'
           ? '旧任务和回执保留。将新建续跑任务，基于已保存资料重新取得模型回答；这不是原 HTTP 请求的逐字重放，可能再次计费。'
+          : state.mode === 'model_continuation'
+            ? '进度已保存，可继续。将从已有资料继续未完成的研究，不重发旧请求；需要新的模型调用，可能产生费用。'
           : '已有内容保留。以下请求结果不明或未取得可用回答，恢复可能再次计费。'}</p>
         {state.notice && <p>{state.notice}</p>}
         <ul className="recovery-requests">{Object.entries(state.requests).map(([kind, count]) =>
@@ -73,7 +75,9 @@ export function RecoveryDialog({ projectId, job, onClose, onQueued }: {
         ? '上次更新遇到错误，可以重新处理。已有内容保留。' : state.reason}</p>}
       <footer className="modal-foot"><button className="btn" disabled={busy} onClick={onClose}>取消</button>
         {(state?.can_recover || knownFailure) && <button className="btn btn-primary" disabled={busy} onClick={submit}>
-          {busy ? '正在安排…' : state?.can_recover ? '确认重新请求' : '重新处理'}</button>}</footer>
+          {busy ? '正在安排…' : state?.can_recover
+            ? state.mode === 'model_continuation' || state.mode === 'checkpoint_continuation' ? '从已保存进度继续' : '确认重新请求'
+            : '重新处理'}</button>}</footer>
     </div>
   </div>, document.body);
 }
