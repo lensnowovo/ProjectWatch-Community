@@ -922,6 +922,7 @@ export const api = {
     `/api/studio/projects/${id}/research-topic/${encodeURIComponent(watchId)}`),
   startTopicResearch: (id: string, watchId: string, version: string) => request<Job>('POST',
     `/api/studio/projects/${id}/research-topic`, { watch_id: watchId, expected_version: version }),
+  discoveredSources: (id: string, offset = 0) => request<DiscoveredSourcePage>('GET', `/api/studio/projects/${id}/discovered-sources?offset=${offset}`),
   collectionSources: (id: string) => request<CollectionSourceChoices>('GET', `/api/studio/projects/${id}/collection-sources`),
   chooseCollectionSource: (id: string, adapter: string, selection: SourceSelection, reason: string, expected_version: number) =>
     request<CollectionSourceDecision>('PUT', `/api/studio/projects/${id}/collection-sources/${encodeURIComponent(adapter)}`,
@@ -980,3 +981,10 @@ export const api = {
   setCrossCheck: (checkId: string, status: CrossCheck["status"]) => request("PATCH", `/api/studio/crosschecks/${checkId}`, { status }),
   watchEvents: (watchId: string) => request<EventDTO[]>("GET", `/api/studio/watchpoints/${watchId}/events`).then((rows) => rows.map(eventToItem)),
 };
+export interface DiscoveredSourcePage {
+  items: { id: string; title: string; url: string; source: string; published_at: string | null;
+    collected_at: string; observed_at: string; evidence_version_id: string; source_type: string;
+    read_scope: string; read_status: string | null; reading_basis: string | null;
+    body_evidence_version_id: string | null; processing_status: 'pending' | 'organized' }[];
+  total: number; pending: number; offset: number; next_offset: number | null;
+}

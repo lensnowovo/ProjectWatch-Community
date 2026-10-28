@@ -2,6 +2,7 @@
   "schema_version": 1,
   "composition_root": "project_watch.studio.app",
   "modules": {
+    "project_watch.studio.collection_view": "Core",
     "project_watch.studio.collection_plan": "Core",
     "project_watch.studio.collection_ledger": "Core",
     "project_watch.studio.collection_scope": "Core",

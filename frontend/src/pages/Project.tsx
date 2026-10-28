@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { collectionChannelExecution, collectionExecutionLabel } from "../externalCollection";
+import { DiscoveredSources } from "../DiscoveredSources";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
@@ -100,6 +101,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
       </nav>
       </div>
       {section.id === "external" && <CategoryStrip key={data.project.id} detail={data} page={tab} go={setTab} />}
+      {section.id === "external" && <DiscoveredSources key={data.project.id} projectId={data.project.id}
+        revision={data.collection_report?.observed_at ?? commercialRevision} />}
       {section.id === "internal" && <PageStrip label="内部信息分区" page={tab} go={setTab} cells={internalCounts(data)} />}
       {section.pages.length > 1 && section.id !== "external" && section.id !== "internal" && <nav className="subtabs" aria-label={`${section.label}分区`}>
         {section.pages.map((p) => <button key={p.id} className={tab === p.id ? "on" : ""} aria-current={tab === p.id ? "page" : undefined} onClick={() => setTab(p.id)}>

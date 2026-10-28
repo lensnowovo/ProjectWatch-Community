@@ -1075,6 +1075,13 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(409, str(exc)) from exc
 
     # ------------------------------------------------------------- feed
+    @app.get("/api/studio/projects/{project_id}/discovered-sources")
+    def discovered_sources(project_id: str, limit: int = 20, offset: int = 0):
+        from project_watch.studio.collection_view import discovered_sources as source_page
+
+        project_or_404(project_id)
+        return source_page(store, project_id, limit=max(1, min(limit, 100)), offset=max(0, offset))
+
     @app.get("/api/studio/feed")
     def feed(project_id: str | None = None, category: str | None = None,
              importance: str | None = None, days: int | None = None,
