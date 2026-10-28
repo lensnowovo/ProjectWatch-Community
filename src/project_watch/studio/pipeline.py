@@ -522,7 +522,9 @@ class Pipeline:
                     return "model", host + settings.model.api_key
                 search_hosts = {"api.bochaai.com", "api.tavily.com", "api.search.brave.com"}
                 return ("search" if host in search_hosts else "open_data"), host + json.dumps(settings.search.credentials(), sort_keys=True)
-            http = execution.http(http, classify)
+            from project_watch.studio.collection_pages import public_read_request
+
+            http = execution.http(http, classify, public_read=public_read_request)
         else:
             from project_watch.studio.usage import direct_http
 

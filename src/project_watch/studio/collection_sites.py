@@ -39,7 +39,8 @@ class CollectionSites:
 
             key = hashlib.sha256(('collection-site:https://' + host + path).encode()).hexdigest()
             try:
-                saved = execution.call('page', key, request, provider='collection_site:' + host, read_only=True)
+                saved = execution.call('page', key, request, provider='collection_site:' + host,
+                                       read_only=True, public_read=True)
             except Exception as exc:
                 if any(row['unknown'] for row in execution.usage().values()):
                     raise HttpError('request_outcome_unknown') from exc

@@ -169,13 +169,16 @@ def test_analysis_only_keeps_existing_evidence_without_collection_admission(setu
 
 
 @pytest.mark.skipif(not os.environ.get('PW_DSH_TEST_RUNTIME'), reason='requires pinned official DSH')
-def test_official_dsh_full_entry_uses_automatically_collected_evidence(setup):
+@pytest.mark.parametrize('public_timeout', [False, True])
+def test_official_dsh_full_entry_uses_automatically_collected_evidence(setup, public_timeout):
     pipeline, execution = setup
     source_calls, model_calls, selected = [], [], {}
 
     def send(_method, url, _headers, raw, _timeout):
         if urlsplit(url).hostname != 'model.example.invalid':
             source_calls.append(url)
+            if public_timeout and urlsplit(url).hostname == 'www.cninfo.com.cn':
+                raise HttpError('connection_failed', transport_phase='connect_or_headers', failure_kind='timeout')
             return response(url)
         assert len(source_calls) == 3
         payload = json.loads(raw)
@@ -212,4 +215,8 @@ def test_official_dsh_full_entry_uses_automatically_collected_evidence(setup):
     [fact] = pipeline.store.get_public_profile(execution.job['project_id'])['facts']
     assert fact['refs'][0]['evidence_version_id'] == selected['evidence_version_id']
     assert execution.usage()['model']['completed'] == 5
-    assert execution.usage()['open_data']['completed'] == 3
+    assert execution.usage()['open_data']['completed'] == (2 if public_timeout else 3)
+    assert execution.usage()['open_data']['unknown'] == 0
+    if public_timeout:
+        assert any(row['outcome'] == 'failed' and row['reason'] == 'public_read_failed'
+                   for row in result['collection']['rows'])

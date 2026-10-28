@@ -1,9 +1,30 @@
 """Bounded structured-source pages, retaining source dates and continuation."""
 from datetime import date
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from project_watch.studio.http import HttpError
 from project_watch.studio.sources import _item, _openalex_abstract, _plain
+
+
+def public_read_request(method, url, headers, body):
+    """Host-owned contracts for unauthenticated public query adapters.
+
+    These exact routes are read operations; other routes, credentials, methods
+    and providers do not inherit their failure policy. Never inferred by a model.
+    """
+    endpoint = urlsplit(url)
+    contracts = {
+        ('api.openalex.org', '/works'): {'page', 'per-page', 'sort', 'select', 'search', 'filter'},
+        ('clinicaltrials.gov', '/api/v2/studies'): {'pageSize', 'sort', 'format', 'query.spons', 'query.term', 'pageToken'},
+        ('www.cninfo.com.cn', '/new/fulltextSearch/full'): {
+            'searchkey', 'sdate', 'edate', 'isfulltext', 'sortName', 'sortType', 'pageNum', 'pageSize'},
+    }
+    parameters = contracts.get((endpoint.hostname, endpoint.path))
+    return (method == 'GET' and body is None and endpoint.scheme == 'https'
+            and not endpoint.username and not endpoint.password and endpoint.port in (None, 443)
+            and set(key.lower() for key in headers) <= {'accept', 'referer', 'user-agent'}
+            and parameters is not None
+            and {key for key, _ in parse_qsl(endpoint.query, keep_blank_values=True)} <= parameters)
 
 
 def _rows(data, key):

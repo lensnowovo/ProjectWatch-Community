@@ -129,7 +129,7 @@ class CollectionSources:
                 # Only a known source failure or budget limit can close with
                 # partial data. Pause/recovery/unknown gates retain the original
                 # exception and stop the round before any further dispatch.
-                recoverable = exc.code == 'request_budget' or exc.code.startswith(
+                recoverable = exc.code in ('request_budget', 'public_read_failed') or exc.code.startswith(
                     ('invalid_', 'inconsistent_', 'http_', 'collection_cursor_'))
                 unknown = any(v['unknown'] for v in self.execution.usage().values())
                 if not state['pages'] or not recoverable or unknown:
