@@ -31,3 +31,14 @@ test('no job and failed job are distinct, and failure links to existing task rev
   assert.match(html, /本轮未完成/); assert.match(html, /href="\/tasks"/);
   assert.doesNotMatch(html, /本题研究结果/);
 });
+
+test('separate assessment pending and stale knowledge preserve the previous answer', () => {
+  const html = render({...base, scope_changed: false, assessment_job: {...base.job, status:'queued'},
+    result: {...base.result, status:'pending', answer_status:'answered', knowledge_state:'needs_recheck',
+      text:'Previous answer remains', closure:'owner_confirmation_required'}});
+  assert.match(html, /问题评估：已排队/);
+  assert.match(html, /旧回答待复核/);
+  assert.match(html, /Previous answer remains/);
+  assert.match(html, /评估尚未完成/);
+  assert.match(html, /等待所有者确认/);
+});

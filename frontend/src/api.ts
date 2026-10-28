@@ -290,10 +290,12 @@ export interface PlanItem {
 }
 export interface TopicResearchView {
   job: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
+  assessment_job?: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
   question: { text: string; exit_rule: string; lifecycle_version: string } | null;
   scope_changed: boolean;
-  result: { status: 'partial' | 'complete'; collection_status: 'partial' | 'complete' | null;
-    answer_status: 'answered' | 'insufficient'; text: string; gaps: string[];
+  result: { status: 'partial' | 'complete' | 'pending'; collection_status: 'partial' | 'complete' | null;
+    answer_status: 'answered' | 'insufficient' | 'unresolved'; text: string; gaps: string[];
+    knowledge_state?: 'answered' | 'unresolved' | 'unknown' | 'needs_recheck'; closure?: string;
     sources: { ref: string; title: string; url: string; date: string; context: string; context_kind: string }[] } | null;
 }
 export interface ModuleHit { id?: string; title: string; url?: string; date: string; importance?: string; source?: string; planned?: boolean }
@@ -399,7 +401,7 @@ export interface Job {
   runtime?: JobRuntime;
   dismissed?: boolean;
   id: string;
-  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope";
+  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope" | "assessment";
   status: "queued" | "running" | "done" | "failed";
   stage: string;
   error: string;
@@ -705,6 +707,7 @@ export interface TrackedQuestion extends Watchpoint {
   origin: "human" | "ai"; history_count: number;
   latest: Partial<Record<"system" | "human" | "agent", QuestionJudgement>>;
   events: Record<string, QuestionEvent>;
+  public_answer?: {knowledge_state: 'answered' | 'unresolved' | 'unknown' | 'needs_recheck'; closure: string; updated_at: string} | null;
 }
 export interface ThreadStep { stage: string; event_id: string; date: string; title: string; url: string }
 export interface Thread {

@@ -186,7 +186,7 @@ class DependencyStore:
 
     def track(self, project_id: str, artifact_key: str, kind: str, evidence_ids: list[str], *,
               expected_generation: int | None = None, db=None) -> dict:
-        if not 1 <= len(artifact_key) <= 200 or kind not in ("fact", "profile", "public_profile", "relationship", "brief", "watch", "insight"):
+        if not 1 <= len(artifact_key) <= 200 or kind not in ("fact", "profile", "public_profile", "relationship", "brief", "watch", "insight", "question"):
             raise ValueError("invalid artifact dependency")
         if len(evidence_ids) > 500:
             raise ValueError("too many evidence dependencies")

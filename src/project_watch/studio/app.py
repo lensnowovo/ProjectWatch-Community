@@ -847,7 +847,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
         project_or_404(project_id)
         try:
-            return latest_topic(store, project_id, watch_id)
+            return latest_topic(store, project_id, watch_id, pipeline=pipeline)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         except ValueError as exc:

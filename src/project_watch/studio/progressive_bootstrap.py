@@ -14,7 +14,7 @@ from project_watch.studio import (
     dsh_record_review,
     evidence_tasks,
 )
-from project_watch.studio.dsh_bootstrap import COVERAGE
+from project_watch.studio.dsh_bootstrap import CATEGORIES, COVERAGE
 from project_watch.studio.http import HttpError
 from project_watch.studio.material_ownership import project_guard
 
@@ -73,6 +73,8 @@ def _map_records(research):
             raise ValueError('material page evidence binding changed')
         record = research.store.evidence.get(research.project_id, task['evidence_version_id'], include_internal=False)
         for index, candidate in enumerate(result['observations']):
+            if research.topic_projection and candidate['kind'] not in CATEGORIES:
+                continue  # Keep immutable candidates without changing company scope/profile.
             ref = result['refs'][candidate['refs'][0]]
             part = record['parts'][ref['part_index']]['text']
             quote = part[candidate['start']:candidate['end']]
@@ -113,12 +115,14 @@ def _map_records(research):
 
 def _review_calls(research):
     old = research.store.get_public_profile(research.project_id) or {}
-    return dsh_record_review.pending_admission_calls(research, research.state['records'], old.get('facts') or [])
+    return dsh_record_review.pending_admission_calls(research, research.state['records'],
+        [] if research.topic_projection else old.get('facts') or [])
 
 
 def _publication_binding(research):
     old = research.store.get_public_profile(research.project_id) or {}
-    return dsh_record_review.admission_plan(research, research.state['records'], old.get('facts') or [])[4]
+    return dsh_record_review.admission_plan(research, research.state['records'],
+        [] if research.topic_projection else old.get('facts') or [])[4]
 
 
 def _remaining(research):
@@ -174,9 +178,11 @@ def _finish_deferred(research):
                   'material_work': research.execution.read_checkpoint(CLOSEOUT),
                   'reason': 'publication_admission_deferred', 'source_errors': research.state['errors']}
         research.state['finished'] = result
-        research.store.set_state('dsh-bootstrap:' + research.project_id, json.dumps(result, ensure_ascii=False))
+        if not research.topic_projection:
+            research.store.set_state('dsh-bootstrap:' + research.project_id, json.dumps(result, ensure_ascii=False))
         research.execution.checkpoint('dsh_coverage', {'partial': True, 'coverage': {}})
-        research.store.touch(research.project_id, 'last_external_at')
+        if not research.topic_projection:
+            research.store.touch(research.project_id, 'last_external_at')
         research.save()
         return result
 
@@ -187,6 +193,8 @@ def run(research, model, http, runtime_root, directory):
     research.tools = ('pw_status', 'pw_finish')
     def extract(source, material):
         source = {**source, 'project': {'legal_name': research.project['legal_name']}}
+        if research.topic_projection:
+            source.update(purpose='question_news_only', allowed_kinds=list(CATEGORIES), question=research.topic_request['question'])
         return dsh_extraction.extract(research, source, model, http, runtime_root, directory, execution=material)
 
     _map_records(research)

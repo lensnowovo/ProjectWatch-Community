@@ -9,11 +9,14 @@ export function TopicResult({ view }: { view: TopicResearchView }) {
   const label = { queued: '已排队', running: '正在研究', done: '本轮已结束', failed: '本轮未完成' }[job.status];
   return <div>
     <p className="small" role="status">{label} · {relTime(job.created_at)}</p>
+    {view.assessment_job && <p className="small">问题评估：{{queued:'已排队', running:'正在评估', done:'本次评估已结束', failed:'本次评估未完成'}[view.assessment_job.status]}</p>}
     {view.scope_changed && <p className="muted small">问题范围已修改，以下为上次研究：{view.question?.text}</p>}
     {result && <>
-      <strong>{result.answer_status === 'answered' ? '本题研究结果' : '暂未形成回答'}</strong>
+      <strong>{result.knowledge_state === 'needs_recheck' ? '旧回答待复核' : result.answer_status === 'answered' ? '本题研究结果' : '暂未形成回答'}</strong>
       {result.text && <p>{result.text}</p>}
       {result.status === 'partial' && <p className="muted small">本轮部分完成</p>}
+      {result.status === 'pending' && <p className="muted small">评估尚未完成，问题继续保留。</p>}
+      {result.closure === 'owner_confirmation_required' && <p className="muted small">答案已复核，问题是否结束等待所有者确认。</p>}
       {!!result.gaps.length && <details><summary>查看未完成项（{result.gaps.length}）</summary>
         <ul>{result.gaps.map((gap, i) => <li key={i}>{gap}</li>)}</ul></details>}
       {!!result.sources.length && <details><summary>查看依据（{result.sources.length}）</summary>
@@ -33,7 +36,7 @@ export function TopicResearch({ item }: { item: PlanItem }) {
     () => api.topicResearch(item.project_id, item.id), [item.project_id, item.id, item.lifecycle_version]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<unknown>(null);
-  const active = data?.job?.status === 'queued' || data?.job?.status === 'running';
+  const active = [data?.job?.status, data?.assessment_job?.status].some(status => status === 'queued' || status === 'running');
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(reload, 5000);

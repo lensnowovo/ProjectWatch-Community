@@ -12,8 +12,8 @@ from project_watch.studio.monitoring_contracts import ObjectInput
 from project_watch.studio.pipeline import StudioWorker
 
 
-def install(tmp_path, monkeypatch, *, monitor=True, two=False, native=False):
-    pipeline, execution, seen = collection_install(tmp_path, monkeypatch, mode='scope_missing', native=native)
+def install(tmp_path, monkeypatch, *, monitor=True, two=False, native=False, source_count=1):
+    pipeline, execution, seen = collection_install(tmp_path, monkeypatch, mode='scope_missing', native=native, source_count=source_count)
     if monitor:
         pipeline.store.touch(execution.job['project_id'], 'last_external_at')
     monkeypatch.setenv('PROJECT_WATCH_DSH_MONITOR', '1' if monitor else '0')

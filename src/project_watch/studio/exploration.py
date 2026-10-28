@@ -74,6 +74,11 @@ class Explorations:
             def event_filter(w, row):
                 return QuestionLedger.public_row_match(w, project, row)
         with self.monitor._db() as db:
+            if watch.get('visibility') == 'public':
+                stale = db.execute("SELECT generation FROM studio_analysis_dependencies WHERE project_id=? AND artifact_key=? AND status='stale'",
+                                   (watch['project_id'], 'question:' + watch['id'])).fetchone()
+                if stale:
+                    tokens.add('question-review:' + str(stale[0]))
             public_rows = None
             if watch.get('visibility') == 'public':
                 from project_watch.studio.questions import QuestionLedger
@@ -213,7 +218,7 @@ class Explorations:
                     raise ValueError('question is not runnable for collection')
 
     @staticmethod
-    def record_collection(db, plan, successful):
+    def record_collection(db, plan, successful, *, cached_units=frozenset()):
         """Project only this cycle's complete query set, in the receipt transaction.
 
         Old cached results remain readable but cannot count again toward the
@@ -253,7 +258,8 @@ class Explorations:
             if times.keys() != queries:
                 continue
             fetched = min(times.values())
-            fresh = not watch['last_run_at'] or fetched > moment(watch['last_run_at'])
+            fresh = (not any(u['id'] in cached_units for u in units)
+                     and (not watch['last_run_at'] or fetched > moment(watch['last_run_at'])))
             db.execute('UPDATE studio_exploration_cycles SET state=? WHERE watch_id=? AND cycle=?',
                        ('collected' if fresh else 'reused', wid, plan['round_id']))
             if fresh:

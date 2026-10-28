@@ -96,6 +96,8 @@ class ReviewFieldAliases:
 def review_input(analysis, ctx):
     fields = {}
     sections = ('text', 'status', 'gaps') if 'watch_id' in analysis else SECTIONS
+    if ctx.get('question_contract'):
+        sections = (*sections, 'assessment_status', 'change_basis')
 
     def walk(value, path):
         if isinstance(value, dict):
@@ -115,6 +117,8 @@ def review_input(analysis, ctx):
             'evidence': ctx['numbered']}
     if 'watch_id' in analysis:
         payload['question'] = next(w['text'] for w in ctx['watches'] if w['id'] == analysis['watch_id'])
+        if ctx.get('question_contract'):
+            payload['question_contract'] = ctx['question_contract']
     if ctx.get('object'):
         payload['target_object'] = ctx['object']
         payload['relationship_context'] = ctx.get('relationships', [])

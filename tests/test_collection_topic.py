@@ -42,6 +42,10 @@ def start(setup):
     job = enqueue_topic(pipeline, pid, watch['id'], watch['lifecycle_version'])
     execution = JobExecution(pipeline.store, pipeline.store.claim())
     assert execution.job['id'] == job['id']
+    # These tests preserve the previously-started topic protocol and its wire.
+    # Fresh Pipeline.run material/assessment coverage lives in test_question_assessment.
+    from project_watch.studio.progressive_bootstrap import freeze
+    freeze(execution, 'monitor', materials=False)
     pipeline._execution_state.current = execution
     return execution
 

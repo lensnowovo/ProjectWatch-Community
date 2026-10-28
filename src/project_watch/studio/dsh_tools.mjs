@@ -84,6 +84,15 @@ export function apply(ctx) {
     ["pw_scope", "Submit a bounded independent scope decision. Select reviewed candidates with retain(record_key), add a temporary question using a frozen standing parent with question(parent_id,text,exit_rule), or propose(watch_id,fields) for human review. No comprehensive judgment prerequisite, permanent scope, exit-rule mutation or source tools. [] preserves all candidates as not selected. This ends the maintenance stage.",
       { changes_json: string, reason: string }, ["changes_json", "reason"]],
   ].filter(x => allowed.includes(x[0])).map(x => {
+    if (allowed.includes("pw_assess") && !allowed.includes("pw_judge")) {
+      if (x[0] === "pw_context") return [x[0], "Read the fixed public question, unchanged exit rule and numbered evidence. No collection or publication.", {}, []];
+      if (x[0] === "pw_status") return [x[0], "Inspect this question stage and its remaining shared budget.", {}, []];
+      if (x[0] === "pw_finish") return [x[0], "End without an answer; preserve the question and unresolved gaps.", {reason: string}, ["reason"]];
+    }
+    if (allowed.includes("pw_assess") && !allowed.includes("pw_judge") && x[0] === "pw_assess") return [
+      x[0], "Assess only the frozen public question. Distinguish object progress from coverage; answered requires the unchanged exit rule and independent evidence review. Does not modify scope or owner conclusions.",
+      {...x[2], answer_status: {type: "string", enum: ["answered", "unresolved", "insufficient"]},
+        gaps: {type: "array", items: string, maxItems: 8}}, [...x[3], "answer_status", "gaps"]];
     if (allowed.includes("pw_scope") && x[0] === "pw_context") return [
       x[0], "Read the frozen public candidates, scope identities, owner decisions and current watch versions. No publication or collection.", x[2], x[3]];
     if (allowed.includes("pw_scope") && x[0] === "pw_status") return [
@@ -115,7 +124,8 @@ export function apply(ctx) {
       // Calls are serialized again by the gateway, including model traffic.
       isConcurrencySafe: () => false,
       async execute(args) {
-        if (["pw_judge", "pw_context", "pw_finish"].includes(toolName)) return reviewedRequest(toolName, args);
+        if (["pw_judge", "pw_context", "pw_finish"].includes(toolName)
+          || (toolName === "pw_assess" && !allowed.includes("pw_judge"))) return reviewedRequest(toolName, args);
         const response = await fetch(`${process.env.PW_DSH_GATEWAY}/tools/${toolName}`, {
           method: "POST", headers: { "Content-Type": "application/json",
             Authorization: `Bearer ${process.env.PW_DSH_GATEWAY_TOKEN}` },

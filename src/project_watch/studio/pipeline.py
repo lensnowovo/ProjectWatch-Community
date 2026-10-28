@@ -442,7 +442,9 @@ class Pipeline:
         from project_watch.studio.questions import QuestionLedger
 
         if getattr(self, "_questions", None) is None or self._questions.store is not self.store:
-            self._questions = QuestionLedger(self.store, self.monitor, binding_provider=self.model_binding)
+            from project_watch.studio import question_work
+            self._questions = QuestionLedger(self.store, self.monitor, binding_provider=self.model_binding,
+                public_result_provider=lambda pid, wid: question_work.current(self, pid, wid))
         return self._questions
 
     def _question_round(self, project_id: str, project: dict, plan: dict, llm, stage, *, strict: bool = False) -> None:
@@ -2370,6 +2372,15 @@ class Pipeline:
             raise ValueError('scope maintenance requires leased DSH runtime')
         scope_maintenance.run(self, execution, Path(root))
 
+    def run_assessment(self, job: dict) -> None:
+        from project_watch.studio import question_assessment
+
+        execution = getattr(self._execution_state, 'current', None)
+        root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+        if not execution or not root:
+            raise ValueError('question assessment requires leased DSH runtime')
+        question_assessment.run(self, execution, Path(root))
+
     def run_insight(self, job: dict) -> None:
         """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
@@ -2728,7 +2739,7 @@ class Pipeline:
                     monitor = os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
                     project = self.store.get_project(job['project_id']) or {}
                     if request.get('mode') == 'topic' or (monitor and (job['kind'] == 'external_followup' or project.get('last_external_at'))):
-                        progressive_bootstrap.freeze(execution, 'monitor', materials=request.get('mode') != 'topic')
+                        progressive_bootstrap.freeze(execution, 'monitor', materials=True)
                     elif not project.get('last_external_at'):
                         progressive_bootstrap.freeze(execution, 'bootstrap')
                 if execution and job['kind'] != 'commercial':
@@ -2748,7 +2759,7 @@ class Pipeline:
                  "brief": self.run_brief, "public_profile": self.run_public_profile,
                  "landscape": self.run_landscape, "business": self.run_business, "competition": self.run_competition,
                  "details": self.run_details, "commercial": self.run_commercial, "insight": self.run_insight,
-                 "scope": self.run_scope}[job["kind"]](job)
+                 "scope": self.run_scope, "assessment": self.run_assessment}[job["kind"]](job)
                 if execution:
                     if job['kind'] != 'internal' and (self.store.get_project(job['project_id']) or {}).get('status') == 'paused':
                         raise HttpError('project_paused')
@@ -2830,14 +2841,23 @@ class StudioWorker:
                     new_status = "blocked_failed" if not job or job[0] == "failed" else "blocked_no_current_output"
                 elif status == "queued":
                     dependency = deps.get(pid, request["artifact_key"])
-                    if dependency and dependency['kind'] == 'insight':
+                    if dependency and dependency['kind'] in ('insight', 'question'):
                         if not model_ready or project['status'] != 'active' or not project['activated']:
                             continue
-                        from project_watch.studio import event_insight_work
+                        from project_watch.studio import event_insight_work, question_work
 
                         try:
-                            job = event_insight_work.rebuild(self.pipeline, pid, request)
+                            rebuild = event_insight_work.rebuild if dependency['kind'] == 'insight' else question_work.rebuild
+                            job = rebuild(self.pipeline, pid, request)
                         except HttpError:
+                            continue
+                        except ValueError:
+                            # Expected stale/bounded input is a visible blocked rebuild,
+                            # never a reason to prevent the next baseline source round.
+                            with closing(store._connect()) as db, db:
+                                db.execute("UPDATE studio_rebuild_requests SET status='blocked_input_changed' "
+                                    'WHERE project_id=? AND artifact_key=? AND generation=? AND status=?',
+                                    (pid, request['artifact_key'], request['generation'], status))
                             continue
                         if job is None:
                             continue
@@ -2891,9 +2911,10 @@ class StudioWorker:
                     self.pipeline.schedule_competition(project['id'])
                 self.pipeline.schedule_insight(project['id'])
                 if os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1':
-                    from project_watch.studio import scope_maintenance
+                    from project_watch.studio import question_work, scope_maintenance
 
                     with suppress(HttpError):
+                        question_work.dispatch(self.pipeline, project['id'])
                         scope_maintenance.dispatch(self.pipeline, project['id'])
             # Only remember successful passes; an exception must retry normally.
             if changed:

@@ -96,7 +96,7 @@ def enqueue_topic(pipeline, project_id, watch_id, expected_version):
         return job
 
 
-def latest_topic(store, project_id, watch_id):
+def latest_topic(store, project_id, watch_id, *, pipeline=None):
     """Read only this public question's latest intent and durable finished result."""
     with closing(store._connect()) as db:
         watch = db.execute('SELECT * FROM studio_watchpoints WHERE project_id=? AND id=? AND visibility=\'public\'',
@@ -124,6 +124,30 @@ def latest_topic(store, project_id, watch_id):
     execution = JobExecution(store, dict(id=row['id']))
     finished = (execution.read_checkpoint('dsh_state') or {}).get('finished')
     result = None
+    from project_watch.studio import question_work
+
+    if execution.read_checkpoint(question_work.PROTOCOL):
+        work = execution.read_checkpoint(question_work.INTENT) or {}
+        child = None
+        if work.get('job_id'):
+            with closing(store._connect()) as db:
+                child_row = db.execute('SELECT id,status,created_at,finished_at FROM studio_jobs WHERE id=? AND project_id=?',
+                                       (work['job_id'], project_id)).fetchone()
+                child = dict(child_row) if child_row else None
+        saved = question_work.current(pipeline, project_id, watch_id) if pipeline is not None else None
+        outcomes = (JobExecution(store, child).read_checkpoint(question_work.RESULT) or {}).get('questions', []) if child else []
+        outcome = next((value for value in outcomes if value['watch_id'] == watch_id), {})
+        value = saved or outcome
+        numbered = value.get('work', {}).get('numbered', {})
+        knowledge = 'needs_recheck' if changed and saved else value.get('knowledge_state', 'unresolved')
+        result = dict(status=outcome.get('status', 'pending'), collection_status=(finished or {}).get('status'),
+            answer_status=value.get('answer_status', 'insufficient'), knowledge_state=knowledge,
+            text=value.get('text', ''), gaps=value.get('gaps', []), reason=outcome.get('reason'),
+            closure=value.get('closure'), sources=[dict(ref=ref, **{key: numbered[ref].get(key, '') for key in
+                ('title', 'url', 'date', 'context')}, context_kind=numbered[ref].get('read_scope', '')) for ref in value.get('refs', [])])
+        return dict(job={key: row[key] for key in ('id', 'status', 'created_at', 'finished_at')}, assessment_job=child,
+            question={key: intent['question'].get(key, '') for key in ('text', 'exit_rule', 'lifecycle_version')},
+            scope_changed=changed, result=result)
     if finished and finished.get('mode') == 'topic':
         judgment = finished.get('topic_judgment') or {}
         numbered = (execution.read_checkpoint('dsh_monitor_context') or {}).get('numbered', {})

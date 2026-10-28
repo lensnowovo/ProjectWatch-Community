@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import uuid
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import date
 from typing import Literal, Protocol
 
@@ -118,9 +118,10 @@ def _now():
 
 
 class QuestionLedger:
-    def __init__(self, store, monitor, *, binding_provider=None) -> None:
+    def __init__(self, store, monitor, *, binding_provider=None, public_result_provider=None) -> None:
         self.store, self.monitor = store, monitor
         self.binding_provider = binding_provider or (lambda: '')
+        self.public_result_provider = public_result_provider
         with closing(store._connect()) as db, db:
             db.executescript(SCHEMA)
             if not db.in_transaction:
@@ -171,13 +172,15 @@ class QuestionLedger:
     # ------------------------------------------------------------ writes
     def record(self, project_id: str, watch_id: str, actor: str, assessment: Assessment, *,
                fingerprint: str = '', include_internal: bool = True, consumed_events: tuple[dict, ...] = (),
-               consumed_materials: tuple[dict, ...] = (), expected_question_fingerprint: str = '') -> dict:
+               consumed_materials: tuple[dict, ...] = (), expected_question_fingerprint: str = '', db=None) -> dict:
         if actor not in ACTORS:
             raise ValueError('unknown actor')
         if actor == 'system' and not (assessment.event_ids or assessment.material_ids):
             raise ValueError('a system judgement must cite at least one event or material')
-        with closing(self.store._connect()) as db, db:
-            db.execute('BEGIN IMMEDIATE')
+        own = db is None
+        with (closing(self.store._connect()) if own else nullcontext(db)) as db, (db if own else nullcontext()):
+            if own:
+                db.execute('BEGIN IMMEDIATE')
             self._check_question(db, project_id, watch_id, expected_question_fingerprint)
             if actor == 'system':
                 state = db.execute('SELECT status FROM studio_watchpoints WHERE id=?', (watch_id,)).fetchone()
@@ -301,7 +304,10 @@ class QuestionLedger:
             events = {e['id']: {k: e.get(k) for k in ('id', 'title', 'summary', 'importance', 'event_at', 'category')}
                       for e in self.store.list_events(project_id=project_id, event_ids=sorted(cited), include_dismissed=True,
                                                       limit=50)} if cited else {}
+            public_answer = (self.public_result_provider(project_id, watch['id'])
+                             if self.public_result_provider and watch['visibility'] == 'public' else None)
             out.append({**watch, 'origin': watch.get('origin') or 'human', 'latest': latest,
+                        'public_answer': {key: public_answer.get(key) for key in ('knowledge_state', 'closure', 'updated_at')} if public_answer else None,
                         'history_count': count, 'events': events,
                         'assessment_state': self._assessment_state(project_id, watch, include_internal=include_internal),
                         **({'materials': materials[:ASSESS_EVENTS], 'material_count': len(materials),

@@ -61,7 +61,8 @@ class Collection:
 
     def reserve(self):
         old = self.store.get_public_profile(self.project_id) or {}
-        return 2 + max(1, dsh_record_review.pending_admission_calls(self.parent, [], old.get('facts') or []))
+        return 2 + max(1, dsh_record_review.pending_admission_calls(self.parent, [],
+            [] if self.parent.topic_projection else old.get('facts') or []))
 
     def defer(self, operation, reason):
         pending = operation.get('tool') in ('pw_read', 'pw_search', 'pw_collect') and reason not in (

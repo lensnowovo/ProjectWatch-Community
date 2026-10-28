@@ -706,7 +706,7 @@ def run_monitor(pipeline, execution, runtime_root: Path, *, analysis_only=False)
 
     research_class = PublicMonitor
     request = execution.read_checkpoint('collection_request_v1') or {}
-    owner = progressive_bootstrap.freeze(execution, 'monitor', materials=not analysis_only and request.get('mode') != 'topic')
+    owner = progressive_bootstrap.freeze(execution, 'monitor', materials=not analysis_only)
     if owner['owner'] == 'materials':
         from project_watch.studio import progressive_monitor
 

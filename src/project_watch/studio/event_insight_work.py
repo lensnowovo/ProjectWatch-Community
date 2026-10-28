@@ -34,6 +34,8 @@ def begin(execution):
                 'JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=?', (execution.job['project_id'],)))
             saved = dict(cap=cap, collection_cap=max(0, cap - min(6, cap // 2)), before=before,
                          phase='collecting', origin_job_id=execution.job['id'], created_at=now())
+            if (execution.read_checkpoint('collection_request_v1', db=db) or {}).get('mode') == 'topic':
+                saved['analysis_enabled'] = False
             _put(db, execution.job['id'], ROUND, saved)
     current = execution.budgets.get('model')
     execution.budgets['model'] = saved['collection_cap'] if current is None else min(current, saved['collection_cap'])
@@ -230,7 +232,7 @@ def settle(pipeline, execution):
         if state['phase'] == 'collecting':
             pipeline.objects.ensure_subject(execution.job['project_id'], db=db)
             changed = _changed(db, execution.job['project_id'], state)
-            work, unresolved = inputs(pipeline, execution.job['project_id'], changed, db=db)
+            work, unresolved = inputs(pipeline, execution.job['project_id'], changed, db=db) if state.get('analysis_enabled', True) else ([], [])
             state.update(objects=work, unresolved=unresolved, phase='awaiting_queue' if work else 'settled')
         if state['phase'] == 'awaiting_queue':
             job = _enqueue(pipeline, db, execution.job['project_id'], execution.job['id'], state)
@@ -251,7 +253,7 @@ def dispatch_pending(pipeline, project_id):
             state = json.loads(row['data'])
             if state['phase'] == 'collecting':
                 pipeline.objects.ensure_subject(project_id, db=db)
-                work, unresolved = inputs(pipeline, project_id, _changed(db, project_id, state), db=db)
+                work, unresolved = inputs(pipeline, project_id, _changed(db, project_id, state), db=db) if state.get('analysis_enabled', True) else ([], [])
                 state.update(objects=work, unresolved=unresolved, phase='awaiting_queue' if work else 'settled')
             if state['phase'] == 'awaiting_queue':
                 job = _enqueue(pipeline, db, project_id, row['id'], state)

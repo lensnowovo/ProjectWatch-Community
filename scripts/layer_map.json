@@ -16,6 +16,8 @@
     "project_watch.studio.public_stage_work": "Core",
     "project_watch.studio.scope_maintenance": "Core",
     "project_watch.studio.scope_identity": "Core",
+    "project_watch.studio.question_work": "Core",
+    "project_watch.studio.question_assessment": "Core",
     "project_watch.studio.dsh_extraction": "Core",
     "project_watch.studio.collection_plan": "Core",
     "project_watch.studio.collection_ledger": "Core",

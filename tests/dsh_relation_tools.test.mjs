@@ -3,6 +3,24 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('independent question tools require an answer state without legacy judgment or source tools', () => {
+  const previous = process.env.PW_DSH_TOOLS;
+  try {
+    process.env.PW_DSH_TOOLS = JSON.stringify(['pw_context', 'pw_assess', 'pw_status', 'pw_finish']);
+    const tools = [];
+    apply({tools:{register(tool) { tools.push(tool); }}});
+    assert.equal(tools.length, 4);
+    const assess = tools.find(t => t.name === 'pw_assess');
+    assert.ok(assess.parameters.required.includes('answer_status'));
+    assert.ok(assess.parameters.required.includes('gaps'));
+    assert.match(tools.find(t => t.name === 'pw_context').description, /No collection or publication/);
+    assert.match(tools.find(t => t.name === 'pw_finish').description, /without an answer/);
+  } finally {
+    if (previous === undefined) delete process.env.PW_DSH_TOOLS;
+    else process.env.PW_DSH_TOOLS = previous;
+  }
+});
+
 test('independent scope role exposes no analysis, source or internal tools', () => {
   const previous = process.env.PW_DSH_TOOLS;
   try {

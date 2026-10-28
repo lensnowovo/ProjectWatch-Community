@@ -126,8 +126,8 @@ def test_receipt_projection_interruption_rolls_back_and_reopens_without_http(set
     ledger.record(success(p, unit_id=p['units'][0]['id']))
     original = type(engine).record_collection
 
-    def interrupted(db, plan, successful):
-        original(db, plan, successful)
+    def interrupted(db, plan, successful, **kwargs):
+        original(db, plan, successful, **kwargs)
         raise RuntimeError('synthetic projection interruption')
 
     monkeypatch.setattr(type(engine), 'record_collection', staticmethod(interrupted))
@@ -186,6 +186,8 @@ def test_changed_question_generation_cannot_be_completed_by_prior_receipts(setup
 
 def test_actual_host_then_model_explore_reuses_receipt_and_cycle(setup, monkeypatch):
     pipeline, execution, watch = setup
+    from project_watch.studio.progressive_bootstrap import freeze
+    freeze(execution, 'monitor', materials=False)  # Resume the legacy explore protocol.
     settings = pipeline.settings_store.load()
     settings.search = SearchConfig(providers=['tavily'], keys={'tavily': 'synthetic'}, google_news=False)
     pipeline.settings_store.save(settings)
