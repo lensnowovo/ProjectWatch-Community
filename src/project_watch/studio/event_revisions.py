@@ -49,6 +49,8 @@ def snapshot(db, project_id, event_id):
 
 def record(db, project_id, event_id):
     """Must be called inside the event writer's transaction and lease guard."""
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
     data = snapshot(db, project_id, event_id)
     previous = db.execute('SELECT revision_id FROM studio_event_revision_heads WHERE event_id=?', (event_id,)).fetchone()
     parent = previous[0] if previous else None
@@ -117,6 +119,8 @@ class EventRevisions:
             db.executescript(SCHEMA)
 
     def bind(self, project_id, artifact_key, versions, *, db):
+        if not db.in_transaction:
+            db.execute('BEGIN IMMEDIATE')
         if not versions or len(versions) > 100:
             raise ValueError('bounded event dependency required')
         artifact = db.execute('SELECT record FROM studio_analysis_dependencies WHERE project_id=? AND artifact_key=?',

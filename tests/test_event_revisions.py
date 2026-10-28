@@ -175,3 +175,26 @@ def test_agent_update_after_merge_versions_actual_owner_and_prevents_undo(tmp_pa
         assert {s['body'] for s in old['sources']} == {'Factory opened in July.'}
     with pytest.raises(ValueError, match='changed since review'):
         store.event_revisions.undo_merge(execution, receipt)
+
+
+@pytest.mark.parametrize('operation', ['record', 'bind'])
+def test_revision_read_is_locked_against_intervening_writer(owner, monkeypatch, operation):
+    from project_watch.studio import event_revisions
+
+    _, a, _, _, _ = pair(owner)
+    store, pid = owner[0].store, owner[2]
+    version = head(store, a)
+    store.evidence.dependencies.track(pid, 'bound', 'brief', [])
+    original = event_revisions.snapshot
+    def competing_write(db, project_id, event_id):
+        with closing(store._connect()) as other, other:
+            other.execute('PRAGMA busy_timeout=1')
+            with pytest.raises(sqlite3.OperationalError, match='locked'):
+                other.execute("UPDATE studio_events SET title='Concurrent change' WHERE id=?", (a,))
+        return original(db, project_id, event_id)
+    monkeypatch.setattr(event_revisions, 'snapshot', competing_write)
+    with closing(store._connect()) as db, db:
+        if operation == 'record':
+            assert event_revisions.record(db, pid, a) == version
+        else:
+            store.event_revisions.bind(pid, 'bound', {a: version}, db=db)
