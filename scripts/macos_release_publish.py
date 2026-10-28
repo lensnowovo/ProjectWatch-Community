@@ -21,6 +21,10 @@ def api(path):
     return json.loads(gh('api', f'repos/{REPO}/{path}'))
 
 
+def normalize(value):
+    return value.replace('\r\n', '\n').strip()
+
+
 def main():
     config = json.loads((ROOT / 'scripts/macos-r11b-publication.json').read_text())
     assert os.environ['GITHUB_REPOSITORY'] == REPO
@@ -29,10 +33,19 @@ def main():
     release = api('releases/tags/' + TAG)
     assert release['id'] == 426477075 and release['prerelease'] and not release['draft']
     assert api('git/ref/tags/' + TAG)['object']['sha'] == '6055415a8cc198a24972c0f97b28acd00861116d'
-    assert hashlib.sha256(release['body'].encode()).hexdigest() == config['previous_body_sha256']
     before = {a['name']: a['digest'] for a in release['assets']}
     for name, digest in config['windows_assets'].items():
         assert before[name] == 'sha256:' + digest
+    if normalize(release['body']).endswith(normalize(config['notes_append'])):
+        actual = {a['name']: a for a in release['assets']}
+        for asset in config['assets']:
+            got = actual[asset['name']]
+            assert got['state'] == 'uploaded' and got['size'] == asset['bytes']
+            assert got['digest'] == 'sha256:' + asset['sha256']
+        print(json.dumps({'already_published_verified': True, 'uploads': 0,
+                          'release': release['html_url']}))
+        return
+    assert hashlib.sha256(release['body'].encode()).hexdigest() == config['previous_body_sha256']
     with tempfile.TemporaryDirectory(prefix='macos-publication-') as folder:
         folder = Path(folder)
         gh('run', 'download', config['run_id'], '--repo', REPO,
@@ -71,7 +84,7 @@ def main():
         gh('release', 'edit', TAG, '--repo', REPO, '--notes-file', notes,
            '--title', 'ProjectWatch 0.2.0rc2 · Windows / Apple Silicon 公开预览版 R11b')
         final = api('releases/tags/' + TAG)
-        assert final['body'].strip() == notes.read_text(encoding='utf-8').strip()
+        assert normalize(final['body']) == normalize(notes.read_text(encoding='utf-8'))
         print(json.dumps({'release': final['html_url'], 'mac_assets_verified': len(config['assets']),
                           'existing_assets_unchanged': True, 'tag_unchanged': True}))
 
