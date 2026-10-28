@@ -3,6 +3,7 @@ import json
 import os
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -10,7 +11,7 @@ import test_collection_host as fixtures
 from test_collection_pages import work
 from test_studio_dsh_monitor import synthetic_review
 
-from project_watch.studio import dsh_runtime, progressive_bootstrap
+from project_watch.studio import bootstrap_collection, dsh_runtime, progressive_bootstrap
 from project_watch.studio.collection_view import discovered_sources
 from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import Http, HttpError, Response
@@ -36,6 +37,13 @@ def install_provider(setup, monkeypatch, *, native=False, failure=None, all_vali
             return Response(200, {}, b'{"announcements":[],"totalAnnouncement":0}')
         assert host == 'model.example.invalid'
         body = json.loads(raw)
+        # The collection role has separate real-provider/native assertions in
+        # test_bootstrap_collection; this helper counts material/review calls.
+        if 'tools' in body and 'pw_collect' in {t['function']['name'] for t in body['tools']}:
+            return Response(200, {}, json.dumps({'choices': [{'message': {'role': 'assistant', 'tool_calls': [
+                {'id': 'collection-finished', 'type': 'function', 'function': {'name': 'pw_finish',
+                 'arguments': json.dumps({'gaps': {'company': 'Synthetic collection fixture'}})}}]},
+                'finish_reason': 'tool_calls'}]}).encode())
         calls.append(body)
         assert execution.read_checkpoint(progressive_bootstrap.OWNER)['owner'] == 'materials'
         assert discovered_sources(pipeline.store, execution.job['project_id'])['total'] == 3
@@ -77,8 +85,14 @@ def install_provider(setup, monkeypatch, *, native=False, failure=None, all_vali
             'usage': {'prompt_tokens': 10, 'completion_tokens': 10}}).encode())
 
     pipeline.http_factory = lambda _: Http(send)
+    monkeypatch.setattr(pipeline, 'reader', lambda: SimpleNamespace(read=lambda _url: {
+        'status': 'unavailable', 'text': '', 'error_code': 'http_failure'}))
 
     def turn(research, gateway, runtime, directory, **kwargs):
+        if research.tools == bootstrap_collection.TOOLS:
+            if native:
+                return original(research, gateway, runtime, directory, **kwargs)
+            return research.tool('pw_finish', {'gaps': {'company': 'Synthetic collection fixture'}})
         assert research.tools == ('pw_submit_records',)  # no legacy extraction turn
         active['source'] = json.loads(research.task)
         roles.append(research.session_id)
@@ -394,6 +408,8 @@ def test_failure_after_first_candidate_does_not_become_partial_closeout(setup, m
     count = 0
     def fail_later(*args, **kwargs):
         nonlocal count
+        if args[0].tools == bootstrap_collection.TOOLS:
+            return original(*args, **kwargs)
         count += 1
         if count == 2:
             if failure == 'budget':

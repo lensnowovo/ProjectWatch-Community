@@ -7,6 +7,8 @@
     "project_watch.studio.event_revisions": "Core",
     "project_watch.studio.material_ownership": "Core",
     "project_watch.studio.progressive_bootstrap": "Core",
+    "project_watch.studio.bootstrap_collection": "Core",
+    "project_watch.studio.bootstrap_continuation": "Core",
     "project_watch.studio.dsh_extraction": "Core",
     "project_watch.studio.collection_plan": "Core",
     "project_watch.studio.collection_ledger": "Core",

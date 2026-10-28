@@ -542,6 +542,10 @@ class PublicBootstrap:
             source = self.source(sid)
         if not public_url(source['url']):
             raise ValueError('invalid public source URL')
+        if source.get('material_body_evidence_id'):
+            from project_watch.studio.bootstrap_collection import page_window
+
+            return page_window(self, source, args.get('offset', 0))
         if source.get("body_chunks"):
             return self.body_window(source, args)
         if source.get("read_attempted"):
@@ -828,6 +832,9 @@ class PublicBootstrap:
             self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
             body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
+            if source.get('material_body_evidence_id'):
+                body = ''.join(p['text'] for p in self.store.evidence.get(
+                    self.project_id, source['material_body_evidence_id'], include_internal=False)['parts'])
             if not source.get('collection_matches') or source.get('source_type') == 'public_page':
                 self.store.save_body(item["id"], body_status, body)
             saved = self.store.item_by_key(self.project_id, key)
@@ -905,6 +912,8 @@ class PublicBootstrap:
                                                        for r in collected['rows']) if collected is not None else True)}, peers)
         result = {"status": status, "coverage": coverage, "records": len(records),
                   "retained_records": len(self.state['records']), "record_admission": admission,
+                  **({'source_collection': self.execution.read_checkpoint('bootstrap_collection_v1')['finished']}
+                     if self.execution.read_checkpoint('bootstrap_collection_v1') else {}),
                   **({'material_work': self.execution.read_checkpoint('material_closeout_v1')}
                      if self.execution.read_checkpoint('material_closeout_v1') else {}),
                   "profile_projection": profile_projection,

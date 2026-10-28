@@ -685,9 +685,17 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
     http = guarded_http(research, http)
     collectors.http = http
     gateway = Gateway(research, settings.model, http)
-    collection_host.prepare(research)
+    if execution.read_checkpoint('bootstrap_collection_resume_v1'):
+        from project_watch.studio import bootstrap_continuation
+
+        bootstrap_continuation.prepare(research)
+    else:
+        collection_host.prepare(research)
     directory = session_directory(research)
     if owner['owner'] == 'materials':
+        from project_watch.studio import bootstrap_collection
+
+        bootstrap_collection.run(research, settings.model, http, runtime_root, directory)
         return progressive_bootstrap.run(research, settings.model, http, runtime_root, directory)
     return run_dsh(research, gateway, runtime_root, directory)
 

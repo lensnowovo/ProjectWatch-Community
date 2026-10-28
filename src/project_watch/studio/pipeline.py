@@ -1851,7 +1851,8 @@ class Pipeline:
                 raise ValueError('frozen public research requires DSH runtime')
             if frozen['entry'] == 'bootstrap':
                 run_bootstrap(self, execution, Path(dsh_root))
-                if os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1':
+                if (os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
+                        and not execution.read_checkpoint('bootstrap_collection_resume_v1')):
                     self.store.enqueue(project_id, 'external_followup', automatic=True, input_version=job['id'])
             elif frozen['entry'] == 'monitor':
                 run_monitor(self, execution, Path(dsh_root))
@@ -1970,6 +1971,9 @@ class Pipeline:
         execution = getattr(self._execution_state, 'current', None)
         if execution is None:
             raise ValueError('补全任务需要有效的持久任务记录')
+        if execution.read_checkpoint('bootstrap_collection_resume_v1'):
+            self.run_external(job)
+            return
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
         if dsh_root and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
             from project_watch.studio.dsh_runtime import run_monitor

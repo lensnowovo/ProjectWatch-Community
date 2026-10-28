@@ -65,7 +65,11 @@ def _map_records(research):
         if task['status'] != 'complete':
             issues.append(dict(task_id=task['id'], code=result.get('code', 'material_pending')))
             continue
-        sid = 'C' + hashlib.sha256(task['evidence_version_id'].encode()).hexdigest()[:18]
+        page = research.execution.read_checkpoint('material_page_sources_v1:' + task['id'])
+        sid = ('M' + task['id'][:18]) if page else 'C' + hashlib.sha256(task['evidence_version_id'].encode()).hexdigest()[:18]
+        if page and (page['material_body_evidence_id'] != task['evidence_version_id']
+                     or page['evidence_version_id'] != task['evidence_version_id']):
+            raise ValueError('material page evidence binding changed')
         record = research.store.evidence.get(research.project_id, task['evidence_version_id'], include_internal=False)
         for index, candidate in enumerate(result['observations']):
             ref = result['refs'][candidate['refs'][0]]
@@ -74,7 +78,16 @@ def _map_records(research):
             offset = sum(len(p['text']) for p in record['parts'][:ref['part_index']]) + candidate['start']
             # Refresh the saved source window before passing the restored quote
             # to the old validator. No request or transcription is involved.
-            collection_dsh.source(research, sid, offset=offset)
+            if page:
+                from project_watch.studio.bootstrap_collection import page_window
+
+                # A transferred material keeps its original collection item,
+                # but does not need the old round's C/P catalog in the new job.
+                page_window(research, {**page, 'id': sid}, offset)
+                if sid not in research.state['sources']:
+                    research.state['sources'].append(sid)
+            else:
+                collection_dsh.source(research, sid, offset=offset)
             args = {k: v for k, v in candidate.items() if k not in ('subject', 'refs', 'start', 'end', 'event_at')}
             try:
                 research.pw_record({**args, 'source_id': sid, 'quote': quote})
@@ -151,6 +164,7 @@ def _finish_deferred(research):
         research.guard()
         result = {'status': 'partial', 'records': 0, 'retained_records': len(research.state['records']),
                   'executor': 'dsh', 'collection': collection_dsh.coverage(research),
+                  'source_collection': (research.execution.read_checkpoint('bootstrap_collection_v1') or {}).get('finished'),
                   'material_work': research.execution.read_checkpoint(CLOSEOUT),
                   'reason': 'publication_admission_deferred', 'source_errors': research.state['errors']}
         research.state['finished'] = result

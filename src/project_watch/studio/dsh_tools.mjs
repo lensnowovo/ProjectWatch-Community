@@ -82,6 +82,8 @@ export function apply(ctx) {
     ["pw_revise", "Review scope after judgment. Do not modify context.revision_blocked_ids; explain gaps in reason instead. changes_json is an array; every row needs action/watch_id/why/refs. note and finish also REQUIRE text (cited answer, max 200 chars). set_exit needs exit_rule; explore needs text/axis/queries/exit_rule. [] is valid. On revision_validation fix the listed fields only, without regenerating judgment. Check items: dropped/proposed does not mean applied.",
       { changes_json: string, reason: string }, ["changes_json", "reason"]],
   ].filter(x => allowed.includes(x[0])).map(x => {
+    if (x[0] === "pw_finish" && allowed.includes("pw_collect") && !allowed.includes("pw_record")) return [
+      x[0], "End the bounded public collection pass only. Does not publish facts, events, analysis or monitoring scope.", x[2], x[3]];
     if (monitor && x[0] === "pw_finish") return [
       "pw_finish", "End this reviewed round. Does not mean every topic is answered.", {reason: string}, ["reason"]];
     if (monitor && x[0] === "pw_record") return [x[0], x[1], {...x[2],

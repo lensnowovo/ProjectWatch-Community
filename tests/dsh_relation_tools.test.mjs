@@ -3,6 +3,22 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('bounded collection role cannot publish records or alter monitoring scope', () => {
+  const previous = process.env.PW_DSH_TOOLS;
+  try {
+    const allowed = ['pw_search', 'pw_read', 'pw_collect', 'pw_status', 'pw_finish'];
+    process.env.PW_DSH_TOOLS = JSON.stringify(allowed);
+    const tools = [];
+    apply({tools:{register(tool) { tools.push(tool); }}});
+    assert.deepEqual(new Set(tools.map(t => t.name)), new Set(allowed));
+    assert.match(tools.find(t => t.name === 'pw_finish').description, /collection pass only/);
+    assert.deepEqual(tools.find(t => t.name === 'pw_read').parameters.properties.view.enum, ['record', 'page']);
+  } finally {
+    if (previous === undefined) delete process.env.PW_DSH_TOOLS;
+    else process.env.PW_DSH_TOOLS = previous;
+  }
+});
+
 test('typed material role requires attribution and locations without exposing legacy extraction', () => {
   const previous = process.env.PW_DSH_TOOLS;
   try {

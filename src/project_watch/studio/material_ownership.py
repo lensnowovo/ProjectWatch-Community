@@ -77,7 +77,7 @@ def take_over(execution, task_id):
         if not result and not linked and not unsent and db.execute("SELECT 1 FROM studio_job_calls WHERE job_id=? AND kind='model' LIMIT 1",
                                                    (previous,)).fetchone():
             raise ValueError('material dispatch provenance missing')
-        for prefix in ('extract_attempt:', 'extract_result:'):
+        for prefix in ('extract_attempt:', 'extract_result:', 'material_page_sources_v1:'):
             stage = prefix + task_id
             source = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?', (previous, stage)).fetchone()
             existing = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?', (next_job, stage)).fetchone()
