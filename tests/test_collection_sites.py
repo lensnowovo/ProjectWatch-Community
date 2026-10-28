@@ -164,3 +164,51 @@ def test_scope_change_on_redirect_stops_before_destination_request(setup, monkey
     with pytest.raises(RuntimeError, match='scope changed'):
         dsh_runtime.run_bootstrap(pipeline, execution, None)
     assert calls == [('company.example', '/robots.txt'), ('company.example', '/'), ('company.example', '/news')]
+
+
+@pytest.mark.parametrize('failure', ['connect_timeout', 'tls_timeout', 'certificate'])
+def test_pinned_connector_failure_isolated_before_dsh_without_resend(setup, monkeypatch, failure):
+    """Exercise actual connector wrapping, not a pre-normalized HttpError."""
+    import socket
+    import ssl
+
+    from project_watch.feeds import _pinned_request
+
+    pipeline, execution, calls = configure(setup, monkeypatch)
+    original = pipeline.article_reader.transport.connector
+    attempts, closed = [], []
+
+    def connect(*_args, **_kwargs):
+        attempts.append(1)
+        if failure == 'connect_timeout':
+            raise TimeoutError('synthetic connection timeout')
+        return SimpleNamespace(close=lambda: closed.append(1))
+
+    def tls(*_args, **_kwargs):
+        if failure == 'certificate':
+            raise ssl.SSLCertVerificationError('synthetic invalid certificate')
+        raise TimeoutError('synthetic TLS timeout')
+
+    def connector(host, ip, path):
+        if path == '/robots.txt':
+            return original(host, ip, path)
+        return _pinned_request(host, ip, path)
+
+    monkeypatch.setattr(socket, 'create_connection', connect)
+    monkeypatch.setattr(ssl.SSLContext, 'wrap_socket', tls)
+    pipeline.article_reader.transport.connector = connector
+    for _ in range(2):
+        result = dsh_runtime.run_bootstrap(pipeline, execution, None)
+        assert site_row(result)['outcome'] == 'failed'
+        # The connector failed before ingestion; an absent count is not a
+        # successful empty search result.
+        assert site_row(result)['saved_count'] is None
+        assert site_row(result)['reason'] == 'public_read_failed'
+        assert result['collection']['status'] == 'partial'
+        assert any(r['outcome'] == 'success' for r in result['collection']['rows'])
+    assert attempts == [1]
+    assert closed == ([] if failure == 'connect_timeout' else [1])
+    assert calls == [('company.example', '/robots.txt')]
+    assert execution.usage()['page']['unknown'] == 0
+    with pipeline.store._connect() as db:
+        assert db.execute("SELECT count(*) FROM studio_job_calls WHERE status='failed_read'").fetchone()[0] == 1

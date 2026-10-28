@@ -13,6 +13,7 @@ import time
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 
+from project_watch.feeds import FeedError
 from project_watch.studio.http import Http, HttpError, Response
 from project_watch.studio.runtime_health import CALL_GRACE_SECONDS, progress
 from project_watch.studio.store import now
@@ -253,7 +254,11 @@ class JobExecution:
             transport_failure = (isinstance(exc, HttpError) and exc.code == 'connection_failed'
                                  and exc.failure_kind in ('timeout', 'transport_error')
                                  and exc.transport_phase in ('connect_or_headers', 'response_body'))
-            transport_failure = transport_failure or isinstance(exc, (TimeoutError, ConnectionError))
+            # Guarded public connectors wrap socket/TLS and source-policy
+            # failures in FeedError. That typed boundary still represents a
+            # failed read; it must not turn an unavailable source into a global
+            # hold. The explicit public_read capability below remains required.
+            transport_failure = transport_failure or isinstance(exc, (TimeoutError, ConnectionError, FeedError))
             failed_read = (read_only and kind in ("open_data", "page", "site")
                            and ((isinstance(exc, HttpError) and exc.code == "response_too_large")
                                 or (public_read and transport_failure)))

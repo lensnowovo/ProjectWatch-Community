@@ -10,6 +10,7 @@ from test_collection_host import response
 from test_collection_pages import work
 from test_collection_runner import candidate, plan
 
+from project_watch.feeds import FeedError
 from project_watch.studio import dsh_runtime
 from project_watch.studio.collection_ledger import CollectionLedger
 from project_watch.studio.collection_pages import public_read_request
@@ -71,20 +72,37 @@ def test_public_failure_reaches_dsh_and_other_sources_without_resend(setup, monk
     ('model', 'GET', True), ('search', 'GET', True), ('page', 'GET', False),
     ('open_data', 'POST', True), ('open_data', 'GET', False),
 ])
-def test_paid_write_and_undeclared_reads_still_hold(tmp_path, kind, method, declared):
+@pytest.mark.parametrize('error', [timeout(), FeedError('connection_failed'), FeedError('tls_verification_failed')])
+def test_paid_write_and_undeclared_reads_still_hold(tmp_path, kind, method, declared, error):
     execution = fixtures.loop.__wrapped__(tmp_path).execution
     calls = []
 
     def send(*_args):
         calls.append(1)
-        raise timeout()
+        raise error
 
     http = execution.http(Http(send), lambda _: (kind, 'synthetic'), public_read=lambda *_: declared)
-    with pytest.raises(HttpError, match='connection_failed'):
+    with pytest.raises((HttpError, FeedError)):
         http.transport(method, 'https://example.invalid/query', {}, None, 20)
     with pytest.raises(HttpError, match='request_outcome_unknown'):
         http.transport(method, 'https://example.invalid/query', {}, None, 20)
     assert calls == [1] and execution.usage()[kind]['unknown'] == 1
+
+
+@pytest.mark.parametrize('error', [RuntimeError('synthetic bug'), OSError('unclassified failure')])
+def test_public_read_declaration_does_not_hide_unclassified_errors(tmp_path, error):
+    execution = fixtures.loop.__wrapped__(tmp_path).execution
+    calls = []
+
+    def send():
+        calls.append(1)
+        raise error
+
+    with pytest.raises(type(error)):
+        execution.call('page', 'same-request', send, read_only=True, public_read=True)
+    with pytest.raises(HttpError, match='request_outcome_unknown'):
+        execution.call('page', 'same-request', send, read_only=True, public_read=True)
+    assert calls == [1] and execution.usage()['page']['unknown'] == 1
 
 
 @pytest.mark.parametrize('error', [timeout(), TimeoutError(), ConnectionResetError()])
