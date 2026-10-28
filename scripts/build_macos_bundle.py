@@ -32,11 +32,11 @@ RUNTIMES = {
 PYTHON_VERSION = "3.12.15"
 RUNTIME_RELEASE = "20261013"
 EXTRAS = "desktop,ocr,mcp,team,postgres"
-NODE_VERSION = "v24.13.1"
-# Official HTTPS SHASUMS256.txt, checked 2026-10-23. Signature not yet verified.
+NODE_VERSION = "v24.22.1"
+# Official HTTPS SHASUMS256.txt, checked 2026-10-28. Signature not yet verified.
 NODE_HASHES = {
-    "arm64": "8c039d59f2fec6195e4281ad5b0d02b9a940897b4df7b849c6fb48be6787bba6",
-    "x86_64": "527f0578d9812e7dfa225121bda0b1546a6a0e4b5f556295fc8299c272de5fbf",
+    "arm64": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+    "x86_64": "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035",
 }
 
 
@@ -317,7 +317,8 @@ def build(args):
     validate_macho(runtime / "bin/python3.12", args.arch)
     site = runtime / "lib/python3.12/site-packages"
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PROJECT_WATCH_", "PYTHON", "UV_", "PIP_"))}
-    subprocess.run([uv, "pip", "install", "--python", sys.executable,
+    constraints = (["--constraint", str(args.constraints.resolve())] if getattr(args, "constraints", None) else [])
+    subprocess.run([uv, "pip", "install", *constraints, "--python", sys.executable,
                     "--python-version", "3.12", "--python-platform", spec["target"],
                     "--only-binary", ":all:", "--link-mode", "copy", "--target", str(site), str(wheel) + f"[{EXTRAS}]"],
                    env=env, check=True)
@@ -366,6 +367,7 @@ def main():
     for name in ("runtime", "wheel", "out", "dsh", "node-archive"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--uv", default="uv")
+    parser.add_argument("--constraints", type=Path, help="Reviewed target dependency version constraints")
     build(parser.parse_args())
 
 

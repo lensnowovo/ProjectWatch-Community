@@ -1,0 +1,71 @@
+{
+  "name": "macOS R11b native packaging",
+  "on": {
+    "push": {
+      "branches": [
+        "codex/macos-r11b-build"
+      ],
+      "paths": [
+        ".github/workflows/macos-r11b.yml",
+        "scripts/macos_release_build.py",
+        "scripts/build_macos_bundle.py",
+        "packaging/macos/**"
+      ]
+    },
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "build": {
+      "runs-on": "macos-15",
+      "timeout-minutes": 60,
+      "steps": [
+        {
+          "name": "Checkout build tooling",
+          "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "with": {
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Python build tools",
+          "uses": "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+          "with": {
+            "python-version": "3.12",
+            "architecture": "arm64"
+          }
+        },
+        {
+          "name": "Node build tools",
+          "uses": "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+          "with": {
+            "node-version": "24.22.1",
+            "package-manager-cache": false
+          }
+        },
+        {
+          "name": "Install maintainer tools",
+          "run": "python -m pip install build \"Pillow==13.0.0\" \"uv==0.11.10\" pytest pip-audit"
+        },
+        {
+          "name": "Build and verify native app",
+          "run": "python -m scripts.macos_release_build --out \"$RUNNER_TEMP/macos-r11b\""
+        },
+        {
+          "name": "Retain Mac package and synthetic evidence",
+          "if": "always()",
+          "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+          "with": {
+            "name": "macos-r11b-arm64",
+            "path": "${{ runner.temp }}/macos-r11b/delivery/*\n${{ runner.temp }}/macos-r11b/receipts/*",
+            "retention-days": 7,
+            "if-no-files-found": "warn",
+            "compression-level": 0
+          }
+        }
+      ]
+    }
+  }
+}
