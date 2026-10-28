@@ -275,7 +275,9 @@ def rebuild(pipeline, project_id, request):
         if not old:
             return None
         versions = {}
-        for event_id in old['input']['event_versions']:
+        from project_watch.studio.event_revisions import current_membership_events
+
+        for event_id in current_membership_events(db, project_id, old['input']['event_versions']):
             row = db.execute('SELECT revision_id FROM studio_event_revision_heads WHERE event_id=?', (event_id,)).fetchone()
             if row:
                 versions[event_id] = row[0]

@@ -1052,6 +1052,26 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         project_or_404(project_id)
         return project_preview(pipeline, project_id)
 
+    @app.get('/api/studio/projects/{project_id}/events/{event_id}/merges')
+    def event_merges(project_id: str, event_id: str):
+        from project_watch.studio.event_membership import receipts
+        project_or_404(project_id)
+        try:
+            return receipts(store, project_id, event_id)
+        except KeyError as exc:
+            raise HTTPException(404, '事件不存在') from exc
+
+    @app.post('/api/studio/projects/{project_id}/event-merges/{receipt_id}/undo')
+    def undo_event_merge(project_id: str, receipt_id: str):
+        from project_watch.studio.event_membership import correct
+        project_or_404(project_id)
+        try:
+            return correct(store, project_id, receipt_id)
+        except KeyError as exc:
+            raise HTTPException(404, '归并回执不存在') from exc
+        except (ValueError, HttpError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     @app.get('/api/studio/projects/{project_id}/jobs/{job_id}/recovery')
     def recovery_preview(project_id: str, job_id: str):
         from project_watch.studio.recovery import preview

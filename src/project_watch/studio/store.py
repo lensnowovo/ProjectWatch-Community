@@ -1066,17 +1066,24 @@ class StudioStore:
         return event_id
 
     def attach_to_event(self, event_id: str, item_ids: list[str], *, importance: str,
-                        impact: str = "", summary: str = "") -> None:
+                        impact: str = "", summary: str = "", execution=None, split_event=None) -> str | None:
         rank = {"major": 0, "notable": 1, "routine": 2}
         with closing(self._connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            if execution:
+                execution._guard(db)
             row = db.execute("SELECT project_id, importance, impact, summary FROM studio_events WHERE id=?",
                              (event_id,)).fetchone()
             if row is None:
                 raise KeyError(event_id)
-            from project_watch.studio.event_revisions import previous_memberships, record
+            from project_watch.studio.event_membership import after_attach, before_attach
+            from project_watch.studio.material_ownership import project_guard
 
-            record(db, row['project_id'], event_id)
-            previous = previous_memberships(db, row['project_id'], item_ids)
+            if execution:
+                if execution.job['project_id'] != row['project_id']:
+                    raise ValueError('event is not in job project')
+                project_guard(db, row['project_id'], execution.job['id'])
+            saved = before_attach(db, row['project_id'], event_id, item_ids, split_event)
             upgraded = rank.get(importance, 2) < rank.get(row["importance"], 2)
             # A more important report upgrades the event and re-surfaces it as unread.
             new_impact = impact if (upgraded and impact) else (row["impact"] or impact)
@@ -1089,9 +1096,7 @@ class StudioStore:
                  now(), 1 if upgraded else 0, 1 if upgraded and importance == "major" else 0, event_id))
             db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
                            [(event_id, i, row['project_id']) for i in item_ids])
-            for old_event in previous - {event_id}:
-                record(db, row['project_id'], old_event)
-            record(db, row['project_id'], event_id)
+            return after_attach(db, row['project_id'], saved)
 
     def list_events(self, *, project_id: str | None = None, category: str | None = None,
                     importance: str | None = None, include_dismissed: bool = False,

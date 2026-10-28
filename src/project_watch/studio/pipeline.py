@@ -1833,7 +1833,8 @@ class Pipeline:
             if group.event_id:
                 lead = sorted(group.items, key=lambda i: ev.RANK.get(i.get("importance"), 2))[0]
                 self.store.attach_to_event(group.event_id, ids, importance=lead.get("importance") or "routine",
-                                           impact=lead.get("impact") or "", summary=lead.get("summary") or "")
+                                           impact=lead.get("impact") or "", summary=lead.get("summary") or "",
+                                           execution=getattr(self._execution_state, 'current', None), split_event=ev.summarise(group))
             else:
                 self.store.create_event(project_id, ev.summarise(group), ids)
 

@@ -857,7 +857,8 @@ class PublicBootstrap:
             event = events.summarise(group)
             if group.event_id:
                 self.store.attach_to_event(group.event_id, ids, importance=event["importance"],
-                                           summary=event["summary"], impact=event["impact"])
+                                           summary=event["summary"], impact=event["impact"],
+                                           execution=self.execution, split_event=event)
             else:
                 self.store.create_event(self.project_id, event, ids)
         if self.topic_projection:

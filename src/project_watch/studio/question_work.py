@@ -230,8 +230,10 @@ def rebuild(pipeline, pid, request):
         if not watch or watch['status'] == 'retired':
             return None
         pending = pipeline.questions.new_events(pid, wid, limit=None)
+        from project_watch.studio.event_revisions import current_membership_events
+
         work = freeze(pipeline, db, pid, watch, pending,
-                      event_ids=[e['id'] for e in pending] + list(previous['work']['event_versions']))
+                      event_ids=[e['id'] for e in pending] + current_membership_events(db, pid, previous['work']['event_versions']))
         work['collection_complete'] = previous['work'].get('collection_complete', False)
         work['fingerprint'] = digest(work)
         origin = JobExecution(pipeline.store, {'id': previous['job_id']}).read_checkpoint(public_stage_work.INPUT, db=db)

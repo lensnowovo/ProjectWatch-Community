@@ -95,6 +95,19 @@ def previous_memberships(db, project_id, item_ids):
     return affected
 
 
+def current_membership_events(db, project_id, versions):
+    """Follow only previously frozen source IDs after a membership correction."""
+    events = set(versions)
+    for event_id, revision in versions.items():
+        prior = db.execute('SELECT record FROM studio_event_revisions WHERE project_id=? AND event_id=? AND id=?',
+                           (project_id, event_id, revision)).fetchone()
+        for item_id in json.loads(prior[0])['members'] if prior else []:
+            member = db.execute('SELECT event_id FROM studio_items WHERE project_id=? AND id=?', (project_id, item_id)).fetchone()
+            if member and member[0]:
+                events.add(member[0])
+    return sorted(events)
+
+
 @contextmanager
 def changing_items(db, item_ids):
     """Legacy item writers preserve event evidence before and after mutation."""
@@ -186,18 +199,24 @@ class EventRevisions:
             merge = db.execute('SELECT * FROM studio_event_merge_receipts WHERE id=? AND project_id=?', (merge_id, project_id)).fetchone()
             if not merge:
                 raise KeyError('merge not found in project')
-            if merge['undone']:
-                return
-            self._check(db, project_id, json.loads(merge['after_state']))
-            saved = json.loads(merge['before_state'])
-            before = saved['versions']
-            for event_id, revision in before.items():
-                old = json.loads(db.execute('SELECT record FROM studio_event_revisions WHERE id=?', (revision,)).fetchone()[0])
-                if event_id != saved['target']:
-                    db.execute("UPDATE studio_events SET status=?,updated_at=? WHERE id=? AND project_id=?",
-                               (saved['statuses'][event_id], now(), event_id, project_id))
-                db.executemany('UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?',
-                               [(event_id, item, project_id) for item in old['members']])
-            for event_id in before:
-                record(db, project_id, event_id)
-            db.execute('UPDATE studio_event_merge_receipts SET undone=1 WHERE id=?', (merge_id,))
+            return self._undo(db, project_id, merge)
+
+    def _undo(self, db, project_id, merge):
+        if merge['undone']:
+            return
+        self._check(db, project_id, json.loads(merge['after_state']))
+        saved = json.loads(merge['before_state'])
+        if saved.get('kind') == 'attachment':
+            from project_watch.studio.event_membership import undo_attachment
+            return undo_attachment(self.store, db, project_id, merge, saved)
+        before = saved['versions']
+        for event_id, revision in before.items():
+            old = json.loads(db.execute('SELECT record FROM studio_event_revisions WHERE id=?', (revision,)).fetchone()[0])
+            if event_id != saved['target']:
+                db.execute("UPDATE studio_events SET status=?,updated_at=? WHERE id=? AND project_id=?",
+                           (saved['statuses'][event_id], now(), event_id, project_id))
+            db.executemany('UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?',
+                           [(event_id, item, project_id) for item in old['members']])
+        for event_id in before:
+            record(db, project_id, event_id)
+        db.execute('UPDATE studio_event_merge_receipts SET undone=1 WHERE id=?', (merge['id'],))
