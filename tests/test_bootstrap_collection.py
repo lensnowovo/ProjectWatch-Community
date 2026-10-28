@@ -21,6 +21,8 @@ URL = 'https://public.example.invalid/overview'
 
 
 def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count=1):
+    if native and not os.environ.get('PW_DSH_TEST_RUNTIME'):
+        pytest.skip('requires explicitly verified native DSH runtime')
     pipeline, execution = fixtures.setup.__wrapped__(tmp_path)
     settings = pipeline.settings_store.load()
     settings.search = SearchConfig('tavily', 'synthetic')

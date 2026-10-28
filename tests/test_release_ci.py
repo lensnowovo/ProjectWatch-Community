@@ -82,6 +82,18 @@ def test_ci_has_read_only_pinned_windows_job_with_mac_deferred():
                      'typecheck', 'frontend run build', 'build --wheel', 'installed_wheel_smoke.py', '--full-journey'):
         assert required in commands
     assert not any(s.get('continue-on-error') for s in steps)
+    for required in ('test_native_collection_role_reads_collects_and_finishes_without_record_tools',
+                     'test_worker_delivers_events_then_fresh_fixed_insight_with_no_source_tools[True]',
+                     'test_real_worker_scope_without_judgment_and_completed_receipt_replay[True]',
+                     'test_fresh_topic_worker_material_then_independent_question_without_judge_or_revise[True]'):
+        assert required in commands
+
+
+def test_progressive_installed_harness_uses_actual_worker_and_fixed_consumers(tmp_path):
+    import runpy
+    support = runpy.run_path(str(ROOT / 'tests/progressive_installed_support.py'))
+    result = support['run'](tmp_path)
+    assert result['immutable_insight'] and result['counts']['materials'] == 1
 
 
 def test_candidate_gate_requires_exact_commit_and_never_publishes():

@@ -82,7 +82,11 @@ def main(args):
         args.out.mkdir()
         shutil.copytree(args.bundle, second_bundle)
         value = json.loads((second_bundle/'bundle-manifest.json').read_text())
-        value['version'] = '0.2.0a1+synthetic.upgrade'
+        from packaging.version import Version
+        current = Version(value['version'])
+        release = (*current.release[:-1], current.release[-1] + 1)
+        value['version'] = '.'.join(map(str, release)) + '.dev0+synthetic.upgrade'
+        assert Version(value['version']) > current
         (second_bundle/'synthetic-upgrade.txt').write_text('SYNTHETIC INSTALLER TEST ONLY')
         value['files']['synthetic-upgrade.txt'] = digest(second_bundle/'synthetic-upgrade.txt')
         (second_bundle/'bundle-manifest.json').write_text(json.dumps(value))
