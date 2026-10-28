@@ -8,7 +8,6 @@ import platform
 import shutil
 import subprocess
 import sys
-import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,14 +19,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(*args):
-    subprocess.run([str(x) for x in args], cwd=ROOT, check=True)
+    print('RUN ' + ' '.join(map(str, args)), flush=True)
+    subprocess.run([str(x) for x in args], cwd=ROOT, check=True, timeout=900)
 
 
 def download(url, path, expected):
-    with urllib.request.urlopen(url, timeout=90) as response, path.open('xb') as target:
-        shutil.copyfileobj(response, target)
+    if path.exists():
+        raise ValueError('Download target exists')
+    run('curl', '--fail', '--location', '--show-error', '--connect-timeout', '30',
+        '--max-time', '240', '--speed-limit', '1024', '--speed-time', '60',
+        '--output', path, url)
     if bundle.digest(path) != expected:
         raise ValueError('Upstream archive hash mismatch: ' + path.name)
+    print('Verified download: ' + path.name, flush=True)
 
 
 def main():
