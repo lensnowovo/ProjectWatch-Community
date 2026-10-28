@@ -825,10 +825,6 @@ class PublicBootstrap:
                         retained.append(claim)
                 extra.update(dsh_claims=retained, evidence_version_id=source["evidence_version_id"])
                 db.execute("UPDATE studio_items SET extra=? WHERE id=?", (json.dumps(extra, ensure_ascii=False), item["id"]))
-                if claims[0].get('subject') and not item.get('event_id'):
-                    # Collection channel is not semantic classification. Only
-                    # an admitted typed candidate assigns a new event's category.
-                    db.execute('UPDATE studio_items SET category=? WHERE id=? AND event_id IS NULL', (category, item['id']))
             self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
             body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
@@ -836,7 +832,9 @@ class PublicBootstrap:
                 self.store.save_body(item["id"], body_status, body)
             saved = self.store.item_by_key(self.project_id, key)
             if not saved.get("event_id"):
-                news_items.append(saved)
+                # News is a separate semantic projection. Its source retains
+                # its professional discovery category and immutable evidence.
+                news_items.append({**saved, 'category': category})
         # News views read events, not raw items. Deterministic materialization is
         # a storage projection; it must not invoke the legacy model/agent loop.
         groups, _ambiguous = events.plan_groups(news_items, self.store.recent_events(
@@ -907,6 +905,8 @@ class PublicBootstrap:
                                                        for r in collected['rows']) if collected is not None else True)}, peers)
         result = {"status": status, "coverage": coverage, "records": len(records),
                   "retained_records": len(self.state['records']), "record_admission": admission,
+                  **({'material_work': self.execution.read_checkpoint('material_closeout_v1')}
+                     if self.execution.read_checkpoint('material_closeout_v1') else {}),
                   "profile_projection": profile_projection,
                   "collection": collected,
                   "executor": "dsh", "source_errors": self.state["errors"],

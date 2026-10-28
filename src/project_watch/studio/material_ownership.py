@@ -40,6 +40,8 @@ def project_guard(db, project_id, current_job):
 
 def take_over(execution, task_id):
     """Explicit transfer of a pending material from a terminal job, atomically."""
+    from project_watch.studio.evidence_tasks import TYPED_POLICY
+
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
@@ -61,9 +63,18 @@ def take_over(execution, task_id):
         result = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
                             (previous, 'extract_result:' + task_id)).fetchone()
         linked = db.execute('SELECT count(*) FROM studio_material_calls WHERE task_id=?', (task_id,)).fetchone()[0]
+        deferred = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                              (previous, 'material_deferred:' + task_id)).fetchone()
+        frozen = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                            (previous, 'material_pipeline_v1')).fetchone()
+        unsent = (not attempts and not linked and not result and deferred and frozen
+                  and json.loads(frozen[0]).get('owner') == 'materials'
+                  and json.loads(frozen[0]).get('policy') == task['policy'] == TYPED_POLICY
+                  and json.loads(deferred[0]) == {'task_id': task_id, 'policy': task['policy'],
+                                                 'dispatch': 'not_started', 'reason': 'publication_reserve'})
         if attempts and json.loads(attempts[0]) and not result and not linked:
             raise ValueError('material dispatch provenance missing')
-        if not result and not linked and db.execute("SELECT 1 FROM studio_job_calls WHERE job_id=? AND kind='model' LIMIT 1",
+        if not result and not linked and not unsent and db.execute("SELECT 1 FROM studio_job_calls WHERE job_id=? AND kind='model' LIMIT 1",
                                                    (previous,)).fetchone():
             raise ValueError('material dispatch provenance missing')
         for prefix in ('extract_attempt:', 'extract_result:'):

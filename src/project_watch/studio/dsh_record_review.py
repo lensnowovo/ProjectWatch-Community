@@ -96,7 +96,12 @@ def pending_calls(research):
     if not records or research.state.get('published') == digest(records) or research.state.get('finished'):
         return 0
     old = research.store.get_public_profile(research.project_id) or {}
-    plan = admission_plan(research, records, [] if research.topic_projection else old.get('facts') or [])
+    return pending_admission_calls(research, records, [] if research.topic_projection else old.get('facts') or [])
+
+
+def pending_admission_calls(research, records, old_facts):
+    """Exact remaining publication cost, including a previous-facts-only round."""
+    plan = admission_plan(research, records, old_facts)
     _, _, _, _, binding, prefix, batches = plan
     pending = 0
     for index in range(len(batches)):

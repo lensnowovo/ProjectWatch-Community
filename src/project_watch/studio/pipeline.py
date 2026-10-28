@@ -1839,6 +1839,25 @@ class Pipeline:
         # Operator opt-in, first public bootstrap only. DSH owns research choices;
         # never silently fall back to the legacy collector on failure.
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
+        frozen = execution.read_checkpoint('material_pipeline_v1') if execution else None
+        if frozen:
+            # Publication may advance last_external_at before the worker can
+            # mark this job done. Its durable entry still owns every replay.
+            from project_watch.studio.dsh_runtime import run_bootstrap, run_monitor
+            from project_watch.studio.public_executor import require_available
+
+            require_available()
+            if not dsh_root:
+                raise ValueError('frozen public research requires DSH runtime')
+            if frozen['entry'] == 'bootstrap':
+                run_bootstrap(self, execution, Path(dsh_root))
+                if os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1':
+                    self.store.enqueue(project_id, 'external_followup', automatic=True, input_version=job['id'])
+            elif frozen['entry'] == 'monitor':
+                run_monitor(self, execution, Path(dsh_root))
+            else:
+                raise ValueError('invalid frozen public research entry')
+            return
         if execution and (execution.read_checkpoint('collection_request_v1') or {}).get('mode') == 'topic':
             from project_watch.studio.dsh_runtime import run_monitor
             from project_watch.studio.public_executor import require_available
