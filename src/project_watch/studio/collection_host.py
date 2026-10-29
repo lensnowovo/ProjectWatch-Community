@@ -167,6 +167,11 @@ def prepare(research):
                           research.project_id, cycle=execution.job['id']) if w.get('visibility') == 'public']),
                       capabilities=sources.capabilities() | {'site': sites.capability}, at=now())
         execution.checkpoint_chunked(SCOPE, frozen)
+    # Persist this cycle's limits before dispatch. Backlog admission happens
+    # after collection, so exhausted old work cannot suppress fresh checks.
+    from project_watch.studio.material_handoff import prepare as prepare_materials
+
+    prepare_materials(research, frozen)
     manifest = execution.read_checkpoint(STAGE)
     plan = manifest['plan'] if manifest is not None else build_collection_plan(
         round_id=execution.job['id'], project=frozen['project'], binding=digest(frozen),

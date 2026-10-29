@@ -5,7 +5,7 @@ links permit exact completed-response reuse, not redispatch of uncertain calls.
 """
 import hashlib
 import json
-from contextlib import closing
+from contextlib import closing, nullcontext
 
 from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import HttpError, Response
@@ -38,15 +38,20 @@ def project_guard(db, project_id, current_job):
             raise HttpError(hold['code'])
 
 
-def take_over(execution, task_id):
+def take_over(execution, task_id, *, db=None):
     """Explicit transfer of a pending material from a terminal job, atomically."""
     from project_watch.studio.evidence_tasks import TYPED_POLICY
 
-    with closing(execution.store._connect()) as db, db:
-        db.execute('BEGIN IMMEDIATE')
+    own_connection = db is None
+    with (closing(execution.store._connect()) if own_connection else nullcontext(db)) as db, (db if own_connection else nullcontext()):
+        if own_connection:
+            db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
         pid, next_job = execution.job['project_id'], execution.job['id']
         project_guard(db, pid, next_job)
+        project = db.execute('SELECT status FROM studio_projects WHERE project_id=?', (pid,)).fetchone()
+        if not project or project[0] != 'active':
+            raise HttpError('project_paused')
         task = db.execute('SELECT * FROM studio_evidence_tasks WHERE id=? AND project_id=?', (task_id, pid)).fetchone()
         if not task or task['status'] != 'pending':
             raise ValueError('pending material required in project')

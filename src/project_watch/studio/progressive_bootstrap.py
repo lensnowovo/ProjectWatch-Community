@@ -190,6 +190,9 @@ def _finish_deferred(research):
 def run(research, model, http, runtime_root, directory):
     # The parent never starts a legacy research turn or advertises pw_record.
     # Only host-restored candidates may reach its existing validator/publisher.
+    from project_watch.studio.material_handoff import adopt
+
+    adopt(research)
     research.tools = ('pw_status', 'pw_finish')
     def extract(source, material):
         source = {**source, 'project': {'legal_name': research.project['legal_name']}}

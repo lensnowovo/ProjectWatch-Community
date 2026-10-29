@@ -230,6 +230,9 @@ class JobExecution:
             backoff = db.execute("SELECT retry_after FROM studio_provider_backoff WHERE provider=?", (provider_hash,)).fetchone()
             if backoff and backoff[0] > now():
                 raise HttpError("provider_backoff")
+            from project_watch.studio.material_handoff import restore_limits
+
+            restore_limits(self, db)
             count = self.budget_used(kind, db=db)
             if self.budgets[kind] is not None and count >= self.budgets[kind]:
                 raise HttpError("request_budget")
