@@ -1,11 +1,10 @@
 import { motion } from "motion/react";
 import { useState } from "react";
-import { api, type Item, type ProjectDetail } from "./api";
+import { type ResearchSource as Item, type ProjectDetail } from "./api";
 import { Block, Figure, Skeleton, VerdictBand } from "./frame";
-import { ItemList } from "./items";
+import { ResearchSourceList, ResearchMore, useResearchSources } from './researchSources';
 import { EASE } from "./motion";
-import { Empty, ErrorNote, byNewest, useAsync } from "./ui";
-import { monitoringRevision } from "./workState";
+import { Empty, ErrorNote, byNewest } from "./ui";
 import { externalCollection } from './externalCollection';
 
 export function ResearchEmpty({detail,label}: {detail:ProjectDetail;label:string}) {
@@ -16,17 +15,17 @@ export function ResearchEmpty({detail,label}: {detail:ProjectDetail;label:string
 }
 
 /**
- * 外部信息 › 临床 / 论文 / 专利: the company's own research record, read from the structured fields the sources carry
+ * 外部信息 › 临床 / 论文 / 专利: related public records, read from the structured fields the sources carry
  * (ClinicalTrials.gov registrations, OpenAlex papers). Counts are of what was collected, never of what exists.
  */
 
 type Extra = Record<string, unknown>;
-const extras = (item: Item): Extra[] => [item.extra as Extra, ...(item.sources ?? []).map((s) => (s.extra ?? {}) as Extra)];
+const extras = (item: Item): Extra[] => [item.extra];
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 function useCategory(detail: ProjectDetail, category: "trial" | "paper" | "patent") {
-  return useAsync(() => api.feed({ project_id: detail.project.id, category, limit: 200 }), [detail.project.id, category, monitoringRevision(detail)]);
+  return useResearchSources(detail.project.id, category);
 }
 
 // ------------------------------------------------------------------ 临床
@@ -41,18 +40,16 @@ const STATUS: Record<string, [string, "on" | "done" | "stop" | ""]> = {
 interface Trial { id: string; title: string; phase: string; status: string; sponsor: string; collaborators: string[]; conditions: string[]; url: string; date: string; news: number }
 
 export function ClinicalView({ detail }: { detail: ProjectDetail }) {
-  const { data, loading, error, reload, setData } = useCategory(detail, "trial");
+  const { data, loading, error, reload, page, more, note } = useCategory(detail, "trial");
   const items = (data ?? []).slice().sort(byNewest);
   const trials = new Map<string, Trial>();
-  for (const t of detail.trials ?? []) trials.set(t.id, { id: t.id, title: t.title, phase: t.phase, status: t.status, sponsor: t.sponsor,
-    collaborators: [], conditions: t.conditions, url: t.url, date: t.updated_at ?? "", news: 0 });
   for (const item of items) for (const x of extras(item)) {
     const id = str(x.nct_id);
     if (!id) continue;
     const known = trials.get(id);
     trials.set(id, { id, title: known?.title || item.title, phase: str(x.phase) || known?.phase || "", status: str(x.status) || known?.status || "",
       sponsor: str(x.sponsor) || known?.sponsor || "", collaborators: list(x.collaborators), conditions: list(x.conditions).length ? list(x.conditions) : known?.conditions ?? [],
-      url: known?.url || `https://clinicaltrials.gov/study/${id}`, date: (item.published_at ?? item.collected_at ?? "").slice(0, 10) || known?.date || "",
+      url: known?.url || `https://clinicaltrials.gov/study/${id}`, date: (item.published_at ?? "").slice(0, 10) || known?.date || "",
       news: (known?.news ?? 0) + 1 });
   }
   const rows = [...trials.values()];
@@ -61,9 +58,8 @@ export function ClinicalView({ detail }: { detail: ProjectDetail }) {
   const rank = (p: string) => Math.max(-1, ...p.split("/").map((x) => PHASES.findIndex(([k]) => k === x)));
   const top = rows.reduce((m, r) => Math.max(m, rank(r.phase)), -1);
   const active = rows.filter((r) => STATUS[r.status]?.[1] === "on").length;
-  const update = (changed: Item) => setData((prev) => (prev ?? []).map((i) => (i.id === changed.id ? changed : i)).filter((i) => i.status !== "dismissed"));
   return <div className="tab-frame research-view">
-    <VerdictBand eyebrow="临床" meta="ClinicalTrials.gov 登记 · 临床相关报道"
+    <VerdictBand eyebrow="临床" meta={note}
       title={loading && !data ? "正在读取临床信息…" : rows.length ? `已收录 ${rows.length} 项登记试验，最高到 ${top >= 0 ? PHASES[top][1] : "阶段未注明"}` : items.length ? `${items.length} 条临床相关报道，尚未收录登记号` : "还没有收录到临床信息"}
       figures={<>
         <Figure label="登记试验" value={rows.length} unit="项" note="按登记号去重" />
@@ -90,9 +86,10 @@ export function ClinicalView({ detail }: { detail: ProjectDetail }) {
       </table></div>
     </Block>}
     <Block title="临床相关报道" note="按时间">
-      {loading && !data ? <Skeleton lines={4} /> : items.length ? <ItemList items={items} onChange={update} grouped={false} />
+      {loading && !data ? <Skeleton lines={4} /> : items.length ? <ResearchSourceList items={items} />
         : <Empty title="暂无临床相关报道" />}
     </Block>
+    <ResearchMore page={page} loading={loading} more={more}/>
   </div>;
 }
 
@@ -106,19 +103,19 @@ function quarterOf(iso: string): string {
 }
 
 export function PapersView({ detail }: { detail: ProjectDetail }) {
-  const { data, loading, error, reload, setData } = useCategory(detail, "paper");
+  const { data, loading, error, reload, page, more, note } = useCategory(detail, "paper");
   const [all, setAll] = useState(false);
   if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的论文信息</button></div>;
   if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="论文"/>;
   const items = (data ?? []).slice().sort(byNewest);
   const papers: Paper[] = items.map((item) => {
     const x = extras(item).find((e) => e.openalex_id) ?? {};
-    const when = item.published_at ?? item.collected_at ?? "";
+    const when = item.published_at && Date.parse(item.published_at) <= Date.now() ? item.published_at : "";
     return { item, authors: list(x.authors), institutions: list(x.institutions), cited: typeof x.cited_by === "number" ? x.cited_by : null,
       year: when.slice(0, 4), quarter: quarterOf(when), structured: !!x.openalex_id };
   });
   const structured = papers.filter((p) => p.structured);
-  const year = papers.filter((p) => Date.now() - Date.parse(p.item.published_at ?? p.item.collected_at) < 365 * 86400_000).length;
+  const year = papers.filter((p) => { const age = Date.now() - Date.parse(p.item.published_at ?? ''); return age >= 0 && age < 365 * 86400_000; }).length;
   const inst = new Map<string, number>();
   for (const p of structured) for (const name of new Set(p.institutions)) inst.set(name, (inst.get(name) ?? 0) + 1);
   const topInst = [...inst.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
@@ -126,9 +123,8 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
   const quarters = lastQuarters(8);
   const perQ = quarters.map((q) => ({ q, n: papers.filter((p) => p.quarter === q).length }));
   const maxQ = Math.max(1, ...perQ.map((x) => x.n));
-  const update = (changed: Item) => setData((prev) => (prev ?? []).map((i) => (i.id === changed.id ? changed : i)).filter((i) => i.status !== "dismissed"));
   return <div className="tab-frame research-view">
-    <VerdictBand eyebrow="论文" meta="OpenAlex 与检索结果 · 按发表或收录时间"
+    <VerdictBand eyebrow="论文" meta={note}
       title={loading && !data ? "正在读取论文…" : papers.length ? `近一年 ${year} 篇相关论文${topInst[0] ? `，发文最多的是 ${topInst[0][0]}` : ""}` : "还没有收录到相关论文"}
       figures={<>
         <Figure label="已收录论文" value={papers.length} unit="篇" note={`${structured.length} 篇有作者与机构`} />
@@ -158,9 +154,10 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
       </li>)}</ol>
     </Block>}
     <Block title="全部论文" note={`${papers.length} 篇`} action={papers.length > 8 ? <button className="link small" onClick={() => setAll((v) => !v)}>{all ? "收起" : `展开全部 ${papers.length} 篇`}</button> : undefined}>
-      {loading && !data ? <Skeleton lines={4} /> : items.length ? <ItemList items={all ? items : items.slice(0, 8)} onChange={update} grouped={false} />
+      {loading && !data ? <Skeleton lines={4} /> : items.length ? <ResearchSourceList items={all ? items : items.slice(0, 8)} />
         : <Empty title="暂无相关论文" />}
     </Block>
+    <ResearchMore page={page} loading={loading} more={more}/>
   </div>;
 }
 
@@ -175,17 +172,16 @@ function lastQuarters(n: number): string[] {
 // ------------------------------------------------------------------ 专利
 
 export function PatentsView({ detail }: { detail: ProjectDetail }) {
-  const { data, loading, error, reload, setData } = useCategory(detail, "patent");
+  const { data, loading, error, reload, page, more, note } = useCategory(detail, "patent");
   if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的专利信息</button></div>;
   if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="专利与注册"/>;
   const items = (data ?? []).slice().sort(byNewest);
   const own = companyNames(detail);
   // Patent search returns sector news by keyword, so most records are other companies' patents. Say whose they are.
-  const mine = items.filter((i) => own.some((n) => i.title.includes(n) || (i.summary ?? "").includes(n)));
+  const mine = items.filter((i) => own.some((n) => i.title.includes(n) || i.snippet.includes(n)));
   const others = items.filter((i) => !mine.includes(i));
-  const update = (changed: Item) => setData((prev) => (prev ?? []).map((i) => (i.id === changed.id ? changed : i)).filter((i) => i.status !== "dismissed"));
   return <div className="tab-frame research-view">
-    <VerdictBand eyebrow="专利与注册" meta="通用网页检索 · 非专利数据库"
+    <VerdictBand eyebrow="专利与注册" meta={`通用网页检索 · ${note ?? ''}`}
       title={loading && !data ? "正在读取专利信息…" : !items.length ? "还没有检索到专利或注册信息"
         : mine.length ? `检索到 ${items.length} 条，其中 ${mine.length} 条提到本公司` : `检索到 ${items.length} 条，尚未匹配到本公司名称`}
       figures={items.length ? <>
@@ -197,25 +193,20 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
     </VerdictBand>
     {!items.length ? <Block title="专利与注册信息"><Empty title="暂无专利或注册信息">需要接入专利数据库才能做专利布局分析。</Empty></Block> : <>
       <Block title="提到本公司的专利动态" note={mine.length ? "仍需到专利库核实权利人与法律状态" : "检索未命中"}>
-        {mine.length ? <ItemList items={mine} onChange={update} grouped={false} />
+        {mine.length ? <ResearchSourceList items={mine} />
           : <p className="muted small">暂无收录的公司专利记录。</p>}
       </Block>
       {others.length > 0 && <Block title="其他专利与注册线索" note={`${others.length} 条 · 未匹配到本公司名称`}>
-        <ItemList items={others} onChange={update} grouped={false} />
+        <ResearchSourceList items={others} />
       </Block>}
     </>}
+    <ResearchMore page={page} loading={loading} more={more}/>
   </div>;
 }
 
-/** Names the company is written by in sources: display, short and legal name, and the legal name without its suffix. */
+/** Match saved names only. Stripping company suffixes can turn a name into an unrelated common word. */
 function companyNames(detail: ProjectDetail): string[] {
   const p = detail.project;
   const raw = [p.short_name, p.name, p.legal_name].filter((x): x is string => !!x && x.length >= 2);
-  const out = new Set<string>();
-  for (const n of raw) {
-    out.add(n);
-    const core = n.replace(/[（(][^）)]*[）)]/g, "").replace(/(股份有限公司|有限责任公司|有限公司|集团|公司)$/, "").trim();
-    if (core.length >= 2) out.add(core);
-  }
-  return [...out];
+  return [...new Set(raw)];
 }

@@ -482,6 +482,7 @@ export interface CollectionReport {
 }
 
 export interface ProjectDetail {
+  research_source_counts?: Partial<Record<'paper' | 'patent' | 'trial', number>>;
   collection_report?: CollectionReport | null;
   /** Read-only saved content revisions, not progress percentages or task outcomes. */
   dossier_saved?: { version: 1; relations: { revision: string; count: number }; judgment: { revision: string; count: number } };
@@ -944,6 +945,8 @@ export const api = {
   startTopicResearch: (id: string, watchId: string, version: string) => request<Job>('POST',
     `/api/studio/projects/${id}/research-topic`, { watch_id: watchId, expected_version: version }),
   discoveredSources: (id: string, offset = 0) => request<DiscoveredSourcePage>('GET', `/api/studio/projects/${id}/discovered-sources?offset=${offset}`),
+  researchSources: (id: string, category: ResearchCategory, offset = 0, revision?: string) =>
+    request<ResearchSourcePage>('GET', `/api/studio/projects/${id}/research-sources?${new URLSearchParams({category, offset: String(offset), ...(revision ? {revision} : {})})}`),
   collectionSources: (id: string) => request<CollectionSourceChoices>('GET', `/api/studio/projects/${id}/collection-sources`),
   chooseCollectionSource: (id: string, adapter: string, selection: SourceSelection, reason: string, expected_version: number) =>
     request<CollectionSourceDecision>('PUT', `/api/studio/projects/${id}/collection-sources/${encodeURIComponent(adapter)}`,
@@ -1007,6 +1010,19 @@ export const api = {
   setCrossCheck: (checkId: string, status: CrossCheck["status"]) => request("PATCH", `/api/studio/crosschecks/${checkId}`, { status }),
   watchEvents: (watchId: string) => request<EventDTO[]>("GET", `/api/studio/watchpoints/${watchId}/events`).then((rows) => rows.map(eventToItem)),
 };
+export type ResearchCategory = 'paper' | 'patent' | 'trial';
+export interface ResearchSource {
+  id: string; project_id: string; category: ResearchCategory;
+  title: string; url: string; source: string; snippet: string;
+  published_at: string | null; collected_at: string;
+  extra: Record<string, unknown>; processing_status: 'organized' | 'pending';
+  source_type: string | null; read_scope: string | null;
+  evidence_version_id: string | null; body_evidence_version_id: string | null;
+}
+export interface ResearchSourcePage {
+  project_id: string; category: ResearchCategory; revision: string;
+  items: ResearchSource[]; total: number; offset: number; next_offset: number | null;
+}
 export interface DiscoveredSourcePage {
   items: { id: string; title: string; url: string; source: string; published_at: string | null;
     collected_at: string; observed_at: string; evidence_version_id: string; source_type: string;

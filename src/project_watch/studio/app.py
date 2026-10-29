@@ -699,6 +699,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         from project_watch.studio.milestones import read as read_milestones
         from project_watch.studio.observations import read as read_observations
         from project_watch.studio.progress import read as read_progress
+        from project_watch.studio.research_sources import research_source_counts
         from project_watch.studio.runtime_health import project_jobs
 
         project = project_or_404(project_id)
@@ -733,6 +734,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "brief": store.get_brief(project_id),
             "plan": plan,
             "collection_report": latest_report(store, project_id),
+            "research_source_counts": research_source_counts(store, project_id),
             "metrics": metrics,
             "finance": finance.view(metrics),
             "landscape": _landscape_view(project_id),
@@ -1103,6 +1105,20 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(409, str(exc)) from exc
 
     # ------------------------------------------------------------- feed
+    @app.get("/api/studio/projects/{project_id}/research-sources")
+    def research_sources(project_id: str, category: str, limit: int = 40, offset: int = 0,
+                         revision: str | None = None):
+        from project_watch.studio.research_sources import SourceRevisionChanged
+        from project_watch.studio.research_sources import research_sources as source_page
+
+        project_or_404(project_id)
+        try:
+            return source_page(store, project_id, category, limit=limit, offset=offset, revision=revision)
+        except SourceRevisionChanged:
+            return JSONResponse(status_code=409, content={'code': 'research_sources_changed', 'detail': '来源已更新，正在重新读取'})
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.get("/api/studio/projects/{project_id}/discovered-sources")
     def discovered_sources(project_id: str, limit: int = 20, offset: int = 0):
         from project_watch.studio.collection_view import discovered_sources as source_page

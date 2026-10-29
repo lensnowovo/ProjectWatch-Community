@@ -524,10 +524,13 @@ export function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; pag
   // Preserve an explicitly opened historical clinical URL, even before its scope loads.
   const cells = STRIP.filter(s => s.page !== 'trials' || hasClinicalScope(detail) || page === 'trials').map((s) => {
     const collection=externalCollection(detail, s.page==='chain'?['chain']:s.page==='industry'?['industry','policy','technology']:s.cats);
+    const counts = {...detail.counts, ...detail.research_source_counts};
+    const empty = s.cats.every(c => !(counts[c] ?? 0));
+    const professional = ['trials', 'papers', 'patents'].includes(s.page);
     return ({ ...s,
-    n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0),
-    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):s.cats.every(c => !(detail.counts[c]??0))?collection.label:undefined,
-    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':s.cats.every(c => !(detail.counts[c]??0))?`本栏目暂无收录。${collection.description}`:undefined,
+    n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (counts[c] ?? 0), 0),
+    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):empty?collection.label:professional?'来源':undefined,
+    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':empty?`本栏目暂无收录。${collection.description}`:professional?'已保存的公开相关来源，检索命中不代表公司归属。':undefined,
   }); });
   return <PageStrip label="外部信息分区" page={page} go={go} cells={cells} />;
 }
