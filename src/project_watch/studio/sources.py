@@ -514,15 +514,12 @@ class Collectors:
 
     # ---------- papers (free) ----------
     def openalex(self, query: str, *, affiliation: bool = False, author: bool = False, per_page: int = 15) -> list[dict]:
+        from project_watch.studio.openalex_query import get_results, scope_params
+
         params = {"per-page": per_page, "sort": "publication_date:desc",
                   "select": "id,doi,display_name,publication_date,primary_location,authorships,cited_by_count,abstract_inverted_index"}
-        if affiliation:
-            params["filter"] = f"raw_affiliation_strings.search:{query}"
-        elif author:
-            params["filter"] = f"raw_author_name.search:{query}"
-        else:
-            params["search"] = query
-        data = self.http.get_json("https://api.openalex.org/works?" + urlencode(params))
+        params.update(scope_params(query, 'affiliation' if affiliation else 'author' if author else 'topic'))
+        data = get_results(self.http, "https://api.openalex.org/works?" + urlencode(params))
         items = []
         for work in data.get("results") or []:
             if not isinstance(work, dict):

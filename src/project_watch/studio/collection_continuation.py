@@ -5,6 +5,7 @@ from contextlib import closing
 from project_watch.studio.collection_history import moment, query_key
 
 SOURCES = frozenset({'openalex_topic', 'openalex_author', 'openalex_affiliation',
+                     'europepmc_affiliation', 'europepmc_topic', 'europepmc_patent',
                      'clinical_sponsor', 'clinical_term', 'cninfo'})
 SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_collection_continuations (
     project_id TEXT NOT NULL REFERENCES projects(id), query_key TEXT NOT NULL,

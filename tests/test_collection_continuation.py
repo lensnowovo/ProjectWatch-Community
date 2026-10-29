@@ -220,6 +220,8 @@ def test_dsh_discovered_scope_continues_in_next_host_round(tmp_path):
                                       url='https://example.org/public-source')])
         elif host == 'api.openalex.org':
             data = dict(results=[], meta={'count': 0})
+        elif host == 'www.ebi.ac.uk':
+            data = dict(hitCount=0, resultList={'result': []})
         elif host == 'www.cninfo.com.cn':
             data = dict(announcements=[], totalAnnouncement=0)
         else:

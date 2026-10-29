@@ -552,7 +552,7 @@ class PublicBootstrap:
         if source.get("read_attempted"):
             return source
         fetch = getattr(self.collectors, "deepseek_fetch", None)
-        if fetch:
+        if fetch and not source.get('open_paper_body'):
             try:
                 fetched = fetch(source["url"])
             except HttpError as exc:

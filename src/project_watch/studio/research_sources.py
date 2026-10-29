@@ -11,6 +11,9 @@ from urllib.parse import urlsplit
 
 CATEGORIES = ('paper', 'patent', 'trial')
 TEXT_FIELDS = ('openalex_id', 'doi', 'nct_id', 'phase', 'status', 'sponsor',
+               'europepmc_id', 'pmcid', 'license',
+               'patent_number', 'patent_kind', 'patent_country', 'provider_affiliation',
+               'legal_status', 'family_status', 'source_first_date', 'date_basis',
                'assignee_query', 'applicant_quote', 'applicant_basis')
 LIST_FIELDS = ('authors', 'institutions', 'affiliations', 'collaborators', 'conditions', 'applicants')
 

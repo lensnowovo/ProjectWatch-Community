@@ -115,9 +115,16 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         add('cninfo', 'company', [name])
         add('openalex_affiliation', 'paper', public_plan.get('affiliation_names') or [name], historical=True)
         add('openalex_topic', 'paper', public_plan.get('paper_queries') or directions['technology'])
+        # Biomedical index does not infer that the company is a drug developer.
+        # Only existing public institution/topic scope is sent; zero is a query
+        # result, not a claim of non-applicability or lack of research.
+        add('europepmc_affiliation', 'paper', public_plan.get('affiliation_names') or [name], historical=True)
+        if public_plan.get('paper_queries') or 'europepmc_topic' in scoped_sources:
+            add('europepmc_topic', 'paper', public_plan.get('paper_queries') or [])
         if public_plan.get('paper_authors') or 'openalex_author' in scoped_sources:
             add('openalex_author', 'paper', public_plan.get('paper_authors') or [])
         add('patent_search', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
+        add('europepmc_patent', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
         # is_biomed is deliberately not an applicability decision. Sponsor and
         # intervention searches remain separate, including hospital-led studies.
         sponsors, terms = public_plan.get('trial_sponsors') or [], public_plan.get('trial_terms') or []

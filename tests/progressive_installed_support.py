@@ -36,6 +36,8 @@ def run(home):
         if host == 'api.tavily.com':
             data = {'results': [{'title': 'Synthetic public source', 'url': 'https://public.example.invalid/item',
                                  'content': 'Short public discovery summary'}]}
+        elif host == 'www.ebi.ac.uk':
+            data = {'hitCount': 0, 'resultList': {'result': []}}
         elif host == 'api.openalex.org':
             data = {'results': [], 'meta': {'count': 0}}
         elif host == 'www.cninfo.com.cn':

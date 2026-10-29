@@ -28,6 +28,11 @@ def research(tmp_path):
             payload = {'studies': [study()]}
         elif host == 'api.openalex.org':
             payload = {'results': [work()], 'meta': {'count': 1}}
+        elif host == 'www.ebi.ac.uk':
+            patent = 'SRC:PAT' in parse_qs(urlsplit(url).query)['query'][0]
+            payload = {'hitCount': 1, 'resultList': {'result': [{'id': 'US123' if patent else '123',
+                'source': 'PAT' if patent else 'MED', 'patentDetails': {'typeCode': 'A1'},
+                'title': 'Synthetic professional source', 'firstPublicationDate': '2026-10-20'}]}}
         elif host == 'www.cninfo.com.cn':
             payload = {'announcements': [], 'totalAnnouncement': 0}
         elif host == 'api.tavily.com':

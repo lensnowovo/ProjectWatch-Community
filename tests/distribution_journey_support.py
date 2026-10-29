@@ -80,6 +80,8 @@ class SyntheticTransport:
             return json_response({'announcements': []})
         if host == 'api.openalex.org':
             return json_response({'results': []})
+        if host == 'www.ebi.ac.uk':
+            return json_response({'hitCount': 0, 'resultList': {'result': []}})
         raise AssertionError(f'Unscripted endpoint (no network permitted): {host}')
 
     @staticmethod

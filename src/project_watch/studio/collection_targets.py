@@ -9,6 +9,8 @@ from project_watch.studio.store import now
 
 # Adapter contracts, not industry words or model-authored applicability rules.
 ADAPTERS = {
+    'europepmc_affiliation': ('paper', True), 'europepmc_topic': ('paper', False),
+    'europepmc_patent': ('patent', True),
     'openalex_affiliation': ('paper', True), 'openalex_author': ('paper', True),
     'openalex_topic': ('paper', False), 'patent_search': ('patent', True),
     'clinical_sponsor': ('trial', True), 'clinical_term': ('trial', True),

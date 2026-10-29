@@ -31,6 +31,8 @@ def install_provider(setup, monkeypatch, *, native=False, failure=None, all_vali
 
     def send(_method, url, _headers, raw, _timeout):
         host = urlsplit(url).hostname
+        if host == 'www.ebi.ac.uk':
+            return Response(200, {}, b'{"hitCount":0,"resultList":{"result":[]}}')
         if host == 'api.openalex.org':
             return Response(200, {}, json.dumps({'results': [work(i) for i in (1, 2, 3)], 'meta': {'count': 3}}).encode())
         if host == 'www.cninfo.com.cn':
@@ -389,6 +391,8 @@ def test_empty_collection_defers_unaffordable_previous_fact_review_without_chang
     pipeline._execution_state.current = current
     def empty_collection(_method, url, *_args):
         host = urlsplit(url).hostname
+        if host == 'www.ebi.ac.uk':
+            return Response(200, {}, b'{"hitCount":0,"resultList":{"result":[]}}')
         if host == 'api.openalex.org':
             return Response(200, {}, b'{"results":[],"meta":{"count":0}}')
         assert host == 'www.cninfo.com.cn', 'no model or other provider dispatch'

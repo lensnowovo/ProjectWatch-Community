@@ -173,6 +173,12 @@ def page_source(research, sid):
     # On an unreadable page the original evidence remains available as a
     # fallback, with its original type and scope, never relabelled as body.
     page = {**original, 'id': page_id, 'collection_parent': sid, 'read_attempted': False}
+    from project_watch.studio.europepmc import open_body_url
+
+    _record, snapshot = _evidence(research, refs[sid])
+    body_url = open_body_url(snapshot)
+    if body_url:
+        page.update(url=body_url, open_paper_body=True)
     page.pop('next_offset', None)
     page.pop('window_offset', None)
     research.execution.checkpoint('dsh_source_' + page_id, page)

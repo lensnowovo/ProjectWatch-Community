@@ -3,6 +3,7 @@ from datetime import date
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from project_watch.studio.http import HttpError
+from project_watch.studio.openalex_query import get_results, scope_params
 from project_watch.studio.sources import _item, _openalex_abstract, _plain
 
 
@@ -15,6 +16,8 @@ def public_read_request(method, url, headers, body):
     endpoint = urlsplit(url)
     contracts = {
         ('api.openalex.org', '/works'): {'page', 'per-page', 'sort', 'select', 'search', 'filter'},
+        ('www.ebi.ac.uk', '/europepmc/webservices/rest/search'): {
+            'query', 'format', 'resultType', 'pageSize', 'cursorMark'},
         ('clinicaltrials.gov', '/api/v2/studies'): {'pageSize', 'sort', 'format', 'query.spons', 'query.term', 'pageToken'},
         ('www.cninfo.com.cn', '/new/fulltextSearch/full'): {
             'searchkey', 'sdate', 'edate', 'isfulltext', 'sortName', 'sortType', 'pageNum', 'pageSize'},
@@ -36,20 +39,13 @@ def _rows(data, key):
 
 def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None, end=None):
     """Basic pagination is bounded at 10,000, avoiding unconfigured cursor keys."""
-    if mode not in ('topic', 'author', 'affiliation') or not isinstance(query, str) or not query.strip():
-        raise ValueError('invalid paper scope')
+    scope = scope_params(query, mode)
     if type(page) is not int or type(per_page) is not int or page < 1 or not 1 <= per_page <= 100 or page * per_page > 10000:
         raise ValueError('invalid paper page')
     params = {'page': page, 'per-page': per_page, 'sort': 'publication_date:desc',
               'select': 'id,doi,display_name,publication_date,primary_location,authorships,cited_by_count,abstract_inverted_index'}
-    filters = []
-    if mode == 'topic':
-        params['search'] = query
-    else:
-        # These are API filter operators; reject delimiter injection into scope.
-        if any(char in query for char in ',|!'):
-            raise ValueError('paper scope requires resolved entity or unambiguous name')
-        filters.append(('raw_affiliation_strings.search:' if mode == 'affiliation' else 'raw_author_name.search:') + query)
+    params.update({key: value for key, value in scope.items() if key != 'filter'})
+    filters = [scope['filter']] if 'filter' in scope else []
     for key, value in (('from_publication_date', start), ('to_publication_date', end)):
         if value:
             filters.append(key + ':' + date.fromisoformat(value).isoformat())
@@ -57,7 +53,7 @@ def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None,
         raise ValueError('invalid paper window')
     if filters:
         params['filter'] = ','.join(filters)
-    data = http.get_json('https://api.openalex.org/works?' + urlencode(params))
+    data = get_results(http, 'https://api.openalex.org/works?' + urlencode(params))
     rows = _rows(data, 'results')
     count = (data.get('meta') or {}).get('count')
     if type(count) is not int or count < 0:

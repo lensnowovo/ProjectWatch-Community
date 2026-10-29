@@ -38,6 +38,8 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
                                  'content': 'Saved short public summary'} for i in range(source_count)]}
         elif host == 'api.openalex.org':
             data = {'results': [], 'meta': {'count': 0}}
+        elif host == 'www.ebi.ac.uk':
+            data = {'hitCount': 0, 'resultList': {'result': []}}
         elif host == 'www.cninfo.com.cn':
             data = {'announcements': [], 'totalAnnouncement': 0}
         elif host == 'clinicaltrials.gov':

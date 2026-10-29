@@ -42,6 +42,8 @@ def journey(tmp_path, monkeypatch):
 
     def send(_method, url, _headers, raw, _timeout):
         host = urlsplit(url).hostname
+        if host == 'www.ebi.ac.uk':
+            return Response(200, {}, b'{"hitCount":0,"resultList":{"result":[]}}')
         if host == 'api.openalex.org':
             state['reads'].append(host)
             return Response(200, {}, json.dumps({'results': state['rows'], 'meta': {'count': len(state['rows'])}}).encode())

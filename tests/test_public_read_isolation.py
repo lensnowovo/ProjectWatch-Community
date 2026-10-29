@@ -55,7 +55,8 @@ def test_public_failure_reaches_dsh_and_other_sources_without_resend(setup, monk
     monkeypatch.setattr(dsh_runtime, 'run_dsh', model_turn)
     for _ in range(2):
         dsh_runtime.run_bootstrap(pipeline, execution, None)
-    assert len(models) == 2 and len(calls) == 3
+    assert len(models) == 2 and len(calls) == 5
+    assert sum(urlsplit(url).hostname == 'www.ebi.ac.uk' for url in calls) == 2
     assert execution.usage()['open_data']['unknown'] == 0
     coverage = models[-1]['collection']
     assert coverage['status'] == 'partial'

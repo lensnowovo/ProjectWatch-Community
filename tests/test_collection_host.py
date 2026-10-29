@@ -35,6 +35,8 @@ def response(url):
         return Response(200, {}, json.dumps({'results': [work()], 'meta': {'count': 1}}).encode())
     if host == 'www.cninfo.com.cn':
         return Response(200, {}, b'{"announcements":[],"totalAnnouncement":0}')
+    if host == 'www.ebi.ac.uk':
+        return Response(200, {}, b'{"hitCount":0,"resultList":{"result":[]}}')
     pytest.fail('unexpected provider dispatch: ' + host)
 
 
@@ -53,7 +55,7 @@ def test_runtime_collects_and_ingests_before_dsh_and_replay_adds_no_requests(set
 
     def model_turn(research, *_args):
         status = research.tool('pw_status', {})
-        assert len(calls) == 3
+        assert len(calls) == 5 and calls.count('www.ebi.ac.uk') == 2
         assert len(status['collected_sources']['sources']) == 1
         assert status['collection']['status'] == 'partial'  # unconfigured search and missing scopes stay visible
         assert execution.read_checkpoint('dsh_runtime_phase')['phase'] == 'read'
@@ -65,8 +67,8 @@ def test_runtime_collects_and_ingests_before_dsh_and_replay_adds_no_requests(set
     monkeypatch.setattr(dsh_runtime, 'run_dsh', model_turn)
     for _ in range(2):
         dsh_runtime.run_bootstrap(pipeline, execution, None)
-    assert len(calls) == 3 and len(statuses) == 2
-    assert execution.usage()['open_data']['requests'] == 3
+    assert len(calls) == 5 and len(statuses) == 2
+    assert execution.usage()['open_data']['requests'] == 5
     assert execution.read_checkpoint(STAGE)['plan']['mode'] == 'first'
 
 

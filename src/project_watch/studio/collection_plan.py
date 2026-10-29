@@ -152,6 +152,8 @@ def channel_key(row):
     """Source identity takes precedence over its discovery/news direction."""
     return {'site': 'site', 'cninfo': 'filing', 'openalex_affiliation': 'paper',
             'openalex_author': 'paper', 'openalex_topic': 'paper', 'patent_search': 'patent',
+            'europepmc_affiliation': 'paper', 'europepmc_topic': 'paper',
+            'europepmc_patent': 'patent',
             'clinical_sponsor': 'trial', 'clinical_term': 'trial', 'cn_regulatory': 'cn_trial'}.get(
                 row['source'], row['category'])
 
