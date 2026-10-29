@@ -109,6 +109,54 @@ def dependency_install_command(wheelhouse: Path, lock: Path, site: Path) -> list
             '--implementation', 'cp', '--no-compile', '-r', str(lock)]
 
 
+def cached_python(args, dependencies, runtime, env):
+    """Cache only dependencies; an application-only change keeps this cache key."""
+    import pip
+
+    from scripts.freeze_windows_dependencies import requirements
+    from scripts.windows.build_cache import component
+
+    repo = Path(__file__).resolve().parents[1]
+    inputs = {'format': 'windows-python-dependencies-v1', 'target': dependencies['target'],
+              'runtime': RUNTIME_SHA256, 'pip': pip.__version__, 'build_python': sys.executable,
+              'builder': digest(Path(__file__)),
+              'lock_builder': digest(repo/'scripts/freeze_windows_dependencies.py'),
+              'cache_builder': digest(repo/'scripts/windows/build_cache.py'),
+              'sitecustomize': digest(repo/'scripts/windows/runtime_sitecustomize.py'),
+              'wheels': [r for r in dependencies['wheels'] if r['name'] != 'projectwatch-local']}
+
+    def create(tree):
+        extract_runtime(args.runtime, tree, RUNTIME_SHA256)
+        (tree/'python313._pth').write_text('python313.zip\n.\nLib/site-packages\nimport site\n', encoding='ascii')
+        shutil.copyfile(repo/'scripts/windows/runtime_sitecustomize.py', tree/'sitecustomize.py')
+        lock = tree.parent/'dependencies.lock'
+        lock.write_text(requirements({'wheels': inputs['wheels']}), encoding='utf-8')
+        command = dependency_install_command(args.wheelhouse, lock, tree/'Lib/site-packages')
+        # The complete dependency closure is already pinned; no resolver/network work.
+        subprocess.run([*command, '--no-deps'], env=env, check=True)
+
+    receipt = component(args.cache_dir, inputs, runtime, create)
+    stage = runtime.parent/'product-stage'
+    stage.mkdir()
+    product_lock = stage/'product.lock'
+    product_lock.write_text(requirements({'wheels': [dependencies['product']]}), encoding='utf-8')
+    subprocess.run([*dependency_install_command(args.wheelhouse, product_lock, stage/'site'),
+                    '--no-deps'], env=env, check=True)
+    site = runtime/'Lib/site-packages'
+    # Installing directly into the populated site with pip --upgrade can replace
+    # bin/ and remove unrelated dependency launchers. Merge a separate product tree.
+    for source in (stage/'site').rglob('*'):
+        if source.is_file():
+            target = site/source.relative_to(stage/'site')
+            if target.exists():
+                raise ValueError('Product conflicts with cached dependency')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    assert stage.resolve().is_relative_to(runtime.parent.resolve())
+    shutil.rmtree(stage)
+    print(json.dumps({'python_dependency_cache': receipt}), flush=True)
+
+
 def build(args):
     from pip._vendor import distlib
 
@@ -153,16 +201,22 @@ def build(args):
     shutil.copyfile(args.dependency_lock, dest/'dependency-lock.json')
     (dest/'requirements.lock').write_text(requirements(dependencies), encoding='utf-8', newline='\n')
     runtime = dest/'runtime'
-    extract_runtime(args.runtime, runtime, RUNTIME_SHA256)
-    (runtime/'python313._pth').write_text('python313.zip\n.\nLib/site-packages\nimport site\n', encoding='ascii')
-    shutil.copyfile(repo/'scripts/windows/runtime_sitecustomize.py', runtime/'sitecustomize.py')
     env = dict(os.environ)
     for key in list(env):
         if key.startswith(('PYTHON', 'PROJECT_WATCH_', 'PIP_')):
             env.pop(key)
     env['PIP_DISABLE_PIP_VERSION_CHECK'] = '1'
-    subprocess.run(dependency_install_command(args.wheelhouse, dest/'requirements.lock',
-                                             runtime/'Lib/site-packages'), env=env, check=True)
+    if getattr(args, 'cache_dir', None):
+        cache = args.cache_dir.resolve()
+        if cache.is_relative_to(repo) or repo.is_relative_to(cache):
+            raise ValueError('Build cache must be outside source')
+        cached_python(args, dependencies, runtime, env)
+    else:
+        extract_runtime(args.runtime, runtime, RUNTIME_SHA256)
+        (runtime/'python313._pth').write_text('python313.zip\n.\nLib/site-packages\nimport site\n', encoding='ascii')
+        shutil.copyfile(repo/'scripts/windows/runtime_sitecustomize.py', runtime/'sitecustomize.py')
+        subprocess.run(dependency_install_command(args.wheelhouse, dest/'requirements.lock',
+                                                 runtime/'Lib/site-packages'), env=env, check=True)
     verify(args.dependency_lock.resolve(), args.wheelhouse.resolve(), wheel)
     verify_installed(dependencies, runtime/'Lib/site-packages')
     verify_product(wheel, runtime/'Lib/site-packages')
@@ -216,6 +270,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('runtime', 'wheel', 'wheelhouse', 'dependency-lock', 'compiler', 'dsh', 'node-zip', 'out'):
         parser.add_argument('--'+name, type=Path, required=True)
+    parser.add_argument('--cache-dir', type=Path, help='Optional verified dependency cache outside source')
     build(parser.parse_args())
 
 
