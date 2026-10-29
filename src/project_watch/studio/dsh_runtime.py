@@ -531,7 +531,7 @@ def child_environment(directory: Path, port: int, token: str, *, prompt=PROMPT, 
     return env
 
 
-def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3600):
+def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3600, resume=False):
     entry = runtime_entry(runtime_root)
     node = shutil.which("node")
     if not node:
@@ -568,6 +568,14 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
                 process.stdin.flush()
 
             send(1, "initialize", {"cwd": str(directory), "provider": "projectwatch", "model": gateway.model.model})
+            session_id = getattr(research, 'session_id', research.execution.job['id'])
+
+            def prompt():
+                content = ('继续当前采集阶段，沿用已保存的来源和工具回执，不重复已完成的采集。'
+                           if resume else "确认主体：" + research.project["legal_name"] + "。简称：" +
+                           research.project["name"] + "。" + research.task)
+                send(2, 'session/prompt', {'sessionId': session_id,
+                                         'contentBlocks': [{'type': 'text', 'text': content}]})
             deadline = time.monotonic() + timeout
             heartbeat = 0
             while time.monotonic() < deadline:
@@ -592,9 +600,17 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
                     if not initialized:
                         error = "dsh_initialization_failed"
                         break
-                    send(2, "session/prompt", {"sessionId": getattr(research, 'session_id', research.execution.job["id"]), "contentBlocks": [{
-                        "type": "text", "text": "确认主体：" + research.project["legal_name"] + "。简称：" +
-                        research.project["name"] + "。" + research.task}]})
+                    if resume:
+                        # Native SDK create refuses an existing session. Resume
+                        # its durable identity, never open a replacement folder.
+                        send(4, 'session/resume', {'sessionId': session_id})
+                    else:
+                        prompt()
+                elif message.get('id') == 4 and resume:
+                    if message.get('error') is not None or message.get('result') != {}:
+                        error = 'dsh_resume_rejected'
+                        break
+                    prompt()
                 elif message.get("id") == 2:
                     prompted = bool(message.get("result", {}).get("messageId"))
                     if not prompted:

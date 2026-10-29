@@ -4,6 +4,7 @@ import json
 from contextlib import closing
 
 from project_watch.studio import (
+    collection_context,
     collection_dsh,
     collection_host,
     dsh_closeout,
@@ -141,6 +142,11 @@ class Collection:
                 raise ValueError('collection_role_tool_denied')
             if self.state['finished']:
                 return self.state['finished']
+            if name == 'pw_read' and str(args.get('source_id', '')).startswith('context:'):
+                self.guard_input()
+                if args.get('view', 'record') != 'record':
+                    raise ValueError('collection_context_is_saved_only')
+                return collection_context.Index(self.execution).read(args['source_id'], args.get('offset', 0))
             if name == 'pw_finish':
                 gaps = args.get('gaps', {})
                 if not isinstance(gaps, dict) or any(not isinstance(v, str) or len(v) > 500 for v in gaps.values()):
@@ -290,10 +296,19 @@ class CollectionGateway(Gateway):
                 raise ValueError('unexpected collection tool exposure')
             body = {k: payload[k] for k in ('model', 'messages', 'tools', 'tool_choice') if k in payload}
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 2000))
+            # Completed requests retain their exact historical wire identity.
+            # Unknowns are fenced by guard(), never bypassed with a new body.
+            replay = self.received(body)
+            if not replay:
+                body = collection_context.fit(body, self.research.execution)
+                if body is None:
+                    self.research.defer({'tool': 'collection_discovery', 'args': {}}, 'collection_context_limit')
+                    self.research.finish('bounded_context_stop')
+                    return {'choices': [{'message': {'role': 'assistant', 'content': '采集阶段已保存。'}, 'finish_reason': 'stop'}]}
+                replay = self.received(body)
             signature = hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
                                                 ensure_ascii=False).encode()).hexdigest()
             attempts = self.research.execution.read_checkpoint(self.research.attempt_stage) or []
-            replay = self.received(body)
             remaining = dsh_closeout.request_budget(self.research.execution)['model']['remaining']
             if not self.research.state['finished'] and not replay and (
                     len(attempts) >= MAX_TURNS or (remaining is not None and remaining <= self.research.reserve())):
@@ -386,7 +401,10 @@ def run(parent, model, http, runtime_root, directory):
         return _done(role, 'model_budget_reserved_for_materials')
     gateway = CollectionGateway(role, model, dsh_runtime.guarded_http(role, http))
     try:
-        dsh_runtime.run_dsh(role, gateway, runtime_root, directory / role.session_id, timeout=180)
+        prior = parent.execution.read_checkpoint(role.runtime_receipt_stage) or {}
+        resumed_session = prior.get('initialized') and prior.get('prompted') and prior.get('drained')
+        dsh_runtime.run_dsh(role, gateway, runtime_root, directory / role.session_id, timeout=180,
+                            **({'resume': True} if resumed_session else {}))
     except HttpError as exc:
         if exc.code != 'dsh_no_valid_submission':
             raise
