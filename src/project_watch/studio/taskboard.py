@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 KIND_LABEL = {"internal": "分析内部资料", "external": "收集公开信息", "external_followup": "补全外部信息", "brief": "生成当前判断",
               "public_profile": "补充公开档案", "landscape": "整理竞争与行业", "business": "整理产品与用途",
               "competition": "更新竞对资料", "details": "整理商业关系与政策条件", "commercial": "查询专业数据来源",
-              "insight": "深度分析"}
+              "insight": "深度分析", "scope": "公开范围维护", "assessment": "公开问题评估"}
 INTAKE_LABEL = {"queued": "等待识别", "processing": "正在识别文字", "completed": "已识别", "needs_ocr": "部分页面未识别", "failed": "识别失败"}
 
 

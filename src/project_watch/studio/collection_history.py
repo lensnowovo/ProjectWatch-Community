@@ -126,7 +126,8 @@ def record(execution, plan, receipts):
         _advance_relations(db, plan)
         from project_watch.studio.exploration import Explorations
 
-        Explorations.record_collection(db, plan, successful)
+        Explorations.record_collection(db, plan, successful,
+            cached_units={unit_id for unit_id, receipt in rows.items() if receipt.get('cache_provenance')})
 
 
 def _advance_relations(db, plan):

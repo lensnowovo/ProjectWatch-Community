@@ -55,6 +55,20 @@ export function apply(ctx) {
   const allowed = JSON.parse(process.env.PW_DSH_TOOLS || JSON.stringify(definitions.map(x => x[0])));
   const monitor = allowed.includes("pw_context");
   const list = [...definitions,
+    ["pw_submit_observations", "Submit source assertions for separate host validation and review. Select supplied reference IDs; do not rewrite quotes.",
+      { observations: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+        properties: { text: { type: "string", minLength: 1, maxLength: 3000 },
+          event_at: { anyOf: [{ type: "string", minLength: 10, maxLength: 10 }, { type: "null" }] },
+          refs: { type: "array", minItems: 1, maxItems: 20, items: {type: "string", minLength: 64, maxLength: 64} } },
+        required: ["text", "refs"] } } }, ["observations"]],
+    ["pw_submit_records", "Submit typed public candidates, not confirmed facts. Name the subject and category explicitly. Select one immutable part ID and continuous character offsets; never transcribe quotes. Preserve qualifications and provide cited relationship attributes where applicable.",
+      { observations: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+        properties: { ...definitions.find(x => x[0] === "pw_record")[2],
+          subject: { type: "string", minLength: 1, maxLength: 200 },
+          refs: { type: "array", minItems: 1, maxItems: 1, items: {type: "string", minLength: 64, maxLength: 64} },
+          start: { type: "integer", minimum: 0 }, end: { type: "integer", minimum: 1 },
+          event_at: { anyOf: [{ type: "string", minLength: 10, maxLength: 10 }, { type: "null" }] } },
+        required: ["kind", "subject", "label", "text", "refs", "start", "end"] } } }, ["observations"]],
     ["pw_context", "Publish retained public records and inspect evidence, standing relations, temporary questions and due scope. Also inspect host collected_sources; use collection_offset=next_offset for more, and pw_read for stored evidence.",
       { collection_offset: { type: "integer", minimum: 0 } }, []],
     ["pw_explore", "Search a due standing relation or research question using one of its configured queries.",
@@ -67,22 +81,51 @@ export function apply(ctx) {
       { analysis_json: string }, ["analysis_json"]],
     ["pw_revise", "Review scope after judgment. Do not modify context.revision_blocked_ids; explain gaps in reason instead. changes_json is an array; every row needs action/watch_id/why/refs. note and finish also REQUIRE text (cited answer, max 200 chars). set_exit needs exit_rule; explore needs text/axis/queries/exit_rule. [] is valid. On revision_validation fix the listed fields only, without regenerating judgment. Check items: dropped/proposed does not mean applied.",
       { changes_json: string, reason: string }, ["changes_json", "reason"]],
+    ["pw_scope", "Submit a bounded independent scope decision. Select reviewed candidates with retain(record_key), add a temporary question using a frozen standing parent with question(parent_id,text,exit_rule), or propose(watch_id,fields) for human review. No comprehensive judgment prerequisite, permanent scope, exit-rule mutation or source tools. [] preserves all candidates as not selected. This ends the maintenance stage.",
+      { changes_json: string, reason: string }, ["changes_json", "reason"]],
   ].filter(x => allowed.includes(x[0])).map(x => {
+    if (allowed.includes("pw_assess") && !allowed.includes("pw_judge")) {
+      if (x[0] === "pw_context") return [x[0], "Read the fixed public question, unchanged exit rule and numbered evidence. No collection or publication.", {}, []];
+      if (x[0] === "pw_status") return [x[0], "Inspect this question stage and its remaining shared budget.", {}, []];
+      if (x[0] === "pw_finish") return [x[0], "End without an answer; preserve the question and unresolved gaps.", {reason: string}, ["reason"]];
+    }
+    if (allowed.includes("pw_assess") && !allowed.includes("pw_judge") && x[0] === "pw_assess") return [
+      x[0], "Assess only the frozen public question. Distinguish object progress from coverage; answered requires the unchanged exit rule and independent evidence review. Does not modify scope or owner conclusions.",
+      {...x[2], answer_status: {type: "string", enum: ["answered", "unresolved", "insufficient"]},
+        gaps: {type: "array", items: string, maxItems: 8}}, [...x[3], "answer_status", "gaps"]];
+    if (allowed.includes("pw_scope") && x[0] === "pw_context") return [
+      x[0], "Read the frozen public candidates, scope identities, owner decisions and current watch versions. No publication or collection.", x[2], x[3]];
+    if (allowed.includes("pw_scope") && x[0] === "pw_status") return [
+      x[0], "Inspect this bounded scope stage's input fingerprint and remaining shared model budget.", {}, []];
+    if (allowed.includes("pw_scope") && x[0] === "pw_finish") return [
+      x[0], "End scope maintenance without selecting further candidates; preserve remaining candidates as deferred.", {reason: string}, ["reason"]];
+    if (x[0] === "pw_finish" && allowed.includes("pw_collect") && !allowed.includes("pw_record")) return [
+      x[0], "End the bounded public collection pass only. Does not publish facts, events, analysis or monitoring scope.", x[2], x[3]];
     if (monitor && x[0] === "pw_finish") return [
       "pw_finish", "End this reviewed round. Does not mean every topic is answered.", {reason: string}, ["reason"]];
     if (monitor && x[0] === "pw_record") return [x[0], x[1], {...x[2],
       kind: {...x[2].kind, enum: x[2].kind.enum.filter(k => k !== "watch")}}, x[3]];
+    if (x[0] === "pw_submit_records") {
+      const properties = { ...x[2].observations.items.properties };
+      for (const key of ["source_id", "quote", "exit_rule"]) delete properties[key];
+      return [x[0], x[1], { observations: {...x[2].observations,
+        items: {...x[2].observations.items, properties}} }, x[3]];
+    }
     return x;
   });
   for (const [toolName, description, properties, required] of list) {
     ctx.tools.register({
       name: toolName, description,
       parameters: { type: "object", properties, required, additionalProperties: false },
-      output: { schema: {}, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+      output: { schema: ["pw_submit_observations", "pw_submit_records"].includes(toolName) ? { type: "object", additionalProperties: false,
+        properties: {received: {type: "boolean"}, review_status: {type: "string", enum: ["pending"]}},
+        required: ["received", "review_status"] } : {},
+        render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
       // Calls are serialized again by the gateway, including model traffic.
       isConcurrencySafe: () => false,
       async execute(args) {
-        if (["pw_judge", "pw_context", "pw_finish"].includes(toolName)) return reviewedRequest(toolName, args);
+        if (["pw_judge", "pw_context", "pw_finish"].includes(toolName)
+          || (toolName === "pw_assess" && !allowed.includes("pw_judge"))) return reviewedRequest(toolName, args);
         const response = await fetch(`${process.env.PW_DSH_GATEWAY}/tools/${toolName}`, {
           method: "POST", headers: { "Content-Type": "application/json",
             Authorization: `Bearer ${process.env.PW_DSH_GATEWAY_TOKEN}` },

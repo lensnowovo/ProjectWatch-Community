@@ -266,7 +266,7 @@ export interface InsightAnalysis {
 export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] }
 export interface InsightView {
   generation_available?: boolean;
-  record: { analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
+  record: { id?: string; status?: string; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
   history: { generated_at: string; headline: string; position: string; maturity: string; consensus: string; industry: string }[];
   job: { id: string; status: Job["status"]; error: string | null; created_at: string } | null;
   model_ready: boolean;
@@ -290,10 +290,12 @@ export interface PlanItem {
 }
 export interface TopicResearchView {
   job: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
+  assessment_job?: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
   question: { text: string; exit_rule: string; lifecycle_version: string } | null;
   scope_changed: boolean;
-  result: { status: 'partial' | 'complete'; collection_status: 'partial' | 'complete' | null;
-    answer_status: 'answered' | 'insufficient'; text: string; gaps: string[];
+  result: { status: 'partial' | 'complete' | 'pending'; collection_status: 'partial' | 'complete' | null;
+    answer_status: 'answered' | 'insufficient' | 'unresolved'; text: string; gaps: string[];
+    knowledge_state?: 'answered' | 'unresolved' | 'unknown' | 'needs_recheck'; closure?: string;
     sources: { ref: string; title: string; url: string; date: string; context: string; context_kind: string }[] } | null;
 }
 export interface ModuleHit { id?: string; title: string; url?: string; date: string; importance?: string; source?: string; planned?: boolean }
@@ -399,7 +401,7 @@ export interface Job {
   runtime?: JobRuntime;
   dismissed?: boolean;
   id: string;
-  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight";
+  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope" | "assessment";
   status: "queued" | "running" | "done" | "failed";
   stage: string;
   error: string;
@@ -705,6 +707,7 @@ export interface TrackedQuestion extends Watchpoint {
   origin: "human" | "ai"; history_count: number;
   latest: Partial<Record<"system" | "human" | "agent", QuestionJudgement>>;
   events: Record<string, QuestionEvent>;
+  public_answer?: {knowledge_state: 'answered' | 'unresolved' | 'unknown' | 'needs_recheck'; closure: string; updated_at: string} | null;
 }
 export interface ThreadStep { stage: string; event_id: string; date: string; title: string; url: string }
 export interface Thread {
@@ -922,6 +925,7 @@ export const api = {
     `/api/studio/projects/${id}/research-topic/${encodeURIComponent(watchId)}`),
   startTopicResearch: (id: string, watchId: string, version: string) => request<Job>('POST',
     `/api/studio/projects/${id}/research-topic`, { watch_id: watchId, expected_version: version }),
+  discoveredSources: (id: string, offset = 0) => request<DiscoveredSourcePage>('GET', `/api/studio/projects/${id}/discovered-sources?offset=${offset}`),
   collectionSources: (id: string) => request<CollectionSourceChoices>('GET', `/api/studio/projects/${id}/collection-sources`),
   chooseCollectionSource: (id: string, adapter: string, selection: SourceSelection, reason: string, expected_version: number) =>
     request<CollectionSourceDecision>('PUT', `/api/studio/projects/${id}/collection-sources/${encodeURIComponent(adapter)}`,
@@ -980,3 +984,10 @@ export const api = {
   setCrossCheck: (checkId: string, status: CrossCheck["status"]) => request("PATCH", `/api/studio/crosschecks/${checkId}`, { status }),
   watchEvents: (watchId: string) => request<EventDTO[]>("GET", `/api/studio/watchpoints/${watchId}/events`).then((rows) => rows.map(eventToItem)),
 };
+export interface DiscoveredSourcePage {
+  items: { id: string; title: string; url: string; source: string; published_at: string | null;
+    collected_at: string; observed_at: string; evidence_version_id: string; source_type: string;
+    read_scope: string; read_status: string | null; reading_basis: string | null;
+    body_evidence_version_id: string | null; processing_status: 'pending' | 'organized' }[];
+  total: number; pending: number; offset: number; next_offset: number | null;
+}

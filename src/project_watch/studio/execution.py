@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS studio_job_cache_hits (
     job_id TEXT NOT NULL REFERENCES studio_jobs(id), call_key TEXT NOT NULL,
     hits INTEGER NOT NULL, PRIMARY KEY(job_id,call_key)
 );
+CREATE TABLE IF NOT EXISTS studio_job_budget_links (
+    job_id TEXT NOT NULL REFERENCES studio_jobs(id),
+    origin_job_id TEXT NOT NULL REFERENCES studio_jobs(id), call_key TEXT NOT NULL,
+    PRIMARY KEY(job_id,origin_job_id,call_key),
+    FOREIGN KEY(origin_job_id,call_key) REFERENCES studio_job_calls(job_id,call_key)
+);
 CREATE TABLE IF NOT EXISTS studio_provider_backoff (
     provider TEXT PRIMARY KEY, retry_after TEXT NOT NULL, status INTEGER NOT NULL
 );
@@ -221,7 +227,7 @@ class JobExecution:
             backoff = db.execute("SELECT retry_after FROM studio_provider_backoff WHERE provider=?", (provider_hash,)).fetchone()
             if backoff and backoff[0] > now():
                 raise HttpError("provider_backoff")
-            count = db.execute("SELECT count(*) FROM studio_job_calls WHERE job_id=? AND kind=?", (self.job["id"], kind)).fetchone()[0]
+            count = self.budget_used(kind, db=db)
             if self.budgets[kind] is not None and count >= self.budgets[kind]:
                 raise HttpError("request_budget")
             db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) VALUES (?,?,?,?,'started',?,1,?)",
@@ -310,6 +316,16 @@ class JobExecution:
                              provider=provider, read_only=method == "GET", timeout=timeout,
                              public_read=bool(public_read and public_read(method, url, headers, body)))
         return Http(send)
+
+    def budget_used(self, kind, *, db=None):
+        """Admission consumption, including adopted receipts; not new usage."""
+        if db is None:
+            with closing(self.store._connect()) as connection:
+                return self.budget_used(kind, db=connection)
+        return db.execute('SELECT count(*) FROM (SELECT job_id,call_key FROM studio_job_calls WHERE job_id=? AND kind=? '
+            'UNION SELECT c.job_id,c.call_key FROM studio_job_budget_links l JOIN studio_job_calls c '
+            'ON c.job_id=l.origin_job_id AND c.call_key=l.call_key WHERE l.job_id=? AND c.kind=?)',
+            (self.job['id'], kind, self.job['id'], kind)).fetchone()[0]
 
     def usage(self):
         from project_watch.studio.recovery import UNRESOLVED

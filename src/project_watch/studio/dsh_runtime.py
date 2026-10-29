@@ -273,8 +273,10 @@ class Gateway:
             self.research.guard()
             system = CONSISTENCY_SYSTEM if payload.get('phase') == 'consistency' else SYSTEM
             if payload.get('purpose') == 'public_record_admission' and payload.get('phase') != 'consistency':
-                from project_watch.studio.dsh_record_review import GUIDANCE
+                from project_watch.studio.dsh_record_review import GUIDANCE, TYPED_GUIDANCE
                 system += GUIDANCE
+                if payload.get('attribution_context'):
+                    system += TYPED_GUIDANCE
             aliases = ReviewFieldAliases(payload)
             body = {'model': self.model.model, 'stream': False, 'messages': [
                 {'role': 'system', 'content': system},
@@ -586,7 +588,7 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
                     if not initialized:
                         error = "dsh_initialization_failed"
                         break
-                    send(2, "session/prompt", {"sessionId": research.execution.job["id"], "contentBlocks": [{
+                    send(2, "session/prompt", {"sessionId": getattr(research, 'session_id', research.execution.job["id"]), "contentBlocks": [{
                         "type": "text", "text": "确认主体：" + research.project["legal_name"] + "。简称：" +
                         research.project["name"] + "。" + research.task}]})
                 elif message.get("id") == 2:
@@ -625,7 +627,7 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
             process.stdin.close()
             process.stdout.close()
     error = settled_error(research, error or runtime_failure)
-    research.execution.checkpoint("dsh_runtime", {
+    research.execution.checkpoint(getattr(research, 'runtime_receipt_stage', 'dsh_runtime'), {
         "version": DSH_VERSION, "initialized": initialized, "prompted": prompted, "idle": ended,
         "event_types": sorted(set(events)), "advertised_tools": sorted(gateway.advertised_tools),
         "gateway_model_requests": gateway.model_requests, "runtime_failure": runtime_failure,
@@ -668,8 +670,9 @@ def recover_authorized_site(pipeline, execution):
 
 
 def run_bootstrap(pipeline, execution, runtime_root: Path):
-    from project_watch.studio import collection_host
+    from project_watch.studio import collection_host, progressive_bootstrap
 
+    owner = progressive_bootstrap.freeze(execution, 'bootstrap')
     admission = collection_host.admit(execution, mode='first')
     if admission['enabled']:
         collection_host.limit_budgets(execution, admission['mode'])
@@ -682,16 +685,32 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
     http = guarded_http(research, http)
     collectors.http = http
     gateway = Gateway(research, settings.model, http)
-    collection_host.prepare(research)
+    if execution.read_checkpoint('bootstrap_collection_resume_v1'):
+        from project_watch.studio import bootstrap_continuation
+
+        bootstrap_continuation.prepare(research)
+    else:
+        collection_host.prepare(research)
     directory = session_directory(research)
+    if owner['owner'] == 'materials':
+        from project_watch.studio import bootstrap_collection
+
+        bootstrap_collection.run(research, settings.model, http, runtime_root, directory)
+        return progressive_bootstrap.run(research, settings.model, http, runtime_root, directory)
     return run_dsh(research, gateway, runtime_root, directory)
 
 
 def run_monitor(pipeline, execution, runtime_root: Path, *, analysis_only=False):
-    from project_watch.studio import collection_host
+    from project_watch.studio import collection_host, progressive_bootstrap
     from project_watch.studio.dsh_monitor import PublicMonitor
 
     research_class = PublicMonitor
+    request = execution.read_checkpoint('collection_request_v1') or {}
+    owner = progressive_bootstrap.freeze(execution, 'monitor', materials=not analysis_only)
+    if owner['owner'] == 'materials':
+        from project_watch.studio import progressive_monitor
+
+        return progressive_monitor.run(pipeline, execution, runtime_root)
     if not analysis_only:
         request = execution.read_checkpoint('collection_request_v1') or {}
         mode = request.get('mode', 'incremental')

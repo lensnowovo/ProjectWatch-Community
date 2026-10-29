@@ -79,6 +79,10 @@ def _refs(research):
             for ref in receipt.get('evidence_refs', []):
                 sid = 'C' + hashlib.sha256(ref['evidence_version_id'].encode()).hexdigest()[:18]
                 result.setdefault(sid, []).append(ref)
+    for ref in research.execution.read_checkpoint('collection_source_imports_v1') or []:
+        sid = 'C' + hashlib.sha256(ref['evidence_version_id'].encode()).hexdigest()[:18]
+        if ref not in result.setdefault(sid, []):
+            result[sid].append(ref)
     return result
 
 

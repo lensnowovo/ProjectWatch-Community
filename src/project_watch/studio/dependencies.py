@@ -77,7 +77,10 @@ class DependencyStore:
         return {k: record.get(k) for k in ObjectInput.model_fields}
 
     def on_object_saved(self, record, previous, *, db):
-        if previous and self._identity(record) == self._identity(previous):
+        identity_unchanged = bool(previous and self._identity(record) == self._identity(previous))
+        if identity_unchanged and not db.execute("SELECT 1 FROM studio_analysis_dependencies d JOIN studio_object_dependency_links l "
+            "ON l.project_id=d.project_id AND l.artifact_key=d.artifact_key WHERE d.project_id=? AND l.object_id=? AND d.kind='insight'",
+            (record['project_id'], record['id'])).fetchone():
             return
         project_id = record["project_id"]
         generation = self._bump(db, project_id)
@@ -88,6 +91,8 @@ class DependencyStore:
                           "ON l.project_id=d.project_id AND l.artifact_key=d.artifact_key "
                           "WHERE d.project_id=? AND l.object_id=?", (project_id, record["id"])).fetchall()
         for row in rows:
+            if identity_unchanged and row['kind'] != 'insight':
+                continue
             data = {**json.loads(row["record"]), "status": "stale", "generation": generation,
                     "stale_reason": "object_revised", "invalidated_at": now()}
             db.execute("UPDATE studio_analysis_dependencies SET status='stale',generation=?,record=? WHERE project_id=? AND artifact_key=?",
@@ -126,7 +131,7 @@ class DependencyStore:
 
     def on_relationship_corrected(self, project_id, *, db):
         generation = self._bump(db, project_id)
-        rows = db.execute("SELECT artifact_key,record FROM studio_analysis_dependencies WHERE project_id=? AND kind IN ('brief','watch')", (project_id,)).fetchall()
+        rows = db.execute("SELECT artifact_key,record FROM studio_analysis_dependencies WHERE project_id=? AND kind IN ('brief','watch','insight')", (project_id,)).fetchall()
         for row in rows:
             data = {**json.loads(row["record"]), "status": "stale", "generation": generation,
                     "stale_reason": "relationship_corrected", "invalidated_at": now()}
@@ -181,7 +186,7 @@ class DependencyStore:
 
     def track(self, project_id: str, artifact_key: str, kind: str, evidence_ids: list[str], *,
               expected_generation: int | None = None, db=None) -> dict:
-        if not 1 <= len(artifact_key) <= 200 or kind not in ("fact", "profile", "public_profile", "relationship", "brief", "watch"):
+        if not 1 <= len(artifact_key) <= 200 or kind not in ("fact", "profile", "public_profile", "relationship", "brief", "watch", "insight", "question"):
             raise ValueError("invalid artifact dependency")
         if len(evidence_ids) > 500:
             raise ValueError("too many evidence dependencies")

@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -396,6 +396,9 @@ class Pipeline:
         from project_watch.studio.relationships import RelationshipStore
 
         self.relationships = RelationshipStore(store, self.objects)
+        from project_watch.studio.insight_versions import initialize
+
+        initialize(store)
         self._insight_checked: dict[str, datetime] = {}
         from project_watch.studio.health import HealthStore
 
@@ -439,7 +442,9 @@ class Pipeline:
         from project_watch.studio.questions import QuestionLedger
 
         if getattr(self, "_questions", None) is None or self._questions.store is not self.store:
-            self._questions = QuestionLedger(self.store, self.monitor, binding_provider=self.model_binding)
+            from project_watch.studio import question_work
+            self._questions = QuestionLedger(self.store, self.monitor, binding_provider=self.model_binding,
+                public_result_provider=lambda pid, wid: question_work.current(self, pid, wid))
         return self._questions
 
     def _question_round(self, project_id: str, project: dict, plan: dict, llm, stage, *, strict: bool = False) -> None:
@@ -508,10 +513,10 @@ class Pipeline:
 
         return Http(urllib_transport(settings.proxy_url))
 
-    def tools(self, settings: StudioSettings | None = None) -> tuple[StudioSettings, Http, LLM, Collectors]:
+    def tools(self, settings: StudioSettings | None = None, *, execution=None) -> tuple[StudioSettings, Http, LLM, Collectors]:
         settings = settings or self.settings_store.load()
         http = self.http_factory(settings)
-        execution = getattr(self._execution_state, "current", None)
+        execution = execution or getattr(self._execution_state, "current", None)
         if execution:
             def classify(url):
                 host = urlsplit(url).hostname or "unknown"
@@ -1828,7 +1833,8 @@ class Pipeline:
             if group.event_id:
                 lead = sorted(group.items, key=lambda i: ev.RANK.get(i.get("importance"), 2))[0]
                 self.store.attach_to_event(group.event_id, ids, importance=lead.get("importance") or "routine",
-                                           impact=lead.get("impact") or "", summary=lead.get("summary") or "")
+                                           impact=lead.get("impact") or "", summary=lead.get("summary") or "",
+                                           execution=getattr(self._execution_state, 'current', None), split_event=ev.summarise(group))
             else:
                 self.store.create_event(project_id, ev.summarise(group), ids)
 
@@ -1839,6 +1845,26 @@ class Pipeline:
         # Operator opt-in, first public bootstrap only. DSH owns research choices;
         # never silently fall back to the legacy collector on failure.
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
+        frozen = execution.read_checkpoint('material_pipeline_v1') if execution else None
+        if frozen:
+            # Publication may advance last_external_at before the worker can
+            # mark this job done. Its durable entry still owns every replay.
+            from project_watch.studio.dsh_runtime import run_bootstrap, run_monitor
+            from project_watch.studio.public_executor import require_available
+
+            require_available()
+            if not dsh_root:
+                raise ValueError('frozen public research requires DSH runtime')
+            if frozen['entry'] == 'bootstrap':
+                run_bootstrap(self, execution, Path(dsh_root))
+                if (os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
+                        and not execution.read_checkpoint('bootstrap_collection_resume_v1')):
+                    self.store.enqueue(project_id, 'external_followup', automatic=True, input_version=job['id'])
+            elif frozen['entry'] == 'monitor':
+                run_monitor(self, execution, Path(dsh_root))
+            else:
+                raise ValueError('invalid frozen public research entry')
+            return
         if execution and (execution.read_checkpoint('collection_request_v1') or {}).get('mode') == 'topic':
             from project_watch.studio.dsh_runtime import run_monitor
             from project_watch.studio.public_executor import require_available
@@ -1951,6 +1977,9 @@ class Pipeline:
         execution = getattr(self._execution_state, 'current', None)
         if execution is None:
             raise ValueError('补全任务需要有效的持久任务记录')
+        if execution.read_checkpoint('bootstrap_collection_resume_v1'):
+            self.run_external(job)
+            return
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
         if dsh_root and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
             from project_watch.studio.dsh_runtime import run_monitor
@@ -2335,10 +2364,35 @@ class Pipeline:
             _log.info("crosscheck skipped: %s", exc)
 
     # ------------------------------------------------------------------ deep analysis
+    def run_scope(self, job: dict) -> None:
+        from project_watch.studio import scope_maintenance
+
+        execution = getattr(self._execution_state, 'current', None)
+        root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+        if not execution or not root:
+            raise ValueError('scope maintenance requires leased DSH runtime')
+        scope_maintenance.run(self, execution, Path(root))
+
+    def run_assessment(self, job: dict) -> None:
+        from project_watch.studio import question_assessment
+
+        execution = getattr(self._execution_state, 'current', None)
+        root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+        if not execution or not root:
+            raise ValueError('question assessment requires leased DSH runtime')
+        question_assessment.run(self, execution, Path(root))
+
     def run_insight(self, job: dict) -> None:
         """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
         execution = getattr(self._execution_state, 'current', None)
+        if execution and execution.read_checkpoint('event_insight_input_v1'):
+            from project_watch.studio import event_insight
+
+            if not dsh_root:
+                raise ValueError('frozen insight requires DSH runtime')
+            event_insight.run(self, execution, Path(dsh_root))
+            return
         if dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
             from project_watch.studio.dsh_runtime import run_monitor
 
@@ -2361,10 +2415,19 @@ class Pipeline:
         """Analyse settled new evidence once, without holding it behind a daily gate."""
         from project_watch.studio.public_executor import unavailable_reason
 
-        if unavailable_reason() or (os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1"):
-            # The DSH external round owns its public judgment. The legacy
-            # all-source fingerprint must not enqueue a second, paid loop.
+        if unavailable_reason():
             return None
+        if os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
+            project, settings = self.store.get_project(project_id), self.settings_store.load()
+            if not project or not project['activated'] or project['status'] != 'active' or not settings.model.ready:
+                return None
+            # Dispatch only durable object/event work from a settled source round.
+            from project_watch.studio import event_insight_work
+
+            try:
+                return event_insight_work.dispatch_pending(self, project_id)
+            except HttpError:
+                return None  # Existing project hold remains visible; no new stage bypasses it.
         if self.insight_generator is None:
             return None
 
@@ -2663,6 +2726,23 @@ class Pipeline:
         self._execution_state.current = execution
         try:
             with self.store.write_scope(execution._guard if execution else None):
+                if (execution and job['kind'] == 'insight' and job.get('input_version', '').startswith('manual:')
+                        and os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'):
+                    from project_watch.studio import event_insight_work
+
+                    event_insight_work.admit_manual(self, execution)
+                if (execution and job['kind'] in ('external', 'external_followup')
+                        and os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
+                        and execution.read_checkpoint('material_pipeline_v1') is None):
+                    from project_watch.studio import progressive_bootstrap
+
+                    request = execution.read_checkpoint('collection_request_v1') or {}
+                    monitor = os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
+                    project = self.store.get_project(job['project_id']) or {}
+                    if request.get('mode') == 'topic' or (monitor and (job['kind'] == 'external_followup' or project.get('last_external_at'))):
+                        progressive_bootstrap.freeze(execution, 'monitor', materials=True)
+                    elif not project.get('last_external_at'):
+                        progressive_bootstrap.freeze(execution, 'bootstrap')
                 if execution and job['kind'] != 'commercial':
                     from project_watch.studio.recovery import input_binding
 
@@ -2679,7 +2759,8 @@ class Pipeline:
                 {"internal": self.run_internal, "external": self.run_external, 'external_followup': self.run_external_followup,
                  "brief": self.run_brief, "public_profile": self.run_public_profile,
                  "landscape": self.run_landscape, "business": self.run_business, "competition": self.run_competition,
-                 "details": self.run_details, "commercial": self.run_commercial, "insight": self.run_insight}[job["kind"]](job)
+                 "details": self.run_details, "commercial": self.run_commercial, "insight": self.run_insight,
+                 "scope": self.run_scope, "assessment": self.run_assessment}[job["kind"]](job)
                 if execution:
                     if job['kind'] != 'internal' and (self.store.get_project(job['project_id']) or {}).get('status') == 'paused':
                         raise HttpError('project_paused')
@@ -2761,6 +2842,31 @@ class StudioWorker:
                     new_status = "blocked_failed" if not job or job[0] == "failed" else "blocked_no_current_output"
                 elif status == "queued":
                     dependency = deps.get(pid, request["artifact_key"])
+                    if dependency and dependency['kind'] in ('insight', 'question'):
+                        if not model_ready or project['status'] != 'active' or not project['activated']:
+                            continue
+                        from project_watch.studio import event_insight_work, question_work
+
+                        try:
+                            rebuild = event_insight_work.rebuild if dependency['kind'] == 'insight' else question_work.rebuild
+                            job = rebuild(self.pipeline, pid, request)
+                        except HttpError:
+                            continue
+                        except ValueError:
+                            # Expected stale/bounded input is a visible blocked rebuild,
+                            # never a reason to prevent the next baseline source round.
+                            with closing(store._connect()) as db, db:
+                                db.execute("UPDATE studio_rebuild_requests SET status='blocked_input_changed' "
+                                    'WHERE project_id=? AND artifact_key=? AND generation=? AND status=?',
+                                    (pid, request['artifact_key'], request['generation'], status))
+                            continue
+                        if job is None:
+                            continue
+                        new_status = 'scheduled:' + job['id']
+                        with closing(store._connect()) as db, db:
+                            db.execute('UPDATE studio_rebuild_requests SET status=? WHERE project_id=? AND artifact_key=? '
+                                'AND generation=? AND status=?', (new_status, pid, request['artifact_key'], request['generation'], status))
+                        continue
                     kind = {"profile": "internal", "public_profile": "public_profile", "brief": "brief"}.get(dependency["kind"] if dependency else "")
                     if not kind:
                         new_status = "awaiting_source_update"
@@ -2805,6 +2911,12 @@ class StudioWorker:
                     self.pipeline.schedule_details(project['id'])
                     self.pipeline.schedule_competition(project['id'])
                 self.pipeline.schedule_insight(project['id'])
+                if os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1':
+                    from project_watch.studio import question_work, scope_maintenance
+
+                    with suppress(HttpError):
+                        question_work.dispatch(self.pipeline, project['id'])
+                        scope_maintenance.dispatch(self.pipeline, project['id'])
             # Only remember successful passes; an exception must retry normally.
             if changed:
                 self._analysis_stamp = stamp

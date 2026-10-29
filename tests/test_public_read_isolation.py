@@ -11,7 +11,7 @@ from test_collection_pages import work
 from test_collection_runner import candidate, plan
 
 from project_watch.feeds import FeedError
-from project_watch.studio import dsh_runtime
+from project_watch.studio import collection_host, dsh_runtime
 from project_watch.studio.collection_ledger import CollectionLedger
 from project_watch.studio.collection_pages import public_read_request
 from project_watch.studio.collection_runner import run_collection
@@ -36,6 +36,7 @@ def timeout(phase='connect_or_headers'):
 @pytest.mark.parametrize('phase', ['connect_or_headers', 'response_body'])
 def test_public_failure_reaches_dsh_and_other_sources_without_resend(setup, monkeypatch, host, phase):
     pipeline, execution = setup
+    collection_host.admit(execution, mode='first')  # This fixture speaks legacy pw_status only.
     calls, models = [], []
 
     def send(_method, url, *_args):

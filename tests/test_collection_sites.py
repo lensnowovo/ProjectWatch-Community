@@ -5,7 +5,7 @@ import pytest
 import test_collection_host as host_fixtures
 
 from project_watch.feeds import GuardedHTTPS
-from project_watch.studio import dsh_runtime
+from project_watch.studio import collection_host, dsh_runtime
 from project_watch.studio.collection_ledger import STAGE
 from project_watch.studio.http import Http, HttpError
 
@@ -20,6 +20,9 @@ NEWS = '<h1>Public news</h1><p>First source item</p><p>Second source item</p>'
 
 def configure(setup, monkeypatch, *, news_status=200, robots='', redirect=False):
     pipeline, execution = setup
+    # This harness exercises the pre-existing host -> pw_status protocol.
+    # New material/collection roles are covered by test_bootstrap_collection.
+    collection_host.admit(execution, mode='first')
     pipeline.store.upsert_project(execution.job['project_id'], {'website': 'https://company.example/'}, consent=True)
     calls = []
 

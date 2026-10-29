@@ -29,6 +29,13 @@ def test_certificate_bundle_floor_matches_reviewed_release():
     assert '2026.10.18' not in dependencies['certifi'].specifier
 
 
+def test_pdf_parser_floor_and_container_lock_exclude_known_dos():
+    project = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']
+    pdf = next(r for r in map(Requirement, project['dependencies']) if r.name == 'pypdf')
+    assert '6.21.1' not in pdf.specifier and '6.21.2' in pdf.specifier
+    assert 'pypdf==6.21.2' in (ROOT / 'requirements-parser.lock').read_text()
+
+
 def test_pinned_dsh_lock_has_redirect_and_zip_security_fixes():
     package = json.loads((ROOT / 'packaging/dsh/package.json').read_text())
     lock = json.loads((ROOT / 'packaging/dsh/package-lock.json').read_text())
@@ -39,6 +46,12 @@ def test_pinned_dsh_lock_has_redirect_and_zip_security_fixes():
     for path, entry in lock['packages'].items():
         if path.endswith('/fflate'):
             assert entry['version'] == '0.8.3'
+        if path.endswith('/undici'):
+            assert entry['version'] == '8.12.2'
+        if path.endswith('/zod'):
+            assert entry['version'] == '4.6.7'
+    assert package['overrides']['undici'] == '8.12.2'
+    assert package['overrides']['zod'] == '4.6.7'
 
 
 def test_vite_lock_matches_reviewed_fixed_dev_server():
@@ -54,5 +67,6 @@ def test_windows_runtime_security_pins_match_ci():
     assert NODE_VERSION == 'v24.22.1'
     assert PYTHON_VERSION == '3.13.17'
     ci = json.loads((ROOT / '.github/workflows/ci.yml').read_text())
-    setup = next(s for s in ci['jobs']['offline']['steps'] if s.get('name') == 'Node')
-    assert setup['with']['node-version'] == NODE_VERSION.removeprefix('v')
+    for name in ('python', 'frontend', 'native', 'installed'):
+        setup = next(s for s in ci['jobs'][name]['steps'] if s.get('name') == 'Node')
+        assert setup['with']['node-version'] == NODE_VERSION.removeprefix('v')

@@ -153,5 +153,7 @@ def test_runtime_host_success_updates_cadence_before_model_and_explore_only_reus
         assert current(pipeline, execution, added)['last_run_at']
 
     monkeypatch.setattr(dsh_runtime, 'run_dsh', model_turn)
+    # This fake speaks legacy pw_explore, not the new independent collector.
+    collection_host.admit(execution, mode='refresh')
     dsh_runtime.run_monitor(pipeline, execution, None)
     assert execution.read_checkpoint(collection_host.ADMISSION)['mode'] == 'refresh'

@@ -10,11 +10,34 @@ from zipfile import ZipFile
 import pytest
 
 from scripts.release_audit import (
+    _SOURCE_BINARY_ASSETS,
     _public_studio_fixture,
     audit_tracked_source,
     audit_wheel,
     dependency_licenses,
 )
+
+
+@pytest.mark.parametrize('asset', sorted(_SOURCE_BINARY_ASSETS))
+@pytest.mark.parametrize('fault', [None, 'asset', 'license'])
+def test_tracked_public_assets_require_exact_bytes_and_corresponding_license(tmp_path, asset, fault):
+    import shutil
+
+    source = Path(__file__).resolve().parents[1]
+    license_name = _SOURCE_BINARY_ASSETS[asset][1]
+    for name in (asset, license_name):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / name, target)
+    (tmp_path / 'pyproject.toml').write_text('[project]\nname="projectwatch-local"\n')
+    if fault:
+        (tmp_path / (asset if fault == 'asset' else license_name)).write_bytes(b'Synthetic replacement')
+    subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(['git', 'add', '.'], cwd=tmp_path, check=True, capture_output=True)
+    _, findings = audit_tracked_source(tmp_path)
+    assert bool(findings) == bool(fault), findings
+    if fault:
+        assert any('unreviewed binary asset' in value for value in findings)
 
 
 def test_standalone_repository_includes_root_configuration_and_rejects_private_data(tmp_path: Path) -> None:

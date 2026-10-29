@@ -10,6 +10,7 @@ from contextlib import closing
 from datetime import datetime
 from urllib.parse import urlsplit
 
+from project_watch.studio import evidence_tasks
 from project_watch.studio.http import HttpError
 from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePart
 from project_watch.studio.sources import item_key
@@ -76,6 +77,11 @@ class CollectionIngest:
             db.execute('BEGIN IMMEDIATE')
             execution._guard(db)
             for statement in SCHEMA:
+                db.execute(statement)
+            db.execute(evidence_tasks.SCHEMA)
+            from project_watch.studio.material_ownership import SCHEMA as ownership_schema
+
+            for statement in ownership_schema:
                 db.execute(statement)
 
     def __call__(self, unit, items):
@@ -156,18 +162,26 @@ class CollectionIngest:
                        (item_id, self.project_id, key, category, item['title'], item['url'], item['source'],
                         item['snippet'], item.get('published_at'), now(), _json(item.get('extra', {}))))
         elif not historical and operation == 'updated':
+            from project_watch.studio.event_revisions import record as record_event
+
+            if existing['event_id']:
+                record_event(db, self.project_id, existing['event_id'])
             extra = json.loads(existing['extra'] or '{}')
             extra.update(item.get('extra', {}))
             db.execute('UPDATE studio_items SET title=?,url=?,source=?,snippet=?,published_at=?,extra=?,triaged=0 '
                        'WHERE id=? AND project_id=?',
                        (item['title'], item['url'], item['source'], item['snippet'], item.get('published_at'),
                         _json(extra), item_id, self.project_id))
+            if existing['event_id']:
+                record_event(db, self.project_id, existing['event_id'])
         if not older_source:
             db.execute('INSERT INTO studio_collection_sources VALUES (?,?,?,?,?) '
                        'ON CONFLICT(project_id,identity) DO UPDATE SET evidence_version_id=excluded.evidence_version_id,'
                        'observed_at=excluded.observed_at', (self.project_id, identity, item_id, record['id'], observed))
         db.execute('INSERT OR IGNORE INTO studio_collection_observations VALUES (?,?,?,?,?,?)',
                    (self.execution.job['id'], unit['id'], item_id, record['id'], operation, observed))
+        if operation != 'historical':
+            evidence_tasks.admit(db, self.execution, record['id'])
         return dict(item_id=item_id, evidence_version_id=record['id'], identity=identity,
                     operation=prior['operation'] if prior else operation, observed_at=prior['observed_at'] if prior else observed,
                     source_type=record['source_type'], read_scope=record['read_scope'],

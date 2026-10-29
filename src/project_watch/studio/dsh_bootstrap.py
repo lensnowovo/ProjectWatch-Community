@@ -336,6 +336,7 @@ class PublicBootstrap:
     task = "完成公开项目档案与监控范围补全。"
     bootstrap_projection = True
     topic_projection = False
+    allow_scope_projection = True
 
     def __init__(self, pipeline, execution, collectors, reader):
         self.pipeline, self.execution = pipeline, execution
@@ -542,6 +543,10 @@ class PublicBootstrap:
             source = self.source(sid)
         if not public_url(source['url']):
             raise ValueError('invalid public source URL')
+        if source.get('material_body_evidence_id'):
+            from project_watch.studio.bootstrap_collection import page_window
+
+            return page_window(self, source, args.get('offset', 0))
         if source.get("body_chunks"):
             return self.body_window(source, args)
         if source.get("read_attempted"):
@@ -775,12 +780,15 @@ class PublicBootstrap:
         news_items = []
         for row in records:
             if row["kind"] in KINDS:
-                new_facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs")})
+                new_facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs", "subject") if k in row})
             if row["kind"] in CATEGORIES:
                 source = self.source(row["source_id"])
                 news.setdefault(urldefrag(source["url"])[0], []).append(row)
         # Reuse legacy category-based keys as well as new URL-based keys, without
         # deleting history, restoring dismissed events, or crossing projects.
+        publication_intent = getattr(self, 'publication_intent', None)
+        if publication_intent:
+            publication_intent(news)
         with closing(self.store._connect()) as db:
             existing_news = db.execute("SELECT key,url FROM studio_items WHERE project_id=? AND key LIKE 'dsh:%' "
                                       "ORDER BY collected_at,id", (self.project_id,)).fetchall()
@@ -810,15 +818,17 @@ class PublicBootstrap:
                 "key": key, "title": source["title"], "url": source["url"], "source": source["source"],
                 "published_at": source["published_at"], "snippet": source["excerpt"][:5000],
                 "extra": {"dsh_bootstrap": True, "evidence_version_id": source["evidence_version_id"],
-                          "dsh_claims": [{"kind": row["kind"], "text": row["text"], "refs": row["refs"]} for row in claims]}}])
+                          "dsh_claims": [{k: row[k] for k in ("kind", "text", "refs", "subject") if k in row} for row in claims]}}])
             item = self.store.item_by_key(self.project_id, key)
             # INSERT OR IGNORE deliberately preserves user state. Append new
             # claims separately so later categories do not erase prior findings.
-            with closing(self.store._connect()) as db, db:
+            from project_watch.studio.event_revisions import changing_items
+
+            with closing(self.store._connect()) as db, db, changing_items(db, [item['id']]):
                 extra = json.loads(db.execute("SELECT extra FROM studio_items WHERE id=?", (item["id"],)).fetchone()[0] or "{}")
                 retained = list(extra.get("dsh_claims") or [])
                 for row in claims:
-                    claim = {"kind": row["kind"], "text": row["text"], "refs": row["refs"]}
+                    claim = {k: row[k] for k in ("kind", "text", "refs", "subject") if k in row}
                     if claim not in retained:
                         retained.append(claim)
                 extra.update(dsh_claims=retained, evidence_version_id=source["evidence_version_id"])
@@ -826,11 +836,16 @@ class PublicBootstrap:
             self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
             body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
+            if source.get('material_body_evidence_id'):
+                body = ''.join(p['text'] for p in self.store.evidence.get(
+                    self.project_id, source['material_body_evidence_id'], include_internal=False)['parts'])
             if not source.get('collection_matches') or source.get('source_type') == 'public_page':
                 self.store.save_body(item["id"], body_status, body)
             saved = self.store.item_by_key(self.project_id, key)
             if not saved.get("event_id"):
-                news_items.append(saved)
+                # News is a separate semantic projection. Its source retains
+                # its professional discovery category and immutable evidence.
+                news_items.append({**saved, 'category': category})
         # News views read events, not raw items. Deterministic materialization is
         # a storage projection; it must not invoke the legacy model/agent loop.
         groups, _ambiguous = events.plan_groups(news_items, self.store.recent_events(
@@ -842,7 +857,8 @@ class PublicBootstrap:
             event = events.summarise(group)
             if group.event_id:
                 self.store.attach_to_event(group.event_id, ids, importance=event["importance"],
-                                           summary=event["summary"], impact=event["impact"])
+                                           summary=event["summary"], impact=event["impact"],
+                                           execution=self.execution, split_event=event)
             else:
                 self.store.create_event(self.project_id, event, ids)
         if self.topic_projection:
@@ -880,7 +896,7 @@ class PublicBootstrap:
         if dependency["status"] != "current":
             status = "partial"
         peers = [{"name": peer_label(row["label"]), "reason": row["reason"], "evidence": row["refs"]}
-                 for row in records if row["kind"] == "peer"]
+                 for row in records if row["kind"] == "peer" and self.allow_scope_projection]
         report = {category: {
             "checked": sum(s["category"] == category for s in self.state["searches"]),
             "added": sum(claims[0]["kind"] == category for claims in news.values()),
@@ -901,6 +917,10 @@ class PublicBootstrap:
                                                        for r in collected['rows']) if collected is not None else True)}, peers)
         result = {"status": status, "coverage": coverage, "records": len(records),
                   "retained_records": len(self.state['records']), "record_admission": admission,
+                  **({'source_collection': self.execution.read_checkpoint('bootstrap_collection_v1')['finished']}
+                     if self.execution.read_checkpoint('bootstrap_collection_v1') else {}),
+                  **({'material_work': self.execution.read_checkpoint('material_closeout_v1')}
+                     if self.execution.read_checkpoint('material_closeout_v1') else {}),
                   "profile_projection": profile_projection,
                   "collection": collected,
                   "executor": "dsh", "source_errors": self.state["errors"],

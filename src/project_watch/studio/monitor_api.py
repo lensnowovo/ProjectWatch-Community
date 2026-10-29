@@ -173,7 +173,11 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
             if body.value not in ("major", "notable", "routine"):
                 raise HTTPException(422, "重要性无效")
             with closing(store._connect()) as db, db:
+                from project_watch.studio.event_revisions import record
+
+                record(db, project_id, event_id)
                 db.execute("UPDATE studio_events SET importance=? WHERE id=?", (body.value, event_id))
+                record(db, project_id, event_id)
             m.add_feedback(project_id, event_id, "importance", event["title"], event["importance"], body.value)
             return {"ok": True, "message": "已记住你的判断，后续同类信息会参考", "rule": None}
         if body.kind == "wrong_entity":

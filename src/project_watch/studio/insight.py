@@ -30,25 +30,51 @@ def counts(numbered: dict) -> dict[str, int]:
 
 def load(store, project_id: str) -> dict | None:
     raw = store.get_state(STATE_KEY.format(project_id))
-    return json.loads(raw) if raw else None
+    record = json.loads(raw) if raw else None
+    if record and record.get('artifact_key'):
+        dependency = store.evidence.dependencies.get(project_id, record['artifact_key'])
+        record.update(dependency=dependency, status=(dependency or {}).get('status', 'stale'))
+    return record
 
 
 def history(store, project_id: str) -> list[dict]:
     raw = store.get_state(HISTORY_KEY.format(project_id))
-    return json.loads(raw) if raw else []
+    result = json.loads(raw) if raw else []
+    with closing(store._connect()) as db:
+        available = db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_insight_versions'").fetchone()
+        if available:
+            rows = db.execute('SELECT v.record FROM studio_insight_versions v JOIN studio_primary_objects p '
+                "ON v.project_id=p.project_id AND v.artifact_key='insight:' || p.object_id WHERE v.project_id=? "
+                'ORDER BY v.created_at DESC,v.rowid DESC LIMIT 10', (project_id,)).fetchall()
+            for row in rows:
+                version = json.loads(row[0])
+                analysis = version['analysis']
+                result.append(dict(version_id=version['id'], generated_at=version['generated_at'], headline=analysis['headline'],
+                    position=analysis['position']['verdict'], maturity=analysis['technology']['maturity'],
+                    consensus=analysis['technology']['consensus'], industry=analysis['industry']['verdict']))
+    return sorted(result, key=lambda r: r['generated_at'], reverse=True)[:10]
 
 
 def save(store, project_id: str, analysis: dict, gathered: dict, model: str = "") -> dict:
+    current = load(store, project_id)
+    if current and current.get('artifact_key'):
+        raise ValueError('versioned insight requires fixed-input publication; legacy write cannot replace it')
     record = {"analysis": analysis, "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
               "fingerprint": gathered["fingerprint"], "counts": counts(gathered["numbered"]),
               "total": len(gathered["numbered"]), "model": model}
-    store.set_state(STATE_KEY.format(project_id), json.dumps(record, ensure_ascii=False))
     past = history(store, project_id)
     past.insert(0, {"generated_at": record["generated_at"], "headline": analysis["headline"],
                     "position": analysis["position"]["verdict"], "maturity": analysis["technology"]["maturity"],
                     "consensus": analysis["technology"]["consensus"], "industry": analysis["industry"]["verdict"],
                     "operations": analysis["operations"]["verdict"], "chain": analysis["chain"]["verdict"]})
-    store.set_state(HISTORY_KEY.format(project_id), json.dumps(past[:10], ensure_ascii=False))
+    with closing(store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        table = db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_insight_heads'").fetchone()
+        if table and db.execute('SELECT 1 FROM studio_insight_heads WHERE project_id=?', (project_id,)).fetchone():
+            raise ValueError('versioned insight requires fixed-input publication; legacy write cannot replace it')
+        for key, value in ((STATE_KEY.format(project_id), record), (HISTORY_KEY.format(project_id), past[:10])):
+            db.execute('INSERT INTO studio_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       (key, json.dumps(value, ensure_ascii=False)))
     return record
 
 def held(store, project_id: str) -> bool:

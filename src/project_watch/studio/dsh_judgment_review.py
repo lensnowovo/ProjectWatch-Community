@@ -96,6 +96,8 @@ class ReviewFieldAliases:
 def review_input(analysis, ctx):
     fields = {}
     sections = ('text', 'status', 'gaps') if 'watch_id' in analysis else SECTIONS
+    if ctx.get('question_contract'):
+        sections = (*sections, 'assessment_status', 'change_basis')
 
     def walk(value, path):
         if isinstance(value, dict):
@@ -115,6 +117,11 @@ def review_input(analysis, ctx):
             'evidence': ctx['numbered']}
     if 'watch_id' in analysis:
         payload['question'] = next(w['text'] for w in ctx['watches'] if w['id'] == analysis['watch_id'])
+        if ctx.get('question_contract'):
+            payload['question_contract'] = ctx['question_contract']
+    if ctx.get('object'):
+        payload['target_object'] = ctx['object']
+        payload['relationship_context'] = ctx.get('relationships', [])
     return payload
 
 
@@ -194,12 +201,17 @@ def validate_review(value, payload):
     return issues
 
 
-def verify(research, analysis, ctx):
+def admission_plan(research, analysis, ctx):
     payload = review_input(analysis, ctx)
     batches = review_batches(payload)
     binding = digest([VERSION, SYSTEM, CONSISTENCY_SYSTEM, MAX_FIELDS, MAX_FIELD_CHARS,
                       MAX_BATCHES, OUTPUT_TOKENS, research.binding, ctx['fingerprint'], payload])
     key = 'dsh_semantic_' + binding[:40]
+    return payload, batches, binding, key
+
+
+def verify(research, analysis, ctx):
+    payload, batches, binding, key = admission_plan(research, analysis, ctx)
     saved = research.execution.read_checkpoint(key)
     if saved is not None and saved.get('binding') != binding:
         raise ValueError('review_binding_mismatch')

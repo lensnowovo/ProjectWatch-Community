@@ -29,19 +29,23 @@ def next_submission(research):
     return 'pw_assess' if research.pending_assessments(ctx) else 'pw_judge'
 
 
+def request_budget(execution):
+    """Shared admission consumption, including inherited completed requests."""
+    requests = {}
+    for kind, limit in execution.budgets.items():
+        used = execution.budget_used(kind)
+        requests[kind] = dict(limit=limit, used=used, remaining=None if limit is None else max(0, limit - used))
+    return requests
+
+
 def budget(research):
     execution = research.execution
     admission = execution.read_checkpoint('collection_admission_v1') or {}
     if not admission.get('enabled'):
         return None  # Do not retroactively change already-started legacy rounds.
-    usage = execution.usage()
-    requests = {}
-    for kind, limit in execution.budgets.items():
-        used = usage.get(kind, {}).get('requests', 0)
-        requests[kind] = dict(limit=limit, used=used, remaining=None if limit is None else max(0, limit - used))
     from project_watch.studio.dsh_record_review import pending_calls
     record_review = pending_calls(research)
-    return dict(requests=requests, reserve_model_calls=RESERVE + record_review,
+    return dict(requests=request_budget(execution), reserve_model_calls=RESERVE + record_review,
                 pending_record_review_calls=record_review,
                 phase=(execution.read_checkpoint(STAGE) or {}).get('phase', 'research'))
 

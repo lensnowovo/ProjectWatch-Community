@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -59,29 +60,93 @@ def test_release_versions_match_python_frontend_and_lock():
 
 
 def test_ci_has_read_only_pinned_windows_job_with_mac_deferred():
+    from scripts.ci_scope import DOMAINS
     flow = json.loads((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
     assert set(flow['on']) == {'pull_request', 'push', 'workflow_dispatch', 'workflow_call'}
     assert flow['permissions'] == {'contents': 'read'}
     assert flow['on']['push']['branches'] == ['main']
-    matrix = flow['jobs']['offline']['strategy']['matrix']['include']
-    assert {(row['os'], row['arch']) for row in matrix} == {
-        ('windows-2022', 'x64'),
-    }
-    steps = flow['jobs']['offline']['steps']
-    for step in steps:
-        if 'uses' in step:
-            _, pin = step['uses'].rsplit('@', 1)
-            assert len(pin) == 40 and all(c in '0123456789abcdef' for c in pin)
-        if step.get('uses', '').startswith('actions/checkout@'):
-            assert step['with']['persist-credentials'] is False
+    assert flow['on']['workflow_call']['inputs']['force_full']['default'] is True
+    assert flow['on']['workflow_dispatch']['inputs']['force_full']['default'] is True
+    jobs = flow['jobs']
+    assert set(jobs) == {'plan', *DOMAINS, 'release_checks'}
+    for name, job in jobs.items():
+        assert job['runs-on'] == 'windows-2022'
+        assert job.get('permissions', flow['permissions']) == (
+            {'contents': 'read', 'actions': 'read'} if name == 'plan' else {'contents': 'read'})
+        assert not job.get('continue-on-error')
+        for step in job['steps']:
+            if 'uses' in step:
+                _, pin = step['uses'].rsplit('@', 1)
+                assert len(pin) == 40 and all(c in '0123456789abcdef' for c in pin)
+            if step.get('uses', '').startswith('actions/checkout@'):
+                assert step['with'] == {'persist-credentials': False, 'ref': '${{ github.sha }}'}
+            assert not step.get('continue-on-error')
+            if 'GITHUB_TOKEN' in step.get('env', {}):
+                assert name == 'plan' and step['id'] == 'select'
     text = json.dumps(flow)
     for forbidden in ('pull_request_target', 'secrets.', 'contents: write', 'gh release', 'git push'):
         assert forbidden not in text
-    commands = '\n'.join(s.get('run', '') for s in steps)
-    for required in ('run_offline_tests.py', '--dsh-runtime', 'check_layer_boundaries.py',
-                     'typecheck', 'frontend run build', 'build --wheel', 'installed_wheel_smoke.py', '--full-journey'):
-        assert required in commands
-    assert not any(s.get('continue-on-error') for s in steps)
+
+
+def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
+    from scripts.ci_scope import CONTRACT_TESTS, DOMAINS, FRONTEND_TESTS, python_command
+    flow = json.loads((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+    jobs = flow['jobs']
+    assert jobs['python']['timeout-minutes'] == 180
+    assert jobs['native']['timeout-minutes'] == 60
+    for domain in DOMAINS:
+        assert jobs[domain]['needs'] == 'plan'
+        assert jobs[domain]['if'] == "needs.plan.outputs." + domain + " == 'true'"
+        assert all('if' not in step for step in jobs[domain]['steps'] if 'run' in step)
+    phases = {d: {s['name']: s for s in jobs[d]['steps']} for d in DOMAINS}
+    assert phases['python']['Python domain tests']['run'] == python_command('python')
+    assert phases['frontend']['Frontend Python contracts']['run'] == python_command('frontend')
+    assert not set(CONTRACT_TESTS) & set(FRONTEND_TESTS)
+    quick = next(s['run'] for s in jobs['plan']['steps'] if s['name'] == 'CI and document contracts')
+    assert all(path in quick for path in CONTRACT_TESTS)
+    assert phases['python']['Lint']['run'] == 'python -m ruff check .'
+    assert phases['python']['Architecture boundaries']['run'] == 'python scripts/check_layer_boundaries.py'
+    for name, command in {'Frontend tests': 'npm --prefix frontend test',
+                          'Frontend types': 'npm --prefix frontend run typecheck',
+                          'Frontend build': 'npm --prefix frontend run build',
+                          'Node regression': 'node --test tests/*.test.mjs'}.items():
+        assert phases['frontend'][name]['run'] == command
+    command = shlex.split(phases['native']['Native DSH with synthetic model gateway']['run'])
+    assert command[:5] == ['python', '-I', '-X', 'utf8', 'scripts/run_offline_tests.py']
+    assert command[command.index('--dsh-runtime') + 1] == '$env:RUNNER_TEMP/dsh'
+    assert command[command.index('--dsh-runtime') + 2:] == [
+        'tests/test_studio_dsh_runtime.py', 'tests/test_studio_dsh_monitor.py',
+        'tests/test_collection_model_continuation.py',
+        'tests/test_bootstrap_collection.py::test_native_collection_role_reads_collects_and_finishes_without_record_tools',
+        'tests/test_event_insight.py::test_worker_delivers_events_then_fresh_fixed_insight_with_no_source_tools[True]',
+        'tests/test_scope_maintenance.py::test_real_worker_scope_without_judgment_and_completed_receipt_replay[True]',
+        'tests/test_question_assessment.py::test_fresh_topic_worker_material_then_independent_question_without_judge_or_revise[True]',
+    ]
+    installed = phases['installed']
+    names = list(installed)
+    assert names.index('Frontend build') < names.index('Build full wheel') < names.index('Fresh installed-wheel smoke') < names.index('Full installed synthetic journey')
+    assert '$wheel.Count -ne 1' in installed['Fresh installed-wheel smoke']['run']
+    assert 'python -m venv' in installed['Fresh installed-wheel smoke']['run']
+    assert '--full-journey --wheel $wheel.FullName' in installed['Full installed synthetic journey']['run']
+    artifacts = [step for d in DOMAINS for step in jobs[d]['steps'] if step.get('id') in {'ci_upload', 'ci_proof_upload'}]
+    assert len({step['with']['name'] for step in artifacts}) == 8
+    assert all(step['if'] == 'always()' and step['with']['retention-days'] == 7 for step in artifacts)
+    assert {p for step in artifacts if step['id'] == 'ci_upload' for p in step['with']['path'].splitlines()} == {
+        '${{ runner.temp }}/offline/pytest.xml', '${{ runner.temp }}/frontend-python/pytest.xml',
+        '${{ runner.temp }}/native-dsh/pytest.xml', '${{ runner.temp }}/installed-smoke/receipt.json',
+        '${{ runner.temp }}/installed-journey/receipt.json',
+    }
+    rollup = jobs['release_checks']
+    assert rollup['name'] == 'windows-2022 / Python 3.13'
+    assert rollup['needs'] == ['plan', *DOMAINS] and rollup['if'] == 'always()'
+    assert rollup['steps'][-1]['run'] == 'python -I -X utf8 scripts/ci_scope.py summary'
+
+
+def test_progressive_installed_harness_uses_actual_worker_and_fixed_consumers(tmp_path):
+    import runpy
+    support = runpy.run_path(str(ROOT / 'tests/progressive_installed_support.py'))
+    result = support['run'](tmp_path)
+    assert result['immutable_insight'] and result['counts']['materials'] == 1
 
 
 def test_candidate_gate_requires_exact_commit_and_never_publishes():
@@ -99,7 +164,9 @@ def test_candidate_gate_requires_exact_commit_and_never_publishes():
     assert 'inputs.' not in check['run']  # Untrusted strings only enter through env.
     assert 'git rev-parse HEAD' in check['run'] and 'throw' in check['run']
     regression = flow['jobs']['regression']
-    assert regression == {'needs': 'verify', 'uses': './.github/workflows/ci.yml'}
+    assert regression == {'needs': 'verify', 'uses': './.github/workflows/ci.yml',
+                          'with': {'force_full': True},
+                          'permissions': {'contents': 'read', 'actions': 'read'}}
     assert flow['jobs']['review']['needs'] == ['verify', 'regression']
     raw = json.dumps(flow)
     for forbidden in ('pull_request_target', 'secrets.', 'secrets":', 'contents: write',

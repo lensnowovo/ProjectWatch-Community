@@ -159,6 +159,7 @@ def test_real_host_next_round_uses_own_success_window_and_budget_failure_keeps_i
     pipeline.http_factory = lambda _: Http(send)
     monkeypatch.setattr(dsh_runtime, 'run_dsh', lambda *_: None)
     monkeypatch.setattr(collection_host, 'now', lambda: '2026-10-25T12:00:00+08:00')
+    collection_host.admit(execution, mode='first')  # Frozen legacy host-only fixture.
     dsh_runtime.run_bootstrap(pipeline, execution, None)
     first = history.read(pipeline.store, execution.job['project_id'])
     assert len(first) == 3  # Two paper query modes and public filings, not missing/disabled sources.
@@ -167,6 +168,7 @@ def test_real_host_next_round_uses_own_success_window_and_budget_failure_keeps_i
     second = JobExecution(pipeline.store, pipeline.store.claim())
     pipeline._execution_state.current = second
     monkeypatch.setattr(collection_host, 'now', lambda: '2026-10-26T12:00:00+08:00')
+    collection_host.admit(second, mode='incremental')
     dsh_runtime.run_monitor(pipeline, second, None)
     manifest = second.read_checkpoint('collection_round_v1')['plan']
     topic = next(u for u in manifest['units'] if u['source'] == 'openalex_topic')
@@ -183,5 +185,6 @@ def test_real_host_next_round_uses_own_success_window_and_budget_failure_keeps_i
     third.budgets.update(search=0, model=0, page=0, open_data=0)
     count = len(calls)
     monkeypatch.setattr(collection_host, 'now', lambda: '2026-10-27T12:00:00+08:00')
+    collection_host.admit(third, mode='incremental')
     dsh_runtime.run_monitor(pipeline, third, None)
     assert len(calls) == count and history.read(pipeline.store, third.job['project_id']) == after

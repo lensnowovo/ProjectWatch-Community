@@ -1,6 +1,6 @@
 # Windows 使用指南
 
-适用于当前 Windows x64 桌面候选。尚未正式公开发布；请只使用维护者提供且哈希可核对的候选，或正式 Release 中明确列出的 Windows 安装器。不要把旧 alpha 的源码 ZIP 当成安装包。
+适用于 `0.2.0rc3` Windows x64 公开预览版。本次已获发布授权，请使用[指定版本页](https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1)实际列出且哈希可核对的 Windows 安装器；不要把源码 ZIP 或旧版本资产当成本版安装包。[版本说明](releases/0.2.0rc3-preview.1.md)列出已验范围及仍未验证的真实质量、发现时效和长期运行表现。
 
 ## 1. 安装并打开
 

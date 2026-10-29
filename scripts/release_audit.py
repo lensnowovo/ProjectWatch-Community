@@ -47,6 +47,25 @@ _BRAND_ASSETS = {
     "project_watch/static/brand-desktop.png": "b897622a7baa06c93cc2803a121877e2f3f3afe8566e3d644954cf4709da8ef6",
     "project_watch/static/brand-tray.png": "b74c11e8a3c01e552d8d210b710114d0b31ad735186a3a333a4776ed4337eda1",
 }
+# Exact repository binaries plus the corresponding complete license text.
+# Text hashes use normalized newlines, since Git may check out CRLF on Windows.
+_FONT_SOURCE_ASSETS = {
+    'newsreader-latin-wght-normal.woff2': (
+        '62981321d9a3cc7a61a73792729043703fd6112da86e8ec848bb57f088578757',
+        'OFL-newsreader.txt', '26028ec4e13b650065fa525a09532176f8a668b76ff849ea01c564a7480f91e7'),
+    'noto-serif-sc-chinese-simplified-600-normal.woff2': (
+        '510f6000da6f04a1ef48b0e6339c540c603c371f1b415829ff58ad98499717f0',
+        'OFL-noto-serif-sc.txt', '18aabf190848725e2576eefb5c29ba06aac1029d02132252a7f312eac2e50cf3'),
+}
+_SOURCE_BINARY_ASSETS = {
+    **{'frontend/src/fonts/' + name: (digest, 'frontend/src/fonts/' + license_file, license_digest)
+       for name, (digest, license_file, license_digest) in _FONT_SOURCE_ASSETS.items()},
+    **{'src/project_watch/web/assets/' + name: (value[0], 'src/' + _STUDIO_LICENSE_ASSET,
+        'be56197285bf633e2cc783412fb4da2a58381610651aac90649bbaadd905e7b6')
+       for name, value in _FONT_SOURCE_ASSETS.items()},
+    **{'src/' + name: (digest, 'LICENSE', '4e88c4b08046adf99563039cc2546ff0c1ed20f0ad046643ff4d0f27aa3ae65a')
+       for name, digest in _BRAND_ASSETS.items()},
+}
 
 
 def _secret_findings(data: bytes, label: str) -> list[str]:
@@ -178,6 +197,19 @@ def audit_tracked_source(repo_root: Path) -> tuple[int, list[str]]:
         path = repo_root / relative
         if path.is_symlink() or not path.is_file():
             findings.append(f"{relative}: non-regular tracked file")
+            continue
+        if relative in _SOURCE_BINARY_ASSETS:
+            expected, license_name, license_hash = _SOURCE_BINARY_ASSETS[relative]
+            license_path = repo_root / license_name
+            try:
+                valid = (path.stat().st_size <= _MAX_MEMBER_BYTES
+                         and hashlib.sha256(path.read_bytes()).hexdigest() == expected
+                         and not license_path.is_symlink()
+                         and hashlib.sha256(license_path.read_text(encoding='utf-8').encode()).hexdigest() == license_hash)
+            except (OSError, UnicodeError):
+                valid = False
+            if not valid:
+                findings.append(f'{relative}: unreviewed binary asset or missing corresponding license')
             continue
         if path.suffix.lower() not in _SOURCE_SUFFIXES and path.name not in _SOURCE_BASENAMES:
             findings.append(f"{relative}: non-text tracked artifact")

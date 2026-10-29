@@ -416,6 +416,7 @@ function QuestionRow({ projectId, q, onChanged }: { projectId: string; q: Tracke
       <button type="button" className="q-summary" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <span className="q-text">{q.text}</span>
         <span className={`q-status ${primary ? `q-${primary.status}` : "q-none"}`}>{primary ? primary.status_label : ""}</span>
+        {q.public_answer && <span className="small muted">{{answered:'已有答案', unresolved:'问题未解决', unknown:'证据不足', needs_recheck:'旧回答待复核'}[q.public_answer.knowledge_state]}</span>}
         <span className="q-note">{primary?.note || ""}</span>
         <span className="q-meta muted small">{primary ? relTime(primary.created_at) : ""}<i aria-hidden="true">›</i></span>
       </button>

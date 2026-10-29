@@ -40,6 +40,8 @@ def response(url):
 
 def test_runtime_collects_and_ingests_before_dsh_and_replay_adds_no_requests(setup, monkeypatch):
     pipeline, execution = setup
+    # A host round admitted before the upgrade retains the legacy DSH owner.
+    collection_host.admit(execution, mode='first')
     calls, statuses = [], []
 
     def send(method, url, *_args):
@@ -125,6 +127,7 @@ def test_legacy_started_round_does_not_acquire_new_host_work(setup, monkeypatch)
 
 def test_runtime_scope_never_reads_internal_plan(setup, monkeypatch):
     pipeline, execution = setup
+    collection_host.admit(execution, mode='first')
     pipeline.monitoring_plan.add(execution.job['project_id'], {'text': 'PRIVATE sentinel',
         'queries': ['PRIVATE sentinel']}, actor='human', origin='human', visibility='internal')
     calls = []
@@ -172,6 +175,8 @@ def test_analysis_only_keeps_existing_evidence_without_collection_admission(setu
 @pytest.mark.parametrize('public_timeout', [False, True])
 def test_official_dsh_full_entry_uses_automatically_collected_evidence(setup, public_timeout):
     pipeline, execution = setup
+    # Exercise compatibility of the already-admitted pre-material workflow.
+    collection_host.admit(execution, mode='first')
     source_calls, model_calls, selected = [], [], {}
 
     def send(_method, url, _headers, raw, _timeout):
