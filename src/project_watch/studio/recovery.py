@@ -410,6 +410,10 @@ def authorize(pipeline, project_id, job_id, *, expected_version, idempotency_key
         else:
             db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
                        "lease_token='',lease_until=NULL WHERE id=?", (job_id,))
+        if target_id != job_id:
+            from project_watch.studio.acceptance_batch import inherit
+
+            inherit(db, target_id, job_id)
         response = {'job_id': target_id, 'status': 'queued', 'recovery_id': idempotency_key}
         db.execute('INSERT INTO studio_recovery_actions VALUES (?,?,?,?,?,?)',
                    (idempotency_key, project_id, job_id, request_hash, json.dumps(response), now()))

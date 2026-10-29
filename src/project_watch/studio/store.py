@@ -267,6 +267,9 @@ class StudioStore:
             from project_watch.studio.execution import SCHEMA as EXECUTION_SCHEMA
 
             db.executescript(EXECUTION_SCHEMA)
+            from project_watch.studio.acceptance_batch import SCHEMA as ACCEPTANCE_SCHEMA
+
+            db.executescript(ACCEPTANCE_SCHEMA)
             from project_watch.studio.recovery import SCHEMA as RECOVERY_SCHEMA
 
             db.executescript(RECOVERY_SCHEMA)
@@ -1212,7 +1215,7 @@ class StudioStore:
             record(db, project_id, event_id)
 
     # ---------- jobs ----------
-    def enqueue(self, project_id: str, kind: str, *, automatic: bool = False, input_version: str = "", db=None) -> dict:
+    def enqueue(self, project_id: str, kind: str, *, automatic: bool = False, input_version: str = "", db=None, parent_job_id=None) -> dict:
         if kind not in JOB_KINDS or len(input_version) > 100:
             raise ValueError("invalid job kind")
         own_connection = db is None
@@ -1227,21 +1230,37 @@ class StudioStore:
                     "AND kind='external_followup' AND status IN ('queued','running') "
                     "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
                 if continuation:
+                    if parent_job_id:
+                        from project_watch.studio.acceptance_batch import inherit
+
+                        inherit(db, continuation['id'], parent_job_id)
                     return dict(continuation)
             existing = db.execute(
                 "SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1",
                 (project_id, kind)).fetchone()
             if existing:
+                if parent_job_id:
+                    from project_watch.studio.acceptance_batch import inherit
+
+                    inherit(db, existing['id'], parent_job_id)
                 return dict(existing)
             if automatic:
                 held = db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status='failed' "
                                   "AND retry_after>? AND (?='' OR input_version=?) ORDER BY created_at DESC LIMIT 1",
                                   (project_id, kind, now(), input_version, input_version)).fetchone()
                 if held:
+                    if parent_job_id:
+                        from project_watch.studio.acceptance_batch import inherit
+
+                        inherit(db, held['id'], parent_job_id)
                     return dict(held)
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id, project_id, kind, status, created_at,input_version) "
                        "VALUES (?,?,?,'queued',?,?)", (job_id, project_id, kind, now(), input_version))
+            if parent_job_id:
+                from project_watch.studio.acceptance_batch import inherit
+
+                inherit(db, job_id, parent_job_id)
             if kind in ('external', 'external_followup'):
                 # Persist intent with admission, not by guessing from a later
                 # empty input_version. Reusing an active job above never edits
@@ -1278,12 +1297,19 @@ class StudioStore:
             brief = db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='brief' "
                                "AND status IN ('queued','running')", (job['project_id'],)).fetchone()
             if not brief:
+                brief_id = uuid.uuid4().hex
                 db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at) VALUES (?,?,'brief','queued',?)",
-                           (uuid.uuid4().hex, job['project_id'], now()))
+                           (brief_id, job['project_id'], now()))
+            else:
+                brief_id = brief['id']
             child_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at,input_version) "
                        "VALUES (?,?,'external_followup','queued',?,?)", (child_id, job['project_id'], now(), job['id']))
             db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)', (child_id, 'external_followup_input', encoded))
+            from project_watch.studio.acceptance_batch import inherit
+
+            inherit(db, brief_id, job['id'])
+            inherit(db, child_id, job['id'])
             db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
                        (job['id'], 'external_first_ready', json.dumps({'followup_id': child_id})))
             return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (child_id,)).fetchone())

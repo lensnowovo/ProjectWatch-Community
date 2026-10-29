@@ -13,7 +13,7 @@ def enqueue(pipeline, execution):
     state = execution.read_checkpoint(event_insight_work.ROUND)
     if not state:
         return pipeline.store.enqueue(execution.job['project_id'], 'external_followup', automatic=True,
-                                      input_version=execution.job['id'])  # Existing legacy protocol.
+                                      input_version=execution.job['id'], parent_job_id=execution.job['id'])  # Existing legacy protocol.
     with closing(pipeline.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)

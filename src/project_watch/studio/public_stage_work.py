@@ -21,7 +21,7 @@ def inherit(db, target, owners):
 
 def enqueue(pipeline, db, pid, kind, work, *, origin=None, cap=4, input_version=None):
     version = input_version or kind + ':' + digest([origin, work])
-    job = pipeline.store.enqueue(pid, kind, automatic=True, input_version=version, db=db)
+    job = pipeline.store.enqueue(pid, kind, automatic=True, input_version=version, db=db, parent_job_id=origin)
     if job.get('input_version') != version or job['status'] not in ('queued', 'running'):
         return None
     reader = JobExecution(pipeline.store, job)

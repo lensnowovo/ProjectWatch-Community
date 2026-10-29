@@ -31,10 +31,17 @@ def next_submission(research):
 
 def request_budget(execution):
     """Shared admission consumption, including inherited completed requests."""
+    from project_watch.studio.acceptance_batch import remaining
+
+    batch_remaining = remaining(execution.store, execution.job)
     requests = {}
     for kind, limit in execution.budgets.items():
         used = execution.budget_used(kind)
         requests[kind] = dict(limit=limit, used=used, remaining=None if limit is None else max(0, limit - used))
+        if batch_remaining is not None and kind in batch_remaining:
+            local = requests[kind]['remaining']
+            requests[kind]['acceptance_remaining'] = batch_remaining[kind]
+            requests[kind]['remaining'] = batch_remaining[kind] if local is None else min(local, batch_remaining[kind])
     return requests
 
 

@@ -236,6 +236,9 @@ class JobExecution:
             count = self.budget_used(kind, db=db)
             if self.budgets[kind] is not None and count >= self.budgets[kind]:
                 raise HttpError("request_budget")
+            from project_watch.studio.acceptance_batch import guard_send
+
+            guard_send(db, self.job, kind)
             db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) VALUES (?,?,?,?,'started',?,1,?)",
                        (self.job["id"], key, kind, provider_hash, now(), self.budgets[kind]))
             db.execute('UPDATE studio_job_calls SET deadline_at=? WHERE job_id=? AND call_key=?',

@@ -198,7 +198,7 @@ def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
         return None
     fingerprint = digest([origin, [w['fingerprint'] for w in state['objects']], rebuild])
     version = 'event-insight:' + fingerprint
-    job = pipeline.store.enqueue(project_id, 'insight', automatic=True, input_version=version, db=db)
+    job = pipeline.store.enqueue(project_id, 'insight', automatic=True, input_version=version, db=db, parent_job_id=origin)
     if job.get('input_version') != version or job.get('status') not in ('queued', 'running'):
         return None
     existing = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?', (job['id'], INPUT)).fetchone()
