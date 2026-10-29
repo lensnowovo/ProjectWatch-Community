@@ -39,7 +39,8 @@
       "timeout-minutes": 15,
       "permissions": {
         "contents": "read",
-        "actions": "read"
+        "actions": "read",
+        "pull-requests": "read"
       },
       "defaults": {
         "run": {
