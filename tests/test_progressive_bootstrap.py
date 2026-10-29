@@ -123,6 +123,26 @@ def run(setup):
     return dsh_runtime.run_bootstrap(*setup, Path(os.environ.get('PW_DSH_TEST_RUNTIME', 'synthetic-runtime')))
 
 
+def claim_external(pipeline, expected):
+    """Keep generated analysis work queued while this fixture tests the next source round."""
+    held = []
+    try:
+        with closing(pipeline.store._connect()) as db:
+            queued = db.execute("SELECT count(*) FROM studio_jobs WHERE status='queued'").fetchone()[0]
+        for _ in range(queued):
+            job = pipeline.store.claim()
+            assert job is not None
+            if job['id'] == expected['id']:
+                assert job['kind'] == 'external'
+                return job
+            assert job['kind'] in ('insight', 'scope', 'assessment', 'brief')
+            held.append(job)
+        pytest.fail('expected source job not claimable')
+    finally:
+        for job in held:
+            pipeline.store.yield_job(job)
+
+
 def test_default_materials_publish_despite_one_invalid_and_replay_without_extraction(setup, monkeypatch):
     calls, roles = install_provider(setup, monkeypatch)
     result = run(setup)
@@ -316,8 +336,8 @@ def test_three_call_cap_publishes_affordable_batch_and_pending_tasks_are_transfe
     assert len(pending) == 2
     assert run(setup) == result and len(calls) == 2
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    pipeline.store.enqueue(execution.job['project_id'], 'external')
-    current = JobExecution(pipeline.store, pipeline.store.claim())
+    queued = pipeline.store.enqueue(execution.job['project_id'], 'external')
+    current = JobExecution(pipeline.store, claim_external(pipeline, queued))
     for task in pending:
         material_ownership.take_over(current, task)
     processed = []
@@ -346,8 +366,8 @@ def test_large_candidate_plan_is_deferred_whole_and_saved_proposal_is_transferab
         saved = json.loads(db.execute('SELECT result FROM studio_evidence_tasks WHERE id=?', (pending[0],)).fetchone()[0])
     assert len(saved['observations']) == 25
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    pipeline.store.enqueue(execution.job['project_id'], 'external')
-    current = JobExecution(pipeline.store, pipeline.store.claim())
+    queued = pipeline.store.enqueue(execution.job['project_id'], 'external')
+    current = JobExecution(pipeline.store, claim_external(pipeline, queued))
     material_ownership.take_over(current, pending[0])
     # Existing extraction adapter consumes the copied proposal without a send.
     settings, _, _, collectors = pipeline.tools(execution=current)
@@ -386,8 +406,8 @@ def test_empty_collection_defers_unaffordable_previous_fact_review_without_chang
         {**profile, 'facts': [{**fact, 'label': 'Previous assertion ' + chr(65 + i)} for i in range(25)]})
     retained = pipeline.store.get_public_profile(previous.job['project_id'])
     assert pipeline.store.finish(previous.job['id'], lease_token=previous.job['lease_token'])
-    pipeline.store.enqueue(previous.job['project_id'], 'external')
-    current = JobExecution(pipeline.store, pipeline.store.claim(), budgets={'model': 3})
+    queued = pipeline.store.enqueue(previous.job['project_id'], 'external')
+    current = JobExecution(pipeline.store, claim_external(pipeline, queued), budgets={'model': 3})
     pipeline._execution_state.current = current
     def empty_collection(_method, url, *_args):
         host = urlsplit(url).hostname

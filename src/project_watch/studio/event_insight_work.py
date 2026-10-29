@@ -33,7 +33,15 @@ def begin(execution, *, cap=16, shared=False):
                 cap = min(cap, execution.budgets.get('model') if execution.budgets.get('model') is not None else cap)
             before = dict(db.execute('SELECT h.event_id,h.revision_id FROM studio_event_revision_heads h '
                 'JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=?', (execution.job['project_id'],)))
-            saved = dict(cap=cap, collection_cap=max(0, cap - min(6, cap // 2)), before=before,
+            # First preserve an affordable source delivery: two extraction
+            # turns plus its admission review. Analysis needs at least a draft
+            # and review of its own; reserving just one turn at a cap of 3/4
+            # prevents publication without making analysis feasible either.
+            # Small explicitly bounded rounds may deliver events first; the
+            # analysis handoff reports any remaining budget gap. Total cap and
+            # previously frozen rounds are unchanged.
+            reserve = min(6, cap // 2) if cap >= 5 else 0
+            saved = dict(cap=cap, collection_cap=max(0, cap - reserve), before=before,
                          phase='collecting', origin_job_id=execution.job['id'], created_at=now())
             if (execution.read_checkpoint('collection_request_v1', db=db) or {}).get('mode') == 'topic':
                 saved['analysis_enabled'] = False
