@@ -219,6 +219,16 @@ class StudioStore:
                 END;
             """)
             columns = {r[1] for r in db.execute("PRAGMA table_info(studio_items)")}
+            if "event_id" not in columns:
+                from project_watch.studio.dependencies import SCHEMA as DEPENDENCY_SCHEMA
+                from project_watch.studio.event_revisions import SCHEMA as EVENT_REVISION_SCHEMA
+
+                # Legacy event writers now retain revisions and dependencies too.
+                # Create their tables before the data migration, then keep the
+                # column marker and migrated members/heads in one transaction.
+                # A failed conversion must remain eligible on the next opening.
+                db.executescript(DEPENDENCY_SCHEMA + EVENT_REVISION_SCHEMA)
+                db.execute("BEGIN IMMEDIATE")
             for name, ddl in (("body", "TEXT NOT NULL DEFAULT ''"),
                               ("body_status", "TEXT NOT NULL DEFAULT ''"),
                               ("event_id", "TEXT")):

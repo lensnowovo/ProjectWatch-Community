@@ -948,11 +948,11 @@ def test_google_redirects_do_not_starve_direct_article_reading(tmp_path):
     assert reader.urls == ["https://example.com/news/1"]
 
 
-def test_legacy_reports_survive_upgrade_without_network_or_status_changes(tmp_path):
+def legacy_report_database(tmp_path):
     import sqlite3
 
     from project_watch.repository import ProjectRepository
-    from project_watch.studio.store import SCHEMA, StudioStore
+    from project_watch.studio.store import SCHEMA
 
     repo = ProjectRepository(tmp_path / "db.sqlite3")
     project = repo.create_project("光启视界")
@@ -963,9 +963,73 @@ def test_legacy_reports_survive_upgrade_without_network_or_status_changes(tmp_pa
             db.execute("""INSERT INTO studio_items (id,project_id,key,category,title,collected_at,
                        triaged,relevant,status) VALUES (?,?,?,'company',?, ?,1,1,?)""",
                        (status, project.id, status, f"光启视界 {status} 进展", "2026-10-05T00:00:00Z", status))
+    return repo, project
+
+
+def test_legacy_reports_survive_upgrade_without_network_or_status_changes(tmp_path):
+    from project_watch.studio.store import StudioStore
+
+    repo, project = legacy_report_database(tmp_path)
     store = StudioStore(repo.db_path)
     events = store.list_events(project_id=project.id, include_dismissed=True)
     assert {e["status"] for e in events} == {"new", "read", "starred", "dismissed"}
     assert sum(e["source_count"] for e in events) == 4
     assert store.category_counts(project.id) == {"company": 3}
+    # Once the schema is current, opening must not promote a new ungrouped item.
+    with store._connect() as db:
+        db.execute("INSERT INTO studio_items (id,project_id,key,category,title,collected_at,triaged,relevant) "
+                   "VALUES ('pending',?,'pending','company','Unpublished candidate','2026-10-29',1,1)", (project.id,))
+        db.commit()
     assert len(StudioStore(repo.db_path).list_events(project_id=project.id, include_dismissed=True)) == 4
+    with store._connect() as db:
+        assert db.execute("SELECT event_id FROM studio_items WHERE id='pending'").fetchone()[0] is None
+        assert db.execute('SELECT COUNT(*) FROM studio_event_revisions').fetchone()[0] == 4
+        assert db.execute('SELECT COUNT(*) FROM studio_event_revision_heads').fetchone()[0] == 4
+
+
+def test_interrupted_legacy_event_migration_retries_atomically_without_touching_jobs(tmp_path, monkeypatch):
+    import sqlite3
+
+    from project_watch.studio import event_revisions
+    from project_watch.studio.execution import SCHEMA as EXECUTION_SCHEMA
+    from project_watch.studio.store import StudioStore
+
+    repo, project = legacy_report_database(tmp_path)
+    with sqlite3.connect(repo.db_path) as db:
+        db.executescript(EXECUTION_SCHEMA)
+        for name, ddl in [('lease_token', 'TEXT'), ('lease_until', 'TEXT'), ('attempts', 'INTEGER')]:
+            db.execute(f'ALTER TABLE studio_jobs ADD COLUMN {name} {ddl}')
+        db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at,lease_token,lease_until,attempts) "
+                   "VALUES ('saved-job',?,'external','running','2026-10-05','saved-lease','2099-01-01',3)",
+                   (project.id,))
+        db.execute("INSERT INTO studio_job_calls (job_id,call_key,kind,provider,status,created_at) "
+                   "VALUES ('saved-job','saved-request','model','synthetic','unknown','2026-10-05')")
+        jobs = db.execute('SELECT id,status,lease_token,lease_until,attempts FROM studio_jobs').fetchall()
+        calls = db.execute('SELECT * FROM studio_job_calls').fetchall()
+    original = event_revisions.record
+
+    def interrupted(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError('interrupted after first legacy revision')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(event_revisions, 'record', interrupted)
+        with pytest.raises(RuntimeError, match='interrupted after first legacy revision'):
+            StudioStore(repo.db_path)
+    with sqlite3.connect(repo.db_path) as db:
+        assert 'event_id' not in {r[1] for r in db.execute('PRAGMA table_info(studio_items)')}
+        for table in ['studio_events', 'studio_event_revisions', 'studio_event_revision_heads']:
+            assert db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0] == 0
+        assert db.execute('SELECT id,status,lease_token,lease_until,attempts FROM studio_jobs').fetchall() == jobs
+        assert db.execute('SELECT * FROM studio_job_calls').fetchall() == calls
+    first = StudioStore(repo.db_path)
+    events = first.list_events(project_id=project.id, include_dismissed=True)
+    assert {e['status'] for e in events} == {'new', 'read', 'starred', 'dismissed'}
+    second = StudioStore(repo.db_path)
+    assert {e['id'] for e in second.list_events(project_id=project.id, include_dismissed=True)} == {e['id'] for e in events}
+    with sqlite3.connect(repo.db_path) as db:
+        assert db.execute('SELECT COUNT(*) FROM studio_event_revisions').fetchone()[0] == 4
+        assert db.execute('SELECT id,status,lease_token,lease_until,attempts FROM studio_jobs').fetchall() == jobs
+        names = ['job_id', 'call_key', 'kind', 'provider', 'status', 'response_status', 'response_headers',
+                 'response_body', 'created_at']
+        assert db.execute('SELECT '+','.join(names)+' FROM studio_job_calls').fetchall() == calls

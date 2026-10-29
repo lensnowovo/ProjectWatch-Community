@@ -26,3 +26,16 @@ Fresh default material roles continue to be exercised separately through actual
 Pipeline/worker entries and native DSH contracts. An installed-wheel synthetic
 worker journey uses a fake DSH transport driver; it is not installed native DSH
 acceptance. Native desktop and installer receipts are recorded separately.
+
+Legacy database upgrade correction: event revisions introduced a new dependency
+on revision/dependency tables during the pre-events migration. Those schemas now
+exist before conversion; an explicit transaction covers the new column marker,
+event membership and revision heads. A failure rolls them back together so reopen
+can retry. Existing report states, active job leases/attempts and unknown call
+receipts are preserved. Current-schema ungrouped candidates are not promoted.
+No new business columns or schema format are introduced by this ordering fix.
+The installed-wheel smoke now opens a synthetic pre-events database and verifies
+four preserved report states, four immutable heads and idempotent reopening.
+The earlier R2 failure remains diagnostic evidence; rebuilt artifacts need their
+own identities and affected installation checks. Rollback uses a matching backup
+restored to a new directory, never old code on a migrated active database.

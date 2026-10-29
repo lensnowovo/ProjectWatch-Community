@@ -15,8 +15,10 @@ import io
 import json
 import os
 import runpy
+import sqlite3
 import sys
 import zipfile
+from contextlib import closing
 from pathlib import Path
 
 
@@ -38,6 +40,33 @@ def verify_installed_product(wheel, package):
     if not expected or actual != expected:
         raise ValueError('Installed product inventory differs from wheel')
     return len(expected)
+
+
+def verify_legacy_upgrade(path):
+    """Exercise a pre-events database with the byte-verified installed product."""
+    from project_watch.repository import ProjectRepository
+    from project_watch.studio.store import SCHEMA, StudioStore
+
+    repo = ProjectRepository(path)
+    project = repo.create_project('Synthetic legacy upgrade')
+    statuses = {'new', 'read', 'starred', 'dismissed'}
+    with closing(sqlite3.connect(path)) as db, db:
+        db.executescript(SCHEMA)
+        for status in sorted(statuses):
+            db.execute("INSERT INTO studio_items (id,project_id,key,category,title,collected_at,"
+                       "triaged,relevant,status) VALUES (?,?,?,'company',?,'2026-10-05',1,1,?)",
+                       (status, project.id, status, 'Synthetic legacy '+status, status))
+    store = StudioStore(path)
+    events = store.list_events(project_id=project.id, include_dismissed=True)
+    assert {event['status'] for event in events} == statuses
+    assert sum(event['source_count'] for event in events) == 4
+    reopened = StudioStore(path).list_events(project_id=project.id, include_dismissed=True)
+    assert {event['id'] for event in reopened} == {event['id'] for event in events}
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute('SELECT COUNT(*) FROM studio_event_revision_heads').fetchone()[0] == 4
+        assert db.execute('SELECT COUNT(*) FROM studio_event_revisions').fetchone()[0] == 4
+        assert {row[0] for row in db.execute('SELECT status FROM studio_items')} == statuses
+    return {'legacy_sources': 4, 'event_heads': 4, 'statuses_preserved': True, 'reopen_idempotent': True}
 
 
 def main():
@@ -82,6 +111,7 @@ def main():
     writer.write(pdf)
     assert len(PdfReader(io.BytesIO(pdf.getvalue())).pages) == 1
     output.mkdir(parents=True)
+    legacy_upgrade = verify_legacy_upgrade(output / 'legacy-upgrade.sqlite3')
     data = output / 'data'
     for round_number in range(2):
         app = create_studio_app(data, start_worker=False)
@@ -113,6 +143,7 @@ def main():
         progressive = runpy.run_path(str(source / 'tests/progressive_installed_support.py'))
         progressive_result = progressive['run'](output / 'progressive')
     receipt = {'version': distribution.version, 'product_files_verified': count,
+               'legacy_report_upgrade': legacy_upgrade,
                'native_imports': modules, 'synthetic_persistence_reopened': True,
                'synthetic_installed_journey': args.full_journey,
                'progressive_installed_journey': progressive_result if args.full_journey else None,

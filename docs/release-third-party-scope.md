@@ -1,5 +1,9 @@
 # 第三方分发范围：Windows 候选
 
+2026-10-29 rc3 补充：最终实物包含三份 RapidOCR 模型与三份 ONNX Runtime 示例模型，均须对应清单、哈希和原始许可。已准备的九项源码归档涉及版本未变，须与最终安装器一起提供并复核。
+
+psycopg-binary 3.3.6 的 Windows wheel 缺精确上游构建记录（vcpkg baseline、port/patch、工具链和打包过程），不等于缺同版本源码或发现新增许可失败。2026-10-29 [PyPI 文件及安全面板](https://pypi.org/project/psycopg-binary/3.3.6/#files)仍无 provenance。取得该 wheel 的构建记录或另行受控重建可补此边界；当前不能宣称逐字节重现。维护者对最终分发范围的决定与工程字节核查分别记录。
+
 2026-10-23 工程复核；不构成法律意见，也不授予上游未授予的权利。
 发行对象是完整 ProjectWatch 应用，不是组件库、模板包或背景生成工具。
 

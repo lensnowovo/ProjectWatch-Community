@@ -1,5 +1,13 @@
 # Desktop components and source materials
 
+The rc3 candidate (2026-10-29) retains the versioned source materials below.
+The actual final inventory must reconcile all six models: three RapidOCR models
+and three ONNX Runtime examples. Pypdf 6.21.2, Undici 8.12.2 and Zod 4.6.7 retain
+their upstream license texts. This update does not grant new distribution rights.
+Psycopg's exact Windows vcpkg/toolchain/build provenance remains a disclosed
+reproducibility limit; same-version source archives alone do not prove that build.
+The original dated inventory follows; final artifact hashes take precedence.
+
 Engineering inventory for the Windows 0.2.0rc2 candidate, reviewed 2026-10-23.
 This is not blanket legal clearance. The actual bundle manifest and dependency
 lock, not a developer environment, determine what is distributed. Original
