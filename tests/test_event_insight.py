@@ -245,10 +245,20 @@ def test_publication_crash_keeps_event_and_recovers_unique_outbox_without_paid_r
     counts = len(seen['models']), len(seen['materials'])
     pipeline.store.finish(execution.job['id'], error='synthetic crash', lease_token=execution.job['lease_token'])
     monkeypatch.setattr(pipeline.store, 'put_compiled_profile', original)
-    first = pipeline.schedule_insight(execution.job['project_id'])
-    assert first and pipeline.schedule_insight(execution.job['project_id']) is None
+    assert pipeline.schedule_insight(execution.job['project_id']) is None
+    assert execution.read_checkpoint(event_insight_work.ROUND)['phase'] == 'collecting'
+    # The whole publication, including profile closeout, must finish before
+    # dispatch freezes its inputs. Resume the same journalled synthetic job.
+    with closing(pipeline.store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='queued' WHERE id=?", (execution.job['id'],))
+    resumed = JobExecution(pipeline.store, pipeline.store.claim())
+    assert resumed.job['id'] == execution.job['id']
+    source(pipeline, resumed)
+    pipeline.store.finish(resumed.job['id'], lease_token=resumed.job['lease_token'])
+    assert pipeline.schedule_insight(execution.job['project_id']) is None
     assert counts == (len(seen['models']), len(seen['materials']))
     child = JobExecution(pipeline.store, pipeline.store.claim())
+    assert child.job['id'] == resumed.read_checkpoint(event_insight_work.ROUND)['insight_job_id']
     pipeline.run(child.job)
     assert child.read_checkpoint(event_insight_work.RESULT)['status'] == 'complete'
 

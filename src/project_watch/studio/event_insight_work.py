@@ -21,7 +21,7 @@ def _put(db, job_id, stage, value):
                (job_id, stage, json.dumps(value, ensure_ascii=False)))
 
 
-def begin(execution, *, cap=16):
+def begin(execution, *, cap=16, shared=False):
     """Persist intent before publication so a failed writer cannot lose analysis."""
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
@@ -29,7 +29,8 @@ def begin(execution, *, cap=16):
         project_guard(db, execution.job['project_id'], execution.job['id'])
         saved = execution.read_checkpoint(ROUND, db=db)
         if saved is None:
-            cap = min(cap, execution.budgets.get('model') if execution.budgets.get('model') is not None else cap)
+            if not shared:
+                cap = min(cap, execution.budgets.get('model') if execution.budgets.get('model') is not None else cap)
             before = dict(db.execute('SELECT h.event_id,h.revision_id FROM studio_event_revision_heads h '
                 'JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=?', (execution.job['project_id'],)))
             saved = dict(cap=cap, collection_cap=max(0, cap - min(6, cap // 2)), before=before,
@@ -160,6 +161,22 @@ def _changed(db, project_id, state):
     return result
 
 
+def publication_complete(execution, result):
+    """Seal membership only after every event projection has returned."""
+    with closing(execution.store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        execution._guard(db)
+        project_guard(db, execution.job['project_id'], execution.job['id'])
+        state = execution.read_checkpoint(ROUND, db=db)
+        if 'publication_sources' not in state:
+            raise ValueError('event publication intent missing')
+        if not state.get('publication_complete'):
+            state['event_versions'] = _changed(db, execution.job['project_id'], state)
+            state['publication_complete'] = True
+            state['publication_result'] = result
+            _put(db, execution.job['id'], ROUND, state)
+
+
 def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
     from project_watch.studio.recovery import input_binding
 
@@ -267,8 +284,8 @@ def _route(pipeline, pid, state, db):
 
 def _advance(pipeline, pid, origin, state, db):
     if state['phase'] == 'collecting':
-        if 'publication_sources' not in state:
-            return None  # A failed pre-publication stage still owns its intent.
+        if not state.get('publication_complete'):
+            return None  # Intent or partially written events are not publication completion.
         pipeline.objects.ensure_subject(pid, db=db)
         _route(pipeline, pid, state, db)
     if state['phase'] == 'scheduled':

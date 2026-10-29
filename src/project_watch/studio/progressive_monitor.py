@@ -16,6 +16,17 @@ class MaterialBootstrap(PublicBootstrap):
     def publication_intent(self, news):
         event_insight_work.publication(self.execution, news)
 
+    def publication_complete(self, result):
+        event_insight_work.publication_complete(self.execution, result)
+
+    def pw_finish(self, args):
+        saved = self.execution.read_checkpoint(event_insight_work.ROUND) or {}
+        if saved.get('publication_complete'):
+            self.guard()
+            self.state['finished'] = saved['publication_result']
+            return self.state['finished']
+        return super().pw_finish(args)
+
 
 class MaterialMonitor(MaterialBootstrap):
     bootstrap_projection = False
@@ -79,13 +90,14 @@ def run(pipeline, execution, runtime_root):
     admission = collection_host.admit(execution, mode=mode)
     if not admission['enabled']:
         raise ValueError('material monitor requires fresh collection admission')
-    collection_host.limit_budgets(execution, mode)
     if execution.read_checkpoint(event_insight_work.ROUND) is None:
         execution.checkpoint(question_work.PROTOCOL, True)
     from project_watch.studio import collection_round
 
     cap = collection_round.prepare(pipeline, execution)
-    event_insight_work.begin(execution, cap=cap or 16)
+    if cap is None:
+        collection_host.limit_budgets(execution, mode)
+    event_insight_work.begin(execution, cap=cap if cap is not None else 16, shared=cap is not None)
     settings, http, _, collectors = pipeline.tools()
     research = (MaterialTopic if mode == 'topic' else MaterialMonitor)(pipeline, execution, collectors, pipeline.reader())
     if research.state['finished']:

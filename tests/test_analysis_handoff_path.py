@@ -7,10 +7,10 @@ import pytest
 from test_bootstrap_collection import BODY, LATE
 from test_event_insight import install, next_insight, revise_event, source
 
+from project_watch.studio import collection_round, public_stage_work
 from project_watch.studio import event_insight_work as work
-from project_watch.studio import public_stage_work
 from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import Http, Response
+from project_watch.studio.http import Http, HttpError, Response
 from project_watch.studio.monitoring_contracts import ObjectInput
 
 
@@ -180,6 +180,105 @@ def test_prepublication_failure_keeps_intent_until_same_job_resumes(tmp_path, mo
     state = resumed.read_checkpoint(work.ROUND)
     assert state['phase'] == 'scheduled' and state['event_versions']
     assert len(seen['models']) == before
+
+
+@pytest.mark.parametrize('window', ['after_intent', 'partial_events', 'after_complete'])
+def test_publication_crash_windows_resume_full_membership_once(tmp_path, monkeypatch, window):
+    pipeline, execution, seen = install(tmp_path, monkeypatch, monitor=False, source_count=2)
+    pid = execution.job['project_id']
+    transport = pipeline.http_factory(None).transport
+    extracted = []
+
+    def send(method, url, headers, raw, timeout):
+        response = transport(method, url, headers, raw, timeout)
+        body = json.loads(raw) if raw and 'model.example.invalid' in url else {}
+        if {t['function']['name'] for t in body.get('tools', [])} == {'pw_submit_records'}:
+            reply = response.json()
+            fn = reply['choices'][0]['message']['tool_calls'][0]['function']
+            payload = json.loads(fn['arguments'])
+            extracted.append(payload)
+            for record in payload['observations']:
+                record['kind'] = 'company' if len(extracted) == 1 else 'industry'
+            fn['arguments'] = json.dumps(payload)
+            return Response(200, {}, json.dumps(reply).encode())
+        return response
+
+    pipeline.http_factory = lambda _: Http(send)
+    target, name = ((pipeline.store, 'create_event') if window == 'partial_events' else
+                    (work, 'publication_complete' if window == 'after_complete' else 'publication'))
+    original = getattr(target, name)
+
+    def interrupted(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError('synthetic publication window')
+
+    monkeypatch.setattr(target, name, interrupted)
+    with pytest.raises(RuntimeError, match='publication window'):
+        pipeline.run(execution.job)
+    pipeline.store.finish(execution.job['id'], error='synthetic interruption', lease_token=execution.job['lease_token'])
+    with closing(pipeline.store._connect()) as db:
+        count = db.execute('SELECT count(*) FROM studio_events WHERE project_id=?', (pid,)).fetchone()[0]
+    assert count == {'after_intent': 0, 'partial_events': 1, 'after_complete': 2}[window]
+    queued = work.dispatch_pending(pipeline, pid)
+    state = execution.read_checkpoint(work.ROUND)
+    if window == 'after_complete':
+        assert queued and len(state['event_versions']) == 2
+    else:
+        assert queued is None and state['phase'] == 'collecting' and 'event_versions' not in state
+    monkeypatch.setattr(target, name, original)
+    # Unrelated events arriving during the gap never become this round's work.
+    unrelated = pipeline.store.create_event(pid, dict(title='Unrelated later event', category='company',
+        importance='routine'), [])
+    before = len(seen['models'])
+    monkeypatch.setattr(target, name, original)
+    with closing(pipeline.store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='queued' WHERE id=?", (execution.job['id'],))
+    resumed = JobExecution(pipeline.store, pipeline.store.claim())
+    assert resumed.job['id'] == execution.job['id']
+    pipeline.run(resumed.job)
+    state = resumed.read_checkpoint(work.ROUND)
+    assert state['publication_complete'] and len(state['event_versions']) == 2
+    assert unrelated not in state['event_versions'] and state['phase'] == 'scheduled'
+    assert len(seen['models']) == before and state['cap'] == 40
+    child = next_insight(pipeline, resumed)
+    manifest = child.read_checkpoint(work.INPUT)
+    assert set(manifest['objects'][0]['event_versions']) == set(state['event_versions'])
+    for ref in manifest['objects'][0]['numbered'].values():
+        located = ref['located_ref']
+        evidence = pipeline.evidence.get(pid, located['evidence_version_id'], include_internal=False)
+        assert evidence['parts'][located['part_index']]['text'][located['start']:located['end']] == located['quote']
+    pipeline.run(child.job)
+    assert child.read_checkpoint(work.RESULT)['status'] == 'complete'
+    assert child.budget_used('model') <= state['cap']
+    finish(pipeline, child)
+    assert work.dispatch_pending(pipeline, pid) is None
+    with closing(pipeline.store._connect()) as db:
+        assert db.execute("SELECT count(*) FROM studio_jobs WHERE kind='insight'").fetchone()[0] == 1
+
+
+def test_followup_preserves_lower_explicit_limits_and_original_root_cap(tmp_path, monkeypatch):
+    pipeline, first, _seen = install(tmp_path, monkeypatch, monitor=False)
+    monkeypatch.setenv('PROJECT_WATCH_DSH_MONITOR', '1')
+    source(pipeline, first)
+    child = next_insight(pipeline, first)
+    pipeline.run(child.job)
+    finish(pipeline, child)
+    job = pipeline.store.claim()
+    assert job['kind'] == 'external_followup'
+    lower = {'model': 0, 'search': 0, 'page': 0, 'open_data': 0, 'site': 0}
+    execution = JobExecution(pipeline.store, job, budgets=lower)
+    cap = collection_round.prepare(pipeline, execution)
+    assert cap == 40
+    assert all(execution.budgets[k] == v for k, v in lower.items())
+    state = work.begin(execution, cap=cap, shared=True)
+    assert state['cap'] == 40 and execution.budgets['model'] == 0
+    called = []
+    for kind in lower:
+        with pytest.raises(HttpError, match='request_budget'):
+            execution.call(kind, 'forbidden-' + kind, lambda kind=kind: called.append(kind), provider='synthetic')
+    assert not called
+    with closing(pipeline.store._connect()) as db:
+        assert db.execute('SELECT count(*) FROM studio_job_calls WHERE job_id=?', (job['id'],)).fetchone()[0] == 0
 
 
 @pytest.mark.parametrize('change', ['object', 'event'])

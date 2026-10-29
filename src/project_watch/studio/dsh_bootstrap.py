@@ -873,11 +873,15 @@ class PublicBootstrap:
                                            execution=self.execution, split_event=event)
             else:
                 self.store.create_event(self.project_id, event, ids)
+        publication_complete = getattr(self, 'publication_complete', None)
         if self.topic_projection:
             # A bounded question may append evidenced news, but it cannot
             # overwrite the company's profile, full-round report or clock.
-            return {"status": status, "collection": collected, "records": len(records),
-                    "record_admission": admission}
+            result = {"status": status, "collection": collected, "records": len(records),
+                      "record_admission": admission}
+            if publication_complete:
+                publication_complete(result)
+            return result
         scope_projection = self.project_monitoring_scope(scope_records)
         if scope_projection["deferred_count"]:
             status = "partial"
@@ -943,5 +947,7 @@ class PublicBootstrap:
         self.store.set_state(key + self.project_id, json.dumps(result, ensure_ascii=False))
         self.execution.checkpoint("dsh_coverage", {"partial": status == "partial", "coverage": coverage})
         self.store.touch(self.project_id, "last_external_at")
+        if publication_complete:
+            publication_complete(result)
         self.state["finished"] = result
         return result

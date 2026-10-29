@@ -44,6 +44,8 @@ def prepare(pipeline, execution):
             raise ValueError('collection round predecessor is not terminal')
         public_stage_work.inherit(db, execution.job['id'], [manifest['origin_job_id'], predecessor])
     # These are the original cumulative allowances, not per-followup grants.
-    execution.budgets.update(caps)
-    execution.budgets['model'] = state['cap']
+    for kind, maximum in {**caps, 'model': state['cap']}.items():
+        current = execution.budgets.get(kind)
+        if maximum is not None:
+            execution.budgets[kind] = maximum if current is None else min(current, maximum)
     return state['cap']
