@@ -43,6 +43,14 @@ test('zero-call blocked refresh points to project receipt lookup, not its own re
   assert.doesNotMatch(html,/查看并重发|重新运行|href="#task-/);
 });
 
+test('a saved multi-batch wait is distinct from an unsent whole job or an unknown request', () => {
+  const {jobReason} = load('../src/workState.ts');
+  const j={...job('queued'),runtime:{state:'blocked',continuation_wait:true,blocking_jobs:['other']}};
+  assert.match(jobReason(j),/已保存完成的批次.*后续批次尚未发送/);
+  assert.doesNotMatch(jobReason(j),/本次未执行|本任务没有发送|结果不明|可能.*计费/);
+  assert.equal(isMoving('blocked'),false);
+});
+
 test('an unresolved historical receipt survives unrelated later success without claiming success', () => {
   const held = {...job('done'), id:'old',status:'done',finished_at:'2026-10-19T01:00:00Z',
     runtime:{state:'needs_confirmation',label:'模型服务出错，等待确认恢复'}};

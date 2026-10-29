@@ -209,6 +209,7 @@ def projection(db, job, *, worker='running', at=None):
     at = at or datetime.now(UTC)
     state = job['status']
     blocking_jobs = []
+    continuation_wait = False
     labels = {'running': '正在处理', 'queued': '等待开始', 'done': '已完成', 'failed': '未完成'}
     label = labels.get(state, state)
     if state == 'running':
@@ -223,11 +224,23 @@ def projection(db, job, *, worker='running', at=None):
         elif pending:
             state, label = 'waiting_response', '正在研究 · 模型处理中' if pending[0] == 'model' else '正在获取来源响应'
     elif state == 'queued':
+        from project_watch.studio.recovery import project_request_holds
+
+        waiting = db.execute("SELECT 1 FROM studio_job_checkpoints WHERE job_id=? AND stage='legacy_dispatch_wait'",
+                             (job['id'],)).fetchone()
+        held = project_request_holds(db, job['project_id']) if waiting else []
+        continuation_wait = bool(waiting and held)
+        if continuation_wait:
+            blocking_jobs = list(dict.fromkeys(row['job_id'] for row in held))
         project = db.execute('SELECT status FROM studio_projects WHERE project_id=?', (job['project_id'],)).fetchone()
         if project and project[0] == 'paused' and job['kind'] != 'internal':
             state, label = 'paused', '项目已暂停'
         elif worker != 'running':
             state, label = 'blocked', '等待后台恢复'
+        elif continuation_wait:
+            state, label = 'blocked', '进度已保存，后续批次暂未发送'
+        elif waiting:
+            label = '进度已保存，排队继续后续批次'
         elif job['stalled_at']:
             state, label = 'recovering', '已保留进度，等待恢复'
         elif job['yield_count']:
@@ -257,7 +270,7 @@ def projection(db, job, *, worker='running', at=None):
             coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='commercial_coverage'", (job['id'],)).fetchone()
             if coverage and json.loads(coverage[0]).get('partial'):
                 state, label = 'partial', '部分来源已更新，其余暂不可用'
-    return {'state': state, 'label': label, 'blocking_jobs': blocking_jobs,
+    return {'state': state, 'label': label, 'blocking_jobs': blocking_jobs, 'continuation_wait': continuation_wait,
             'phase': job_phase(db, job), 'progress_at': job['progress_at'],
             'heartbeat_at': job['heartbeat_at'], 'progress_age_seconds': seconds_since(job['progress_at'], at),
             'yield_count': job['yield_count'], 'recovery_attempts': max(0, job['attempts'] - 1),

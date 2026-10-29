@@ -143,6 +143,10 @@ def advice(job: dict) -> dict:
             rerun = start the task again; settings = check a service first, then rerun; none = no execution action.
     """
     error = (job.get("error") or "").strip()
+    if job.get('runtime', {}).get('continuation_wait'):
+        return {'why': '已保存完成的批次；后续批次尚未发送，同项目其他请求仍待处理。',
+                'todo': '查看先前请求并分别确认；阻挡解除且项目继续运行时，将沿原任务继续，不重发已完成请求。',
+                'action': 'none'}
     if job.get('runtime', {}).get('blocking_jobs'):
         return {'why': '本次未执行，先前请求结果待核。本任务没有发送新的外部请求，已有结果保留。',
                 'todo': '查看先前任务的请求记录；核对服务商结果后按该任务的恢复流程处理，不要反复立即更新。',

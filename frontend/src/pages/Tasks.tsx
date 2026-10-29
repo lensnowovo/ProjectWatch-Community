@@ -33,6 +33,7 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
   const [params] = useSearchParams();
   const [project, setProject] = useState(params.get("project") || "");
   const [filter, setFilter] = useState<Filter>("all");
+  const [waitingProject, setWaitingProject] = useState('');
   const { data, error, loading, reload } = useAsync<TaskBoard>(() => api.tasks(project || undefined), [project]);
   const busy = !!data && data.summary.running + data.summary.queued > 0;
   useVisiblePoll(reload, busy ? 4000 : 30000);
@@ -61,6 +62,7 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
       {data && data.worker !== "running" && <div className="note note-error">后台任务未运行：排队中的任务不会开始。重启应用后会继续。</div>}
       {data && !data.model_ready && <div className="note">尚未连接 AI 模型：资料只会识别文字，不会进入 AI 吸收。<Link to="/settings">去设置 →</Link></div>}
       <ErrorNote error={error} />
+      {waitingProject && <RecoveryDialog projectId={waitingProject} onClose={() => setWaitingProject('')} onQueued={reload} />}
       {loading && !data && <Skeleton lines={6} />}
       {data && <>
         {projects.length > 1 && <div className="filters">
@@ -82,6 +84,9 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
                 {j.status === "running" && j.stage && <span className="muted"> — {j.stage}</span>}</span>
               <span className="muted small num" title={j.runtime?.heartbeat_at ? `后台心跳：${j.runtime.heartbeat_at}` : undefined}>{j.runtime?.progress_at ? `进展 ${relTime(j.runtime.progress_at)}` : `加入于 ${relTime(j.created_at)}`}</span>
               <JobActivity job={j} stale={!!error} />
+              {j.runtime?.continuation_wait && <div className="muted small">
+                {jobReason(j)} <button className="btn btn-sm" onClick={() => setWaitingProject(j.project_id)}>查看先前请求</button>
+              </div>}
             </li>)}</ul>}
             {activeDocs.length > 0 && <ul className="doc-pipeline">{activeDocs.map((d) => <DocumentRow key={d.id} d={d} />)}</ul>}
           </>}

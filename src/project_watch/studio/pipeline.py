@@ -2969,6 +2969,8 @@ class StudioWorker:
         except (ModelError, HttpError, ValueError) as exc:
             if getattr(exc, 'code', '') == 'project_paused':
                 self.pipeline.store.defer_paused(job)
+            elif getattr(exc, 'code', '') == 'legacy_batches_waiting':
+                self.pipeline.store.defer_legacy_batches(job)
             else:
                 self.pipeline.store.finish(job["id"], error=str(exc), lease_token=job["lease_token"])
         except Exception as exc:

@@ -3,7 +3,7 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {MemoryRouter} from 'react-router-dom';
 import {api,type TaskJob} from '../src/api';
-import {FailureRow} from '../src/pages/Tasks';
+import TasksPage, {FailureRow} from '../src/pages/Tasks';
 import '../src/styles.css';
 
 window.fetch=async()=>{throw Error('Network prohibited in synthetic preview');};
@@ -20,7 +20,13 @@ const job={id:'blocked',project_id:'synthetic',project_name:'合成公司',label
   runtime:{state:'blocked',label:'本次未执行，先前请求结果待核',blocking_jobs:['prior-0','prior-1']},
   advice:{action:'none',why:'本次未执行，先前请求结果待核。本任务没有发送新的外部请求，已有结果保留。',
   todo:'查看先前请求，核对服务商记录后按对应任务恢复；不必反复点击立即更新。'}} as TaskJob;
+const waiting = new URLSearchParams(location.search).has('waiting');
+api.tasks=async()=>({worker:'running',model_ready:true,documents:[],
+  summary:{running:0,queued:1,failed_24h:0,done_24h:0},jobs:[{...job,id:'saved-batches',kind:'business',
+  label:'整理产品与用途',status:'queued',error:'',created_at:new Date().toISOString(),calls:3,
+  runtime:{state:'blocked',label:'进度已保存，后续批次暂未发送',continuation_wait:true,blocking_jobs:['prior-1']}}]} as any);
 createRoot(document.getElementById('root')!).render(<MemoryRouter><main style={{padding:'32px',maxWidth:1100,margin:'auto'}}>
   <h1>隔离预览 · 请求恢复</h1><p id="audit">合成确认次数：0</p>
-  <section className="card card-pad"><ul className="fix-list"><FailureRow j={job} onChanged={()=>{}}/></ul></section>
+  {waiting ? <TasksPage projects={[{id:'synthetic',name:'合成公司'}]}/> :
+    <section className="card card-pad"><ul className="fix-list"><FailureRow j={job} onChanged={()=>{}}/></ul></section>}
 </main></MemoryRouter>);

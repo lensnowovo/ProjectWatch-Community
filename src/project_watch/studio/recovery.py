@@ -169,6 +169,11 @@ def guard_legacy_model_dispatch(db, job, kind, request_key, next_key, provider_h
     if not rows:
         return
     own = [r for r in rows if r['job_id'] == job['id']]
+    if kind == 'model' and not own and legacy_recovery_completed(db, job):
+        # The authorized call has a definite successful receipt. This next batch
+        # has NOT been admitted or sent; preserve the same job until other holds
+        # are settled through their own consent, without manufacturing an unknown.
+        raise HttpError('legacy_batches_waiting')
     if kind != 'model' or not legacy_model_scope(db, job, own):
         raise HttpError('request_outcome_unknown')
     call = own[0]
@@ -177,6 +182,20 @@ def guard_legacy_model_dispatch(db, job, kind, request_key, next_key, provider_h
                       (job['id'], call['call_key'], request_key, next_key)).fetchone()
     if not slot or call['provider'] != provider_hash:
         raise HttpError('recovery_request_mismatch')
+
+
+def legacy_recovery_completed(db, job):
+    prefix = {'business': 'business', 'details': 'detail'}.get(job['kind'])
+    if not prefix:
+        return False
+    saved = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                       (job['id'], prefix + '_inputs')).fetchone()
+    inputs = json.loads(saved[0]) if saved else {}
+    return bool(inputs.get('input_version') and inputs.get('binding') and db.execute(
+        "SELECT 1 FROM studio_call_recoveries r JOIN studio_job_calls c "
+        "ON c.job_id=r.job_id AND c.call_key=r.next_key WHERE r.job_id=? "
+        "AND r.consumed_at IS NOT NULL AND c.kind='model' AND c.status='completed' "
+        "AND c.response_status BETWEEN 200 AND 299 LIMIT 1", (job['id'],)).fetchone())
 
 
 def _preview(pipeline, project_id, job_id, db):

@@ -35,3 +35,18 @@ Validation uses synthetic receipts and transports, including two simultaneous
 independent holds, exact sequential consent, payload/provider/kind/version/
 lease/budget/input-binding rejection, failed retry, idempotency, consumed
 historical recovery and reader-date edge cases. No real recovery is exercised.
+
+After an explicitly recovered legacy request succeeds, a later batch may still
+be blocked by another task's pending receipt. This is a queued wait, not a new
+unknown request or an entirely unexecuted task. The worker parks the same job,
+and queue admission skips it until all project holds settle through their own
+existing recovery consent. It then continues saved proposal checkpoints under
+a new lease, retaining input binding, cumulative budget and immutable call
+receipts. Project pause and changed-input guards still apply. No separate job,
+budget reset, or implicit authorization for another unknown is introduced.
+
+The bounded regression exercises the real three-batch splitter, LLM error
+propagation, worker and journal: saved batch, unknown batch explicitly recovered,
+next batch held without sending, independent second request explicitly settled,
+and same-job completion. Budget exhaustion and changed inputs after settlement
+remain blocked. No real provider is contacted.

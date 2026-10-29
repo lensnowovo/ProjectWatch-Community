@@ -138,6 +138,8 @@ class LLM:
                         timeout=300,
                     )
             except HttpError as exc:
+                if exc.code == 'legacy_batches_waiting':
+                    raise ModelError('进度已保存，后续批次尚未发送，等待先前请求处理', code=exc.code) from exc
                 if exc.code in ("unsafe_redirect", "disallowed_url"):
                     raise ModelError("服务地址发生不安全跳转，请检查模型地址；未自动重发", code=exc.code) from exc
                 if exc.code in ("provider_backoff", "request_budget", "request_outcome_unknown", "project_paused"):

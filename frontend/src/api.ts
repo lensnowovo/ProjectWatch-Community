@@ -373,6 +373,7 @@ export interface MonitoringPlanView {
 
 export interface JobRuntime {
   blocking_jobs?: string[];
+  continuation_wait?: boolean;
   activity?: {
     records_saved?: number | null;
     model_requests: number; model_completed: number; search_completed: number;

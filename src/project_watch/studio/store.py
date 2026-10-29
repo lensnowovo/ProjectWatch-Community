@@ -1315,7 +1315,7 @@ class StudioStore:
             return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (job['id'],)).fetchone())
 
     def claim(self) -> dict | None:
-        from project_watch.studio.recovery import UNRESOLVED
+        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
 
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
@@ -1333,10 +1333,14 @@ class StudioStore:
             # and is updated under the same lock as the lease claim.
             burst = db.execute("SELECT value FROM studio_state WHERE key='queue_brief_burst'").fetchone()
             prefer_brief = int(burst[0] if burst else 0) < 2
-            row = db.execute("""SELECT j.* FROM studio_jobs j
+            row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
                 WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief','scope','assessment')
                     OR COALESCE(p.status,'active')='active')
+                AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints wait
+                     WHERE wait.job_id=j.id AND wait.stage='legacy_dispatch_wait') OR NOT EXISTS (
+                     SELECT 1 FROM studio_job_calls c JOIN studio_jobs owner ON owner.id=c.job_id
+                     WHERE owner.project_id=j.project_id AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))))
                 AND (j.kind!='external_followup' OR EXISTS (SELECT 1 FROM studio_jobs parent
                      WHERE parent.id=j.input_version AND parent.project_id=j.project_id AND parent.kind='external' AND parent.status='done')
                      OR EXISTS (SELECT 1 FROM studio_job_checkpoints link JOIN studio_jobs parent
@@ -1366,6 +1370,10 @@ class StudioStore:
                          COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (prefer_brief,)).fetchone()
             if not row:
                 return None
+            # Admission above proved the project hold is clear. End this wait
+            # before dispatch: a later unknown needs a fresh per-request consent,
+            # and must not be trapped behind its own obsolete waiting marker.
+            db.execute("DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage='legacy_dispatch_wait'", (row['id'],))
             next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and row['kind'] == 'brief' else 0
             db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (str(next_burst),))
@@ -1398,6 +1406,28 @@ class StudioStore:
             return bool(db.execute("UPDATE studio_jobs SET status='queued',stage='已暂停，恢复后继续',"
                 "lease_token='',lease_until=NULL WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
                 (job['id'], job['lease_token'], now())).rowcount)
+
+    def defer_legacy_batches(self, job: dict) -> bool:
+        """Park only a recovered frozen extractor; retain its journal and budget.
+
+        Claim skips this same job while any project request is unresolved. A
+        different task's explicit recovery can therefore run without a busy loop.
+        """
+        from project_watch.studio.recovery import legacy_recovery_completed, project_request_holds
+
+        with closing(self._connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            if not legacy_recovery_completed(db, job) or any(
+                    row['job_id'] == job['id'] for row in project_request_holds(db, job['project_id'])):
+                raise ValueError('request_outcome_unknown')
+            changed = db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
+                "stage='后续批次未发送，等待先前请求处理',lease_token='',lease_until=NULL,queue_at=?,"
+                "attempts=MAX(0,attempts-1) WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
+                (now(), job['id'], job['lease_token'], now())).rowcount
+            if changed:
+                db.execute("INSERT INTO studio_job_checkpoints VALUES (?,'legacy_dispatch_wait',?) "
+                           "ON CONFLICT(job_id,stage) DO NOTHING", (job['id'], json.dumps({'version': 1})))
+            return bool(changed)
 
     def finish(self, job_id: str, *, error: str = "", lease_token: str | None = None) -> bool:
         from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
