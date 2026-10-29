@@ -138,7 +138,7 @@ def _save(execution, task, status, result):
                    (status, json.dumps(result, ensure_ascii=False, allow_nan=False), task['id']))
 
 
-def run_pending(execution, extractor, *, limit=20, policy=POLICY):
+def run_pending(execution, extractor, *, limit=20, policy=POLICY, task_id=None):
     """Bounded processing using the same JobExecution as collection/review.
 
 The extractor must journal external calls on that execution with task_id in
@@ -161,8 +161,8 @@ item-format errors. Invalid returned structure affects only that material.
         tasks = [dict(row) for row in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
             "AND policy=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c "
             "WHERE c.job_id=studio_evidence_tasks.job_id AND c.stage=? || studio_evidence_tasks.id) "
-            "ORDER BY rowid LIMIT ?",
-            (execution.job['id'], execution.job['project_id'], policy, DEFERRED, limit))]
+            "AND (? IS NULL OR id=?) ORDER BY rowid LIMIT ?",
+            (execution.job['id'], execution.job['project_id'], policy, DEFERRED, task_id, task_id, limit))]
     processed = 0
     for task in tasks:
         processed += 1

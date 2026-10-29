@@ -57,12 +57,13 @@ def freeze(execution, entry, *, materials=False):
         return value
 
 
-def _map_records(research):
+def _map_records(research, *, task_id=None):
     """Restore exact references; use the same deterministic record validator."""
     with closing(research.store._connect()) as db:
         research.execution._guard(db)
-        tasks = [dict(r) for r in db.execute('SELECT * FROM studio_evidence_tasks WHERE job_id=? AND policy=? ORDER BY rowid',
-                                            (research.execution.job['id'], evidence_tasks.TYPED_POLICY))]
+        tasks = [dict(r) for r in db.execute('SELECT * FROM studio_evidence_tasks WHERE job_id=? AND policy=? '
+            'AND (? IS NULL OR id=?) ORDER BY rowid',
+            (research.execution.job['id'], evidence_tasks.TYPED_POLICY, task_id, task_id))]
     issues = []
     # Rebuild from immutable candidates, not a partly projected state after a crash.
     research.state['records'] = []
