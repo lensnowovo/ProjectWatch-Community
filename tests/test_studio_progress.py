@@ -82,7 +82,7 @@ def test_completed_observed_checks_allow_bounded_quiet_statement(app):
     data = digest.build_digest(store)
     assert data['quiet'] == ['Synthetic Monitor'] and data['incomplete'] == []
     text = digest.digest_markdown(data)
-    assert '已收录信息未见重要变化' in text and '无明显变化' not in text
+    assert '本期未列入重要变化的项目：Synthetic Monitor' in text and '无明显变化' not in text
     assert TestClient(app).get(f'/api/studio/projects/{pid}').json()['monitoring_progress']['state'] == 'observed'
 
 

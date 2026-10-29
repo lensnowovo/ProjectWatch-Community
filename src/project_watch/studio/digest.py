@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from project_watch.studio import progress, review
+from project_watch.studio import news_window, progress, review
 from project_watch.studio.http import Http, HttpError
 from project_watch.studio.settings import NotifyConfig
 from project_watch.studio.store import StudioStore
@@ -27,7 +27,7 @@ MESSAGE_LIMIT = 3800  # UTF-8 bytes, including the notice; below WeCom's 4096-by
 def build_digest(store: StudioStore, days: int = 7, *, per_project: int = 6) -> dict:
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
-    events = [e for e in store.list_events(since_days=days, limit=1000)
+    events = [e for e in news_window.iter_events(store, since_days=days, dated_only=True)
               if e["importance"] in ("major", "notable")]
     changes = store.doc_changes_since(days)
     projects = []
@@ -56,7 +56,7 @@ def build_digest(store: StudioStore, days: int = 7, *, per_project: int = 6) -> 
             "events": [{"title": e["title"], "summary": e.get("summary") or "", "impact": e.get("impact") or "",
                         "category": e["category"], "importance": e["importance"], "url": e.get("url") or "",
                         "source": e.get("source") or "", "source_count": e.get("source_count", 1),
-                        "when": e.get("event_at") or e["created_at"]} for e in own[:per_project]],
+                        "when": e['news_date']} for e in own[:per_project]],
             "more_events": max(0, len(own) - per_project),
             "doc_changes": [{"documents": c["documents"],
                              "items": [x["text"] for x in (c.get("texts") or []) + (c.get("metrics") or [])][:6]}
@@ -64,7 +64,9 @@ def build_digest(store: StudioStore, days: int = 7, *, per_project: int = 6) -> 
             "issues": [i["text"] for i in issues if i["severity"] == "high"][:3],
         })
     projects.sort(key=lambda x: (-x["major"], -len(x["doc_changes"]), -x["notable"]))
+    summary = news_window.summarize(store, days, exclude_paused=True)
     return {"days": days, "start": start.isoformat(), "end": end.isoformat(), "projects": projects,
+            "window_summary": summary, "window_note": news_window.explanation(summary),
             "quiet": quiet, "incomplete": incomplete, "totals": {"projects": len(projects), "major": sum(p["major"] for p in projects),
                                        "notable": sum(p["notable"] for p in projects),
                                        "doc_changes": sum(len(p["doc_changes"]) for p in projects)}}
@@ -90,7 +92,9 @@ def digest_markdown(digest: dict, *, compact: bool = False) -> str:
         if section:
             lines.append(section)
     if not digest["projects"]:
-        lines.append('已收录信息未见重要变化。' if digest['quiet'] and not digest.get('incomplete') else '暂未整理出重要变化。')
+        lines.append('暂未整理出重要变化。')
+    if digest.get('window_note'):
+        lines.append(digest['window_note'])
     for p in digest["projects"]:
         tone = f"（{TONE[p['tone']]}）" if p["tone"] in TONE else ""
         lines.append(f"## {p['name']}{tone}")
@@ -116,7 +120,7 @@ def digest_markdown(digest: dict, *, compact: bool = False) -> str:
             lines.append(f"- 需核对：{text}")
         lines.append("")
     if digest["quiet"] and not compact:
-        lines.append(f"已收录信息未见重要变化：{'、'.join(digest['quiet'])}")
+        lines.append(f"本期未列入重要变化的项目：{'、'.join(digest['quiet'])}")
     if digest.get('incomplete'):
         lines.append('监控尚未完成：' + '；'.join(f"{p['name']}（{p['label']}）" for p in digest['incomplete']))
     lines.append("" if compact else "\n> 由 ProjectWatch 根据已采集信息自动整理；AI 判断请点开原文核对。")

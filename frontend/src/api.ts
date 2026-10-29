@@ -212,6 +212,7 @@ export interface EventSource {
   body_status: string;
 }
 interface EventDTO {
+  news_date?: string | null;
   importance_status?: 'pending' | 'assessed';
   importance_reason?: string;
   id: string;
@@ -233,7 +234,7 @@ interface EventDTO {
 const eventToItem = (e: EventDTO): Item => ({
   importance_status: e.importance_status, importance_reason: e.importance_reason,
   id: e.id, project_id: e.project_id, project_name: e.project_name, category: e.category,
-  title: e.title, url: e.url, source: e.source, snippet: "", published_at: e.event_at ?? (e.sources[0]?.extra?.agent_result ? e.sources[0]?.published_at : null),
+  title: e.title, url: e.url, source: e.source, snippet: "", published_at: e.news_date !== undefined ? e.news_date : e.event_at ?? (e.sources[0]?.extra?.agent_result ? e.sources[0]?.published_at : null),
   collected_at: e.created_at, importance: e.importance, summary: e.summary, impact: e.impact,
   status: e.status, extra: { ...e.sources[0]?.extra, date_basis: e.event_at ? "event" : "reported" }, sources: e.sources, source_count: e.source_count,
 });
@@ -666,12 +667,20 @@ export interface DigestProject {
   monitoring_progress?: MonitoringProgress;
 }
 export interface Digest {
+  window_summary?: NewsWindowSummary;
+  window_note?: string;
   days: number; start: string; end: string; projects: DigestProject[]; quiet: string[];
   incomplete?: DigestPending[];
   totals: { projects: number; major: number; notable: number; doc_changes: number };
   markdown: string;
   attention?: Attention;
   notify: { ready: boolean; last: { at: string; sent: string[]; error: string } | null };
+}
+export interface NewsWindowSummary {
+  counts: { total: number; in_period: number; matching: number; undated: number; future: number; older: number;
+    pending: number; routine: number; major: number; notable: number };
+  progress: (MonitoringProgress & { id: string })[];
+  note?: string;
 }
 export type AttentionKind = "crosscheck" | "silence" | "watch" | "site";
 export interface AttentionEntry {
@@ -963,6 +972,11 @@ export const api = {
       `/api/studio/projects/${id}/jobs/${jobId}/recovery`, {
         expected_version: version, idempotency_key: key, accept_duplicate_cost: true,
       }),
+  feedSummary: (params: Record<string, string | number | undefined>) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && query.set(k, String(v)));
+    return request<NewsWindowSummary>("GET", `/api/studio/events/summary?${query}`);
+  },
   feed: (params: Record<string, string | number | undefined>) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && query.set(k, String(v)));

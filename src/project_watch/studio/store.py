@@ -25,6 +25,14 @@ _NEWS_ORDER = f"""CASE WHEN ({_NEWS_DAY}) BETWEEN date('now','-180 days') AND da
                   CASE WHEN ({_NEWS_DAY})<=date('now') THEN ({_NEWS_DAY}) END DESC,
                   collected_at DESC,rowid DESC"""
 
+# Shared event/publication date for reader-facing windows. Never use acquisition
+# time here; normalize offsets before comparing, and reject impossible days.
+_EVENT_DATE_RAW = """COALESCE(e.event_at, (SELECT max(ai.published_at)
+    FROM studio_items ai WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'))"""
+_EVENT_NEWS_DATE = f"""CASE WHEN length(substr({_EVENT_DATE_RAW},1,10))=10
+    AND date(substr({_EVENT_DATE_RAW},1,10),'+0 days')=substr({_EVENT_DATE_RAW},1,10)
+    AND julianday({_EVENT_DATE_RAW}) IS NOT NULL THEN {_EVENT_DATE_RAW} END"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS studio_source_permissions (
     source_id TEXT PRIMARY KEY REFERENCES sources(id),
@@ -1138,17 +1146,17 @@ class StudioStore:
         if since_days:
             # Internal research can still read newly collected undated evidence.
             # Only an explicit news-date filter excludes it from time windows.
-            dated = ("COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai "
-                     "WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'))")
-            where.append((dated if dated_only else f'COALESCE({dated}, e.created_at)') + ' >= ?')
+            dated = _EVENT_NEWS_DATE
+            where.append('julianday(' + (dated if dated_only else f'COALESCE({dated}, e.created_at)') + ') >= julianday(?)')
             args.append((datetime.now(UTC) - timedelta(days=since_days)).isoformat())
             if dated_only:
-                where.append(dated + ' <= ?')
+                where.append('julianday(' + dated + ') <= julianday(?)')
                 args.append(now())
-        sql = f"""SELECT e.*, p.name AS project_name FROM studio_events e
+        order = (f'julianday({_EVENT_NEWS_DATE})' if dated_only else
+                 f'COALESCE({_EVENT_DATE_RAW}, e.created_at)')
+        sql = f"""SELECT e.*, p.name AS project_name, {_EVENT_NEWS_DATE} AS news_date FROM studio_events e
             JOIN projects p ON p.id=e.project_id WHERE {' AND '.join(where)}
-            ORDER BY COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai
-              WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'), e.created_at) DESC LIMIT ? OFFSET ?"""
+            ORDER BY {order} DESC, e.id DESC LIMIT ? OFFSET ?"""
         with closing(self._connect()) as db:
             events = [dict(r) for r in db.execute(sql, (*args, limit, offset)).fetchall()]
             ids = [e["id"] for e in events]

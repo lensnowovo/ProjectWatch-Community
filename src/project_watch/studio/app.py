@@ -1110,6 +1110,17 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         return store.list_items(project_id=project_id, category=category, importance=importance,
                                 since_days=days, limit=limit, offset=max(0, offset))
 
+    @app.get("/api/studio/events/summary")
+    def event_window_summary(days: int = 7, project_id: str | None = None,
+                             category: str | None = None, importance: str | None = None):
+        from project_watch.studio import news_window
+
+        if days not in (7, 14, 30, 90):
+            raise HTTPException(400, "只支持 7/14/30/90 天")
+        summary = news_window.summarize(store, days, project_id=project_id,
+                                       category=category, importance=importance)
+        return {**summary, "note": news_window.explanation(summary)}
+
     @app.get("/api/studio/events")
     def events(project_id: str | None = None, category: str | None = None,
                importance: str | None = None, days: int | None = None,
