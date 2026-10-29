@@ -864,6 +864,8 @@ export interface ExecutorView {
 }
 
 export const api = {
+  desktopIdentity: () => request<{ instance: string; exit_available?: boolean; exit_requested?: boolean }>("GET", "/api/desktop/identity"),
+  exitDesktop: (instance: string) => request<{ instance: string; status: "exit_requested" }>("POST", "/api/desktop/exit", { instance }),
   updates: () => request<UpdateView>("GET", "/api/studio/updates"),
   checkUpdates: () => request<UpdateView>("POST", "/api/studio/updates/check"),
   selectCompetitor: (id: string, expectedVersion: number, name: string, decision: "include" | "exclude" | "reset", peerId?: string) =>

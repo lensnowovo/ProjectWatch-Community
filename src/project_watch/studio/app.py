@@ -210,10 +210,11 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     async def drain_admission(request, call_next):
         nonlocal active_writes
         is_write = request.url.path.startswith('/api/') and request.method not in ('GET', 'HEAD', 'OPTIONS')
-        counted = is_write and request.url.path != '/api/studio/runtime/drain'
+        exit_control = request.url.path in ('/api/studio/runtime/drain', '/api/desktop/exit')
+        counted = is_write and not exit_control
         if (draining.is_set() and request.url.path.startswith('/api/')
                 and request.method not in ('GET', 'HEAD', 'OPTIONS')
-                and request.url.path != '/api/studio/runtime/drain'):
+                and not exit_control):
             return JSONResponse(status_code=503, content={'detail': '正在停止后台，请稍后重新启动再操作。',
                                                           'code': 'runtime_draining'})
         if counted:
@@ -993,6 +994,9 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         if app.state.reading_worker is not None:
             app.state.reading_worker.request_stop()
         return runtime_health()
+
+    # Only the desktop owner attaches process-control routes.
+    app.state.request_desktop_drain = drain_runtime
 
     @app.post("/api/studio/tasks/{job_id}/dismiss", status_code=204)
     def dismiss_task(job_id: str):

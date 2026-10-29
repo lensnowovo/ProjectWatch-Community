@@ -39,14 +39,20 @@ def configure_runtime(home: Path, bundle: Path | bool | None = True) -> str:
     return public_executor.apply(public_executor.resolve(home, root))
 
 
-def local_identity(url: str) -> dict:
+def local_request(url: str, body: dict | None = None) -> dict:
     # Loopback must not traverse an environment proxy or follow a redirect.
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    with opener.open(url, timeout=1) as response:
+    request = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(),
+        headers={} if body is None else {'Content-Type': 'application/json'})
+    with opener.open(request, timeout=5) as response:
         return json.loads(response.read(4096))
+
+
+def local_identity(url: str) -> dict:
+    return local_request(url)
 
 
 def existing_url(marker: Path) -> str | None:
@@ -65,9 +71,29 @@ def existing_url(marker: Path) -> str | None:
     return None
 
 
+def request_exit(home: Path) -> dict:
+    """Ask this exact desktop to drain; acceptance is not proof that it has exited."""
+    marker = home.resolve()/'desktop-session/endpoint.json'
+    try:
+        expected = json.loads(marker.read_text(encoding='utf-8'))['instance']
+    except (OSError, ValueError, KeyError, TypeError):
+        raise RuntimeError('未找到可确认身份的桌面实例；没有停止任何进程。') from None
+    url = existing_url(marker)
+    if not url:
+        raise RuntimeError('未找到可确认身份的桌面实例；没有停止任何进程。')
+    identity = local_identity(url+'api/desktop/identity')
+    if identity.get('instance') != expected or not identity.get('exit_available'):
+        raise RuntimeError('实例已变化或当前版本不支持退出请求；没有停止任何进程。')
+    result = local_request(url+'api/desktop/exit', {'instance': expected})
+    if result.get('instance') != expected or result.get('status') != 'exit_requested':
+        raise RuntimeError('未确认退出请求；请检查实例状态。')
+    return result
+
+
 class ExitRequest:
-    def __init__(self, server):
+    def __init__(self, server, drain=lambda: None):
         self.server = server
+        self.drain = drain
         self.requested = threading.Event()
         self._lock = threading.Lock()
 
@@ -75,10 +101,28 @@ class ExitRequest:
         with self._lock:
             if self.requested.is_set():
                 return False
+            self.drain()
             self.requested.set()
             # Uvicorn awaits the existing application drain/lifespan. Never force_exit.
             self.server.should_exit = True
             return True
+
+
+def attach_controls(app, identity: str, public_executor: str, stop: ExitRequest):
+    """Desktop-only routes, behind the application's existing local-origin boundary."""
+    from fastapi import HTTPException
+
+    @app.get('/api/desktop/identity', include_in_schema=False)
+    def identity_view():
+        return {'instance': identity, 'public_executor': public_executor, 'exit_available': True,
+                'exit_requested': stop.requested.is_set()}
+
+    @app.post('/api/desktop/exit', status_code=202, include_in_schema=False)
+    def exit_view(body: dict):
+        if body.get('instance') != identity:
+            raise HTTPException(409, '实例已变化，请刷新后再操作。')
+        stop.request()
+        return {'instance': identity, 'status': 'exit_requested'}
 
 
 def wait_ready(server, thread: threading.Thread, timeout=60):
@@ -173,17 +217,14 @@ def run_desktop(home: Path, *, browser=True, tray=True, smoke_seconds=None):
         public_executor = configure_runtime(home)
         app = create_studio_app(home, start_worker=smoke_seconds is None)
 
-        @app.get('/api/desktop/identity', include_in_schema=False)
-        def identity_view():
-            return {'instance': identity, 'public_executor': public_executor}
-
         # Reserve an OS-assigned socket; no fixed-port collision or probing race.
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port,
             log_config=None, log_level='warning', access_log=False))
-        stop = ExitRequest(server)
+        stop = ExitRequest(server, app.state.request_desktop_drain)
+        attach_controls(app, identity, public_executor, stop)
         thread = threading.Thread(target=server.run, kwargs={'sockets': [sock]}, name='ProjectWatch-server')
         thread.start()
         wait_ready(server, thread)
@@ -238,9 +279,12 @@ def run_desktop(home: Path, *, browser=True, tray=True, smoke_seconds=None):
 def main():
     parser = argparse.ArgumentParser(description='ProjectWatch desktop')
     parser.add_argument('--home', type=Path)
+    parser.add_argument('--request-exit', action='store_true', help='Ask the existing desktop to exit after tasks finish; never kills or launches it')
     parser.add_argument('--smoke-seconds', type=float, help='Isolated validation: no workers, automatic graceful exit')
     parser.add_argument('--headless', action='store_true', help='Only valid with smoke mode')
     args = parser.parse_args()
+    if args.request_exit and (args.smoke_seconds is not None or args.headless):
+        parser.error('request-exit cannot be combined with smoke/headless')
     if args.headless and args.smoke_seconds is None:
         parser.error('headless requires smoke mode')
     if args.smoke_seconds is not None and (args.home is None or not 0 < args.smoke_seconds <= 300):
@@ -251,12 +295,15 @@ def main():
     if sys.stderr is None:
         sys.stderr = open(os.devnull, 'w', encoding='utf-8')  # noqa: SIM115 -- process-lifetime standard stream
     try:
+        if args.request_exit:
+            print(json.dumps(request_exit(args.home or desktop_home())))
+            return 0
         run_desktop(args.home or desktop_home(), browser=not args.headless, tray=not args.headless,
                     smoke_seconds=args.smoke_seconds)
         return 0
     except Exception as exc:
         # Do not expose exception text: it can contain config or private paths.
-        if not args.headless:
+        if not args.headless and not args.request_exit:
             message('ProjectWatch 无法启动或尚未退出。请稍后重试；若持续出现，请联系维护者。\n'
                     '已有资料保留，不要删除数据目录。错误类型：'+type(exc).__name__)
         return 1
