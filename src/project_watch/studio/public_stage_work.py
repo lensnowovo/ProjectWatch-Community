@@ -19,8 +19,8 @@ def inherit(db, target, owners):
                    (target, owner))
 
 
-def enqueue(pipeline, db, pid, kind, work, *, origin=None, cap=4):
-    version = kind + ':' + digest([origin, work])
+def enqueue(pipeline, db, pid, kind, work, *, origin=None, cap=4, input_version=None):
+    version = input_version or kind + ':' + digest([origin, work])
     job = pipeline.store.enqueue(pid, kind, automatic=True, input_version=version, db=db)
     if job.get('input_version') != version or job['status'] not in ('queued', 'running'):
         return None
@@ -30,7 +30,8 @@ def enqueue(pipeline, db, pid, kind, work, *, origin=None, cap=4):
     root, predecessor = job['id'], None
     if origin:
         ancestor = JobExecution(pipeline.store, {'id': origin})
-        previous = ancestor.read_checkpoint(INPUT, db=db) or ancestor.read_checkpoint(event_insight_work.INPUT, db=db) or {}
+        previous = (ancestor.read_checkpoint(INPUT, db=db) or ancestor.read_checkpoint(event_insight_work.INPUT, db=db)
+                    or ancestor.read_checkpoint(event_insight_work.ROUND, db=db) or {})
         root = previous.get('round_root_job_id', origin)
         budget = JobExecution(pipeline.store, {'id': root}).read_checkpoint(event_insight_work.BUDGET, db=db)
         if budget and budget['cap'] != cap:

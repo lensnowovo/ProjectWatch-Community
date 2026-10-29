@@ -1859,7 +1859,9 @@ class Pipeline:
                 run_bootstrap(self, execution, Path(dsh_root))
                 if (os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
                         and not execution.read_checkpoint('bootstrap_collection_resume_v1')):
-                    self.store.enqueue(project_id, 'external_followup', automatic=True, input_version=job['id'])
+                    from project_watch.studio import collection_round
+
+                    collection_round.enqueue(self, execution)
             elif frozen['entry'] == 'monitor':
                 run_monitor(self, execution, Path(dsh_root))
             else:
@@ -1887,7 +1889,9 @@ class Pipeline:
 
             run_bootstrap(self, execution, Path(dsh_root))
             if os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
-                self.store.enqueue(project_id, "external_followup", automatic=True, input_version=job["id"])
+                from project_watch.studio import collection_round
+
+                collection_round.enqueue(self, execution)
             return
         # DSH chosen but unavailable: hold with a visible reason, never the legacy collector.
         from project_watch.studio.public_executor import require_available

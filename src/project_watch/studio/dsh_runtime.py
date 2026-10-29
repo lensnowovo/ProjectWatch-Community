@@ -674,7 +674,7 @@ def recover_authorized_site(pipeline, execution):
 
 
 def run_bootstrap(pipeline, execution, runtime_root: Path):
-    from project_watch.studio import collection_host, progressive_bootstrap
+    from project_watch.studio import collection_host, event_insight_work, progressive_bootstrap
 
     owner = progressive_bootstrap.freeze(execution, 'bootstrap')
     admission = collection_host.admit(execution, mode='first')
@@ -682,9 +682,17 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
         collection_host.limit_budgets(execution, admission['mode'])
     recover_authorized_site(pipeline, execution)
     settings, http, _llm, collectors = pipeline.tools()
-    research = PublicBootstrap(pipeline, execution, collectors, pipeline.reader())
+    research_class = PublicBootstrap
+    if owner['owner'] == 'materials':
+        from project_watch.studio.progressive_monitor import MaterialBootstrap
+
+        event_insight_work.begin(execution, cap=40)
+        research_class = MaterialBootstrap
+    research = research_class(pipeline, execution, collectors, pipeline.reader())
     if research.state["finished"]:
         research.guard()
+        if owner['owner'] == 'materials':
+            event_insight_work.settle(pipeline, execution)
         return research.state["finished"]
     http = guarded_http(research, http)
     collectors.http = http
@@ -700,7 +708,9 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
         from project_watch.studio import bootstrap_collection
 
         bootstrap_collection.run(research, settings.model, http, runtime_root, directory)
-        return progressive_bootstrap.run(research, settings.model, http, runtime_root, directory)
+        result = progressive_bootstrap.run(research, settings.model, http, runtime_root, directory)
+        event_insight_work.settle(pipeline, execution)
+        return result
     return run_dsh(research, gateway, runtime_root, directory)
 
 

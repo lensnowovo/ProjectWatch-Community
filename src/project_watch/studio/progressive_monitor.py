@@ -12,12 +12,14 @@ from project_watch.studio import (
 from project_watch.studio.dsh_bootstrap import PublicBootstrap, text_arg
 
 
-class MaterialMonitor(PublicBootstrap):
-    bootstrap_projection = False
-    allow_scope_projection = False
-
+class MaterialBootstrap(PublicBootstrap):
     def publication_intent(self, news):
         event_insight_work.publication(self.execution, news)
+
+
+class MaterialMonitor(MaterialBootstrap):
+    bootstrap_projection = False
+    allow_scope_projection = False
 
     def project_monitoring_scope(self, records):
         scope_maintenance.intent(self, records)
@@ -80,7 +82,10 @@ def run(pipeline, execution, runtime_root):
     collection_host.limit_budgets(execution, mode)
     if execution.read_checkpoint(event_insight_work.ROUND) is None:
         execution.checkpoint(question_work.PROTOCOL, True)
-    event_insight_work.begin(execution)
+    from project_watch.studio import collection_round
+
+    cap = collection_round.prepare(pipeline, execution)
+    event_insight_work.begin(execution, cap=cap or 16)
     settings, http, _, collectors = pipeline.tools()
     research = (MaterialTopic if mode == 'topic' else MaterialMonitor)(pipeline, execution, collectors, pipeline.reader())
     if research.state['finished']:

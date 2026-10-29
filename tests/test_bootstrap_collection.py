@@ -209,7 +209,7 @@ def test_collection_unknown_stops_without_retry_or_extraction(tmp_path, monkeypa
 
 def test_four_turn_collection_bound_leaves_material_publication_budget(tmp_path, monkeypatch):
     pipeline, execution, seen = install(tmp_path, monkeypatch, mode='turn_limit')
-    execution.budgets['model'] = 7
+    execution.budgets['model'] = 13  # Seven collection/publication calls plus six reserved analysis calls.
     result = run(pipeline, execution)
     assert result['records'] == 1 and execution.budget_used('model') == 6
     collection = execution.read_checkpoint(bootstrap_collection.STAGE)
@@ -292,18 +292,28 @@ def test_fourth_page_selection_crash_resumes_existing_action_at_page_limit(tmp_p
 
 
 def test_deferred_body_material_transfers_exact_source_without_old_round_or_recollection(tmp_path, monkeypatch):
+    from test_event_insight import install as analysis_install
+
     from project_watch.studio import bootstrap_continuation
     from project_watch.studio.execution import JobExecution
 
-    pipeline, execution, seen = install(tmp_path, monkeypatch, mode='scope_missing', source_count=2)
-    execution.budgets['model'] = 3
+    pipeline, execution, seen = analysis_install(tmp_path, monkeypatch, monitor=False, source_count=2)
+    execution.budgets['model'] = 6  # Three material/publication calls, three analysis calls.
     result = run(pipeline, execution)
     [task_id] = result['material_work']['pending_task_ids']
     source = execution.read_checkpoint(bootstrap_collection.SOURCES + ':' + task_id)
     assert source and result['records'] == 1
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
+    analysis = pipeline.store.claim()
+    assert analysis['kind'] == 'insight'
+    pipeline.run(analysis)
+    assert pipeline.store.finish(analysis['id'], lease_token=analysis['lease_token'])
     pipeline.store.enqueue(execution.job['project_id'], 'external')
-    current = JobExecution(pipeline.store, pipeline.store.claim(), budgets={'model': 5})
+    # This pre-existing helper is explicitly owner-admitted, not an automatic
+    # same-round followup. Keep a bounded material allowance alongside the
+    # now-required analysis reserve. Its separate manual
+    # round contract is not evidence of automatic followup accounting.
+    current = JobExecution(pipeline.store, pipeline.store.claim(), budgets={'model': 11})
     pipeline._execution_state.current = current
     bootstrap_continuation.admit(current, execution.job['id'])
     before = len(seen['pages']), len(seen['clinical'])
@@ -315,22 +325,31 @@ def test_deferred_body_material_transfers_exact_source_without_old_round_or_reco
     [record] = current.read_checkpoint('dsh_state')['records']
     assert record['refs'][0]['evidence_version_id'] == source['material_body_evidence_id']
     assert len(seen['materials']) == 2
+    assert current.budget_used('model') == execution.budget_used('model') + 2  # One unsent material and its review.
 
 
 @pytest.mark.parametrize('mode,source_count', [('page_budget', 1), ('scope_missing', 5)])
 def test_explicit_successor_worker_consumes_unissued_pages_without_repeating_collection(tmp_path, monkeypatch, mode, source_count):
+    from test_event_insight import install as analysis_install
+
     from project_watch.studio import bootstrap_continuation
     from project_watch.studio.execution import JobExecution
 
-    pipeline, execution, seen = install(tmp_path, monkeypatch, mode=mode, source_count=source_count)
+    pipeline, execution, seen = (analysis_install(tmp_path, monkeypatch, monitor=False, source_count=source_count)
+        if mode == 'scope_missing' else install(tmp_path, monkeypatch, mode=mode, source_count=source_count))
     if mode == 'page_budget':
         execution.budgets['page'] = 0
     run(pipeline, execution)
     pending = execution.read_checkpoint(bootstrap_collection.STAGE)['pending']
     assert len(pending) == 1 and pending[0]['tool'] == 'pw_read'
-    before_pages, before_models = len(seen['pages']), len(seen['models'])
     seen['materials'].clear()
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
+    if mode == 'scope_missing':
+        analysis = pipeline.store.claim()
+        assert analysis['kind'] == 'insight'
+        pipeline.run(analysis)
+        assert pipeline.store.finish(analysis['id'], lease_token=analysis['lease_token'])
+    before_pages, before_models = len(seen['pages']), len(seen['models'])
     pipeline.store.enqueue(execution.job['project_id'], 'external_followup', input_version=execution.job['id'])
     current = JobExecution(pipeline.store, pipeline.store.claim())
     pipeline._execution_state.current = current
@@ -345,9 +364,9 @@ def test_explicit_successor_worker_consumes_unissued_pages_without_repeating_col
     assert current.budget_used('model') == inherited + 2
     assert not any('pw_collect' in {t['function']['name'] for t in b.get('tools', [])}
                    for b in seen['models'][before_models:])
-    before = {k: len(v) for k, v in seen.items()}
+    before = {k: len(v) for k, v in seen.items() if isinstance(v, list)}
     pipeline.run_external_followup(current.job)
-    assert before == {k: len(v) for k, v in seen.items()}
+    assert before == {k: len(v) for k, v in seen.items() if isinstance(v, list)}
 
 
 @pytest.mark.parametrize('boundary', ['before_input', 'frozen_input'])

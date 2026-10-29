@@ -128,7 +128,16 @@ def adopt(research):
                 receipt['retained'].append(dict(origin=job['id'], reason='origin_already_claimed'))
                 continue
             analysis = read('event_insight_round_v1') or {}
-            if analysis and (analysis.get('phase') != 'settled' or analysis.get('insight_job_id') or read('event_insight_budget_tail_v1')):
+            analysis_root = analysis.get('round_root_job_id', job['id'])
+            root_reader = JobExecution(execution.store, {'id': analysis_root})
+            analysis_tail = root_reader.read_checkpoint('event_insight_budget_tail_v1', db=db)
+            root_analysis = root_reader.read_checkpoint('event_insight_round_v1', db=db) or analysis
+            # Unrouted work stays a durable responsibility at its original root.
+            # It may share a material successor only while no analysis child has
+            # claimed the tail; otherwise the existing serial owner goes first.
+            if analysis and (analysis.get('phase') not in ('settled', 'waiting_inputs')
+                    or analysis.get('insight_job_id') or root_analysis.get('insight_job_id')
+                    or (analysis_tail and analysis_tail['tail_job_id'] not in (job['id'], jid))):
                 receipt['retained'].append(dict(origin=job['id'], reason='analysis_owner_not_settled'))
                 continue
             prior = read(STAGE) or {}
@@ -197,10 +206,22 @@ def adopt(research):
                 current_analysis = execution.read_checkpoint('event_insight_round_v1', db=db)
                 total_cap = analysis.get('cap', origin_caps['model'])
                 if current_analysis:
-                    current_analysis['cap'] = min(current_analysis['cap'], total_cap)
+                    current_analysis['cap'] = min(current_analysis['cap'], total_cap, root_analysis.get('cap', total_cap))
                     current_analysis['collection_cap'] = caps['model']
+                    current_analysis['round_root_job_id'] = analysis_root
                     db.execute('UPDATE studio_job_checkpoints SET data=? WHERE job_id=? AND stage=?',
                                (json.dumps(current_analysis), jid, 'event_insight_round_v1'))
+                    # Tightening is safe only before any analysis admission,
+                    # checked above. Old unresolved work cannot later spend a
+                    # separate copy of the original balance.
+                    for aid in {job['id'], analysis_root}:
+                        prior_analysis = JobExecution(execution.store, {'id': aid}).read_checkpoint('event_insight_round_v1', db=db)
+                        if prior_analysis:
+                            prior_analysis['cap'] = current_analysis['cap']
+                            db.execute('UPDATE studio_job_checkpoints SET data=? WHERE job_id=? AND stage=?',
+                                       (json.dumps(prior_analysis), aid, 'event_insight_round_v1'))
+                    db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                               (analysis_root, 'event_insight_budget_tail_v1', json.dumps(dict(cap=current_analysis['cap'], tail_job_id=jid))))
                 break  # One exclusive predecessor per admitted cycle.
         _put(db, jid, STAGE, receipt)
         encoded = json.dumps(imports, ensure_ascii=False)

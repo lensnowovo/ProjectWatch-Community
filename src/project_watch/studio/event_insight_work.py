@@ -21,7 +21,7 @@ def _put(db, job_id, stage, value):
                (job_id, stage, json.dumps(value, ensure_ascii=False)))
 
 
-def begin(execution):
+def begin(execution, *, cap=16):
     """Persist intent before publication so a failed writer cannot lose analysis."""
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
@@ -29,7 +29,7 @@ def begin(execution):
         project_guard(db, execution.job['project_id'], execution.job['id'])
         saved = execution.read_checkpoint(ROUND, db=db)
         if saved is None:
-            cap = min(16, execution.budgets.get('model') if execution.budgets.get('model') is not None else 16)
+            cap = min(cap, execution.budgets.get('model') if execution.budgets.get('model') is not None else cap)
             before = dict(db.execute('SELECT h.event_id,h.revision_id FROM studio_event_revision_heads h '
                 'JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=?', (execution.job['project_id'],)))
             saved = dict(cap=cap, collection_cap=max(0, cap - min(6, cap // 2)), before=before,
@@ -163,6 +163,22 @@ def _changed(db, project_id, state):
 def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
     from project_watch.studio.recovery import input_binding
 
+    ancestor = JobExecution(pipeline.store, {'id': origin}).read_checkpoint(INPUT, db=db) or {}
+    if not ancestor:
+        ancestor = JobExecution(pipeline.store, {'id': origin}).read_checkpoint('public_stage_input_v1', db=db) or {}
+    root = ancestor.get('round_root_job_id', state.get('round_root_job_id', origin))
+    budget = JobExecution(pipeline.store, {'id': root}).read_checkpoint(BUDGET, db=db)
+    if budget and budget['cap'] != state['cap']:
+        raise ValueError('insight round cap changed')
+    predecessor = budget['tail_job_id'] if budget else origin
+    used = db.execute("""SELECT count(*) FROM studio_job_calls c JOIN (
+        SELECT job_id,call_key FROM studio_job_calls WHERE job_id IN (?,?)
+        UNION SELECT origin_job_id,call_key FROM studio_job_budget_links WHERE job_id IN (?,?)
+        ) b ON b.job_id=c.job_id AND b.call_key=c.call_key WHERE c.kind='model'""",
+        (origin, predecessor, origin, predecessor)).fetchone()[0]
+    if rebuild is None and used >= state['cap']:
+        state['blocked_reason'] = 'round_budget_exhausted'
+        return None
     fingerprint = digest([origin, [w['fingerprint'] for w in state['objects']], rebuild])
     version = 'event-insight:' + fingerprint
     job = pipeline.store.enqueue(project_id, 'insight', automatic=True, input_version=version, db=db)
@@ -171,15 +187,8 @@ def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
     existing = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?', (job['id'], INPUT)).fetchone()
     if existing:
         return job  # An existing admission retains its exact predecessor and input.
-    ancestor = JobExecution(pipeline.store, {'id': origin}).read_checkpoint(INPUT, db=db) or {}
-    if not ancestor:
-        ancestor = JobExecution(pipeline.store, {'id': origin}).read_checkpoint('public_stage_input_v1', db=db) or {}
-    root = ancestor.get('round_root_job_id', origin)
-    budget = JobExecution(pipeline.store, {'id': root}).read_checkpoint(BUDGET, db=db)
-    if budget and budget['cap'] != state['cap']:
-        raise ValueError('insight round cap changed')
-    predecessor = budget['tail_job_id'] if budget else origin
     payload = dict(origin_job_id=origin, cap=state['cap'], objects=state['objects'],
+                   unresolved=state.get('unresolved', []),
                    input_version=version, rebuild=rebuild, budget_basis='shared_round_including_origin',
                    round_root_job_id=root, predecessor_job_id=predecessor,
                    settings_binding=(JobExecution(pipeline.store, {'id': root}).read_checkpoint('recovery_inputs', db=db) or {}).get(
@@ -223,21 +232,73 @@ def admit_manual(pipeline, execution):
         return True
 
 
+def _wake_binding(pipeline, pid, state, db):
+    """Read a dependency signature; never run a model just to check readiness."""
+    return digest([
+        [tuple(r) for r in db.execute('SELECT id,version FROM studio_monitor_objects WHERE project_id=? ORDER BY id', (pid,))],
+        [tuple(r) for r in db.execute('SELECT h.event_id,h.revision_id FROM studio_event_revision_heads h JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=? ORDER BY h.event_id', (pid,))],
+        [tuple(r) for r in db.execute('SELECT source_key,evidence_version_id FROM studio_evidence_heads WHERE project_id=? ORDER BY source_key', (pid,))],
+        [tuple(r) for r in db.execute('SELECT evidence_version_id,status FROM studio_evidence_lifecycle WHERE project_id=? ORDER BY evidence_version_id', (pid,))],
+        [tuple(r) for r in db.execute('SELECT scope_key,version FROM studio_relationship_candidates WHERE project_id=? ORDER BY scope_key', (pid,))],
+        [tuple(r) for r in db.execute('SELECT scope_key,version FROM studio_relationship_overrides WHERE project_id=? ORDER BY scope_key', (pid,))],
+    ])
+
+
+def _route(pipeline, pid, state, db):
+    from project_watch.studio.event_revisions import current_membership_events
+
+    if 'event_versions' not in state:
+        state['event_versions'] = _changed(db, pid, state)
+    versions = {}
+    for eid in current_membership_events(db, pid, state['event_versions']):
+        row = db.execute('SELECT h.revision_id FROM studio_event_revision_heads h JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=? AND h.event_id=?', (pid, eid)).fetchone()
+        if row:
+            versions[eid] = row[0]
+    try:
+        work, unresolved = inputs(pipeline, pid, versions, db=db) if state.get('analysis_enabled', True) else ([], [])
+    except ValueError as exc:
+        work, unresolved = [], [dict(reason='input_not_current', detail=str(exc))]
+    attempted = set(state.get('attempted_fingerprints', []))
+    state.update(objects=[w for w in work if w['fingerprint'] not in attempted], unresolved=unresolved,
+                 wake_binding=_wake_binding(pipeline, pid, state, db))
+    state['phase'] = ('awaiting_queue' if state['objects'] else
+                      'waiting_inputs' if unresolved or state.get('analysis_pending') else 'settled')
+
+
+def _advance(pipeline, pid, origin, state, db):
+    if state['phase'] == 'collecting':
+        if 'publication_sources' not in state:
+            return None  # A failed pre-publication stage still owns its intent.
+        pipeline.objects.ensure_subject(pid, db=db)
+        _route(pipeline, pid, state, db)
+    if state['phase'] == 'scheduled':
+        child = db.execute('SELECT status FROM studio_jobs WHERE id=? AND project_id=?', (state['insight_job_id'], pid)).fetchone()
+        if not child or child[0] in ('queued', 'running'):
+            return None
+        result = JobExecution(pipeline.store, {'id': state['insight_job_id']}).read_checkpoint(RESULT, db=db) or {}
+        state['analysis_pending'] = child[0] == 'failed' or result.get('status') != 'complete'
+        state['phase'] = 'waiting_inputs' if state['analysis_pending'] or state.get('unresolved') else 'settled'
+    if state['phase'] == 'waiting_inputs' and state.get('wake_binding') != _wake_binding(pipeline, pid, state, db):
+        _route(pipeline, pid, state, db)
+    if state['phase'] == 'awaiting_queue':
+        job = _enqueue(pipeline, db, pid, origin, state)
+        if job:
+            state.update(phase='scheduled', insight_job_id=job['id'],
+                         attempted_fingerprints=sorted(set(state.get('attempted_fingerprints', [])) |
+                                                       {w['fingerprint'] for w in state['objects']}))
+            return job
+        if state.get('blocked_reason'):
+            state.update(phase='waiting_inputs', analysis_pending=True)
+    return None
+
+
 def settle(pipeline, execution):
     with closing(pipeline.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
         project_guard(db, execution.job['project_id'], execution.job['id'])
         state = execution.read_checkpoint(ROUND, db=db)
-        if state['phase'] == 'collecting':
-            pipeline.objects.ensure_subject(execution.job['project_id'], db=db)
-            changed = _changed(db, execution.job['project_id'], state)
-            work, unresolved = inputs(pipeline, execution.job['project_id'], changed, db=db) if state.get('analysis_enabled', True) else ([], [])
-            state.update(objects=work, unresolved=unresolved, phase='awaiting_queue' if work else 'settled')
-        if state['phase'] == 'awaiting_queue':
-            job = _enqueue(pipeline, db, execution.job['project_id'], execution.job['id'], state)
-            if job:
-                state.update(phase='scheduled', insight_job_id=job['id'])
+        _advance(pipeline, execution.job['project_id'], execution.job['id'], state, db)
         _put(db, execution.job['id'], ROUND, state)
         return state
 
@@ -251,17 +312,13 @@ def dispatch_pending(pipeline, project_id):
             "WHERE j.project_id=? AND c.stage=? AND j.status IN ('done','failed') ORDER BY j.created_at", (project_id, ROUND)).fetchall()
         for row in rounds:
             state = json.loads(row['data'])
-            if state['phase'] == 'collecting':
-                pipeline.objects.ensure_subject(project_id, db=db)
-                work, unresolved = inputs(pipeline, project_id, _changed(db, project_id, state), db=db) if state.get('analysis_enabled', True) else ([], [])
-                state.update(objects=work, unresolved=unresolved, phase='awaiting_queue' if work else 'settled')
-            if state['phase'] == 'awaiting_queue':
-                job = _enqueue(pipeline, db, project_id, row['id'], state)
-                if job:
-                    state.update(phase='scheduled', insight_job_id=job['id'])
-                    _put(db, row['id'], ROUND, state)
-                    return job
+            # Upgrade the old false-settled marker without inventing input or calls.
+            if state['phase'] == 'settled' and state.get('unresolved'):
+                state['phase'] = 'waiting_inputs'
+            job = _advance(pipeline, project_id, row['id'], state, db)
             _put(db, row['id'], ROUND, state)
+            if job:
+                return job
     return None
 
 

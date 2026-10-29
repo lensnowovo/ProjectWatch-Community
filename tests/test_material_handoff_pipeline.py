@@ -22,10 +22,11 @@ from project_watch.studio import (
     event_insight_work,
     material_handoff,
     progressive_bootstrap,
+    public_stage_work,
 )
 from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import Http, HttpError, Response
-from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePart
+from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePart, ObjectInput
 from project_watch.studio.pipeline import StudioWorker
 
 
@@ -155,14 +156,14 @@ def test_persisted_limits_enforced_at_journal_after_reconstruction(journey, monk
     def bounded(execution, mode):
         limit(execution, mode)
         if execution.job['id'] == old.job['id']:
-            execution.budgets['model'] = 7
+            execution.budgets['model'] = 13  # 7 collection + 6 reserved analysis, one cumulative round.
     monkeypatch.setattr(collection_host, 'limit_budgets', bounded)
     old_round(journey)
     current = scheduled(pipeline, old.job['project_id'])
     pipeline.run(current.job)
     saved = current.read_checkpoint(material_handoff.STAGE)
     assert saved['caps']['model'] == 7
-    assert current.read_checkpoint(event_insight_work.ROUND)['cap'] == 7
+    assert current.read_checkpoint(event_insight_work.ROUND)['cap'] == 13
     # Actual admission must read the durable bound even when an executor has
     # default None, or analysis begin reuses a wider in-memory cap.
     fresh = JobExecution(pipeline.store, current.job)
@@ -243,11 +244,14 @@ def test_ineligible_materials_retain_reason_and_are_not_reprocessed(journey, bou
 @pytest.mark.parametrize('kind,cap', [('model', 3), ('open_data', 3)])
 def test_exhausted_predecessor_cannot_freeze_next_cycles_new_sources(journey, monkeypatch, kind, cap):
     pipeline, old, state = journey
+    # Test two independent periods. Bootstrap's same-round followup is covered
+    # separately and must not be mistaken for the next ordinary period.
+    pipeline.store.touch(old.job['project_id'], 'last_external_at')
     limit = collection_host.limit_budgets
     def bounded(execution, mode):
         limit(execution, mode)
         if execution.job['id'] == old.job['id']:
-            execution.budgets[kind] = cap
+            execution.budgets[kind] = 6 if kind == 'model' else cap  # collection cap 3 + reserved tail 3
     monkeypatch.setattr(collection_host, 'limit_budgets', bounded)
     pipeline.run(old.job)
     pending = old.read_checkpoint(progressive_bootstrap.CLOSEOUT)['pending_task_ids']
@@ -257,6 +261,7 @@ def test_exhausted_predecessor_cannot_freeze_next_cycles_new_sources(journey, mo
     # Select the due-query fixture; query history fairness is a separate batch.
     monkeypatch.setattr(collection_history, 'schedule', lambda plan, *_a, **_kw: plan)
     current = scheduled(pipeline, old.job['project_id'])
+    assert current.job['kind'] == 'external'
     reads = len(state['reads'])
     pipeline.run(current.job)
     receipt = current.read_checkpoint(material_handoff.STAGE)
@@ -275,6 +280,11 @@ def test_transfer_failure_rolls_back_owner_links_caps_and_claim(journey, monkeyp
     pipeline, old, state = journey
     pending = old_round(journey)
     current = scheduled(pipeline, old.job['project_id'])
+    with closing(pipeline.store._connect()) as db:
+        # A bound followup already owns inherited accounting links before the
+        # material transfer. Rollback must preserve that baseline exactly.
+        before_links = [tuple(r) for r in db.execute('SELECT * FROM studio_job_budget_links WHERE job_id=? ORDER BY origin_job_id,call_key',
+                                                   (current.job['id'],))]
     take_over = material_handoff.take_over
     def interrupted(execution, task_id, **kwargs):
         if task_id == pending[-1]:
@@ -287,7 +297,8 @@ def test_transfer_failure_rolls_back_owner_links_caps_and_claim(journey, monkeyp
         assert not current.read_checkpoint(material_handoff.STAGE, db=db)
         assert not old.read_checkpoint(material_handoff.CLAIM, db=db)
         assert db.execute('SELECT count(*) FROM studio_material_transfers').fetchone()[0] == 0
-        assert db.execute('SELECT count(*) FROM studio_job_budget_links WHERE job_id=?', (current.job['id'],)).fetchone()[0] == 0
+        assert before_links == [tuple(r) for r in db.execute('SELECT * FROM studio_job_budget_links WHERE job_id=? ORDER BY origin_job_id,call_key',
+                                                            (current.job['id'],))]
         assert all(db.execute('SELECT job_id FROM studio_evidence_tasks WHERE id=?', (t,)).fetchone()[0] == old.job['id'] for t in pending)
     monkeypatch.setattr(material_handoff, 'take_over', take_over)
     pipeline.run(current.job)
@@ -349,3 +360,38 @@ def test_settings_change_between_collection_and_adoption_cannot_transfer(journey
     assert len(state['model']) == 3 and not current.read_checkpoint(material_handoff.STAGE)
     with closing(pipeline.store._connect()) as db:
         assert all(db.execute('SELECT job_id FROM studio_evidence_tasks WHERE id=?', (t,)).fetchone()[0] == old.job['id'] for t in pending)
+
+
+def test_transferred_material_and_original_unresolved_analysis_share_one_tail(journey):
+    pipeline, old, _state = journey
+    old_round(journey)
+    current = scheduled(pipeline, old.job['project_id'])
+    pipeline.run(current.job)
+    assert current.read_checkpoint(material_handoff.STAGE)['transfers']
+    round_state = current.read_checkpoint(event_insight_work.ROUND)
+    assert round_state['round_root_job_id'] == old.job['id']
+    assert old.read_checkpoint(event_insight_work.ROUND)['phase'] == 'waiting_inputs'
+    # A later stage based on the material successor must not establish a second
+    # root. Its final calls also count when the original unresolved input wakes.
+    with closing(pipeline.store._connect()) as db, db:
+        queued = public_stage_work.enqueue(pipeline, db, old.job['project_id'], 'scope', {'synthetic': True},
+                                           origin=current.job['id'], cap=round_state['cap'])
+    manifest = JobExecution(pipeline.store, queued).read_checkpoint(public_stage_work.INPUT)
+    assert manifest['round_root_job_id'] == old.job['id']
+    assert manifest['predecessor_job_id'] == current.job['id']
+    finish(pipeline, current)
+    tail = JobExecution(pipeline.store, pipeline.store.claim())
+    assert tail.job['id'] == queued['id']
+    public_stage_work.prepare(pipeline, tail, manifest)
+    tail.call('model', 'synthetic-tail', lambda: Response(200, {}, b'{}'), provider='synthetic')
+    finish(pipeline, tail)
+    pipeline.objects.save(old.job['project_id'], ObjectInput(kind='company', name='Synthetic Peer',
+        purpose='related', visibility='public'), actor='user')
+    queued = type(pipeline).schedule_insight(pipeline, old.job['project_id'])
+    assert queued
+    analysis = JobExecution(pipeline.store, pipeline.store.claim())
+    manifest = analysis.read_checkpoint(event_insight_work.INPUT)
+    assert manifest['round_root_job_id'] == old.job['id']
+    assert manifest['predecessor_job_id'] == tail.job['id']
+    assert manifest['cap'] == round_state['cap']
+    assert analysis.budget_used('model') == tail.budget_used('model') == 6

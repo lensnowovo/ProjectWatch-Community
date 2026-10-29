@@ -37,7 +37,13 @@ def freeze(execution, entry, *, materials=False):
             return value
         stages = {r[0] for r in db.execute('SELECT stage FROM studio_job_checkpoints WHERE job_id=?',
                                          (execution.job['id'],))}
-        started = bool(stages - {'collection_request_v1', 'external_first_ready', 'external_followup_input'})
+        allowed = {'collection_request_v1', 'external_first_ready', 'external_followup_input'}
+        if execution.job.get('kind') == 'external_followup':
+            from project_watch.studio import collection_round, public_stage_work
+
+            if (execution.read_checkpoint(public_stage_work.INPUT, db=db) or {}).get('work') == collection_round.WORK:
+                allowed.add(public_stage_work.INPUT)
+        started = bool(stages - allowed)
         started |= db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1',
                               (execution.job['id'],)).fetchone() is not None
         value = dict(entry=entry, owner='materials' if (entry == 'bootstrap' or materials) and not started else 'legacy',
