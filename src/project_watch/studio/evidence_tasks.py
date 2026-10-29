@@ -17,7 +17,7 @@ DEFERRED = 'extract_deferred:'
 
 
 class MaterialDeferred(Exception):
-    """A locally unsent material request; preserve evidence for later handling."""
+    """Preserve evidence after a local limit or settled incomplete response."""
 
     def __init__(self, receipt):
         self.receipt = receipt
@@ -153,12 +153,19 @@ item-format errors. Invalid returned structure affects only that material.
 
     with closing(execution.store._connect()) as db:
         execution._guard(db)
+        if db.execute("SELECT 1 FROM studio_evidence_tasks t JOIN studio_job_checkpoints c "
+                "ON c.job_id=t.job_id AND c.stage=? || t.id WHERE t.job_id=? AND t.project_id=? "
+                "AND t.status='pending' AND json_extract(c.data,'$.code')='material_output_limit' LIMIT 1",
+                (DEFERRED, execution.job['id'], execution.job['project_id'])).fetchone():
+            return 0
         tasks = [dict(row) for row in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
             "AND policy=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c "
             "WHERE c.job_id=studio_evidence_tasks.job_id AND c.stage=? || studio_evidence_tasks.id) "
             "ORDER BY rowid LIMIT ?",
             (execution.job['id'], execution.job['project_id'], policy, DEFERRED, limit))]
+    processed = 0
     for task in tasks:
+        processed += 1
         material = MaterialExecution(execution, task)
         with closing(execution.store._connect()) as db:
             material._guard(db)
@@ -172,6 +179,8 @@ item-format errors. Invalid returned structure affects only that material.
             response = extractor(source, material)
         except MaterialDeferred as exc:
             _save(execution, task, 'pending', exc.receipt)
+            if exc.receipt['code'] == 'material_output_limit':
+                break  # Do not spend the batch on repeated truncated responses.
             continue
         try:
             proposed = (RecordProposal if policy == TYPED_POLICY else Proposal).model_validate(response)
@@ -193,4 +202,4 @@ item-format errors. Invalid returned structure affects only that material.
         used = {ref for observation in observations for ref in observation['refs']}
         _save(execution, task, 'complete', {'observations': observations,
             'refs': {ref: source['refs'][ref] for ref in used}, 'review_status': 'pending'})
-    return len(tasks)
+    return processed

@@ -109,6 +109,11 @@ class ExtractionGateway(dsh_runtime.Gateway):
                 raise ValueError('unexpected extraction tool exposure')
             body = {key: payload[key] for key in ('model', 'messages', 'tools', 'tool_choice') if key in payload}
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 4000))
+            # Preserve a settled legacy request's exact wire. Fresh extraction
+            # uses the configured allowance (bounded to 8000), including any
+            # provider reasoning tokens, instead of silently halving it.
+            if not self.received(body):
+                body['max_tokens'] = min(self.model.max_output_tokens, 8000)
             # Match the exact non-sorted wire serialization used by Http today.
             # Do not globally canonicalize old journalled requests.
             signature = 'wire-v1:' + hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
@@ -134,7 +139,20 @@ class ExtractionGateway(dsh_runtime.Gateway):
                 self.research.execution.checkpoint(self.research.attempt_stage, [*attempted, signature])
             # Keep every role in the existing journal and parent budget. The
             # source/task ID in the prompt prevents unrelated material aliasing.
-            return self._send_model(body)
+            data = self._send_model(body)
+            if any(choice.get('finish_reason') == 'length' for choice in data.get('choices', [])):
+                # The response is settled and charged, but it is not a complete
+                # candidate. Never execute a truncated tool call or manufacture
+                # an invalid proposal. Keep the original HTTP journal intact.
+                receipt = dict(code='material_output_limit', dispatch='completed',
+                    body_sha256=hashlib.sha256(raw).hexdigest(), max_output_tokens=body['max_tokens'],
+                    response_sha256=hashlib.sha256(json.dumps(data, ensure_ascii=False).encode()).hexdigest(),
+                    **self.research.source_identity)
+                self.research.execution.checkpoint(self.research.deferred_stage, receipt)
+                self.research.state['finished'] = {'deferred': receipt}
+                return {'choices': [{'message': {'role': 'assistant', 'content': '本轮材料提取已停止，原材料已保留。'},
+                                     'finish_reason': 'stop'}]}
+            return data
 
 
 def extract(parent, source, model, http, runtime_root, directory, *, execution=None):

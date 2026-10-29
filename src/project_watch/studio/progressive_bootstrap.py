@@ -165,7 +165,7 @@ def _defer(research, *, candidate_task=None, reason='publication_reserve'):
             if not attempts and not linked:
                 context = execution.read_checkpoint(evidence_tasks.DEFERRED + task['id'], db=db)
                 receipt = dict(task_id=task['id'], policy=task['policy'], dispatch='not_started',
-                               reason='material_context_limit' if context else reason)
+                               reason=context['code'] if context else reason)
                 db.execute('INSERT OR IGNORE INTO studio_job_checkpoints VALUES (?,?,?)',
                            (execution.job['id'], 'material_deferred:' + task['id'], json.dumps(receipt)))
         context_deferred = [t['id'] for t in pending if execution.read_checkpoint(evidence_tasks.DEFERRED + t['id'], db=db)]
@@ -187,6 +187,8 @@ def _finish_deferred(research):
                   'source_collection': (research.execution.read_checkpoint('bootstrap_collection_v1') or {}).get('finished'),
                   'material_work': research.execution.read_checkpoint(CLOSEOUT),
                   'reason': 'publication_admission_deferred', 'source_errors': research.state['errors']}
+        if (result['material_work'] or {}).get('reason') == 'material_output_limit':
+            result['reason'] = 'material_output_limit'
         research.state['finished'] = result
         if not research.topic_projection:
             research.store.set_state('dsh-bootstrap:' + research.project_id, json.dumps(result, ensure_ascii=False))
@@ -216,6 +218,10 @@ def run(research, model, http, runtime_root, directory):
         pending = _pending(research)
         if not pending:
             break
+        if any((research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id']) or {}).get('code')
+               == 'material_output_limit' for t in pending):
+            _defer(research, reason='material_output_limit')
+            break
         eligible = [t for t in pending if not research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id'])]
         if not eligible:
             _defer(research, reason='material_context_limit')
@@ -233,6 +239,9 @@ def run(research, model, http, runtime_root, directory):
             break
         evidence_tasks.run_pending(research.execution, extract, limit=1, policy=evidence_tasks.TYPED_POLICY)
         _map_records(research)
+        if (research.execution.read_checkpoint(evidence_tasks.DEFERRED + task['id']) or {}).get('code') == 'material_output_limit':
+            _defer(research, reason='material_output_limit')
+            break
         remaining = _remaining(research)
         try:
             needed = _review_calls(research)
@@ -244,6 +253,9 @@ def run(research, model, http, runtime_root, directory):
             _defer(research, candidate_task=task['id'])
             break
     remaining = _remaining(research)
+    if ((research.execution.read_checkpoint(CLOSEOUT) or {}).get('reason') == 'material_output_limit'
+            and not research.state['records']):
+        return _finish_deferred(research)
     binding = _publication_binding(research)
     # If HTTP settled before the review checkpoint was saved, admission must
     # still replay that exact journalled request at a fully consumed budget.
