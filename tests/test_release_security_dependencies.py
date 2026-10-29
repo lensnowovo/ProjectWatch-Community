@@ -67,5 +67,6 @@ def test_windows_runtime_security_pins_match_ci():
     assert NODE_VERSION == 'v24.22.1'
     assert PYTHON_VERSION == '3.13.17'
     ci = json.loads((ROOT / '.github/workflows/ci.yml').read_text())
-    setup = next(s for s in ci['jobs']['offline']['steps'] if s.get('name') == 'Node')
-    assert setup['with']['node-version'] == NODE_VERSION.removeprefix('v')
+    for name in ('python', 'frontend', 'native', 'installed'):
+        setup = next(s for s in ci['jobs'][name]['steps'] if s.get('name') == 'Node')
+        assert setup['with']['node-version'] == NODE_VERSION.removeprefix('v')

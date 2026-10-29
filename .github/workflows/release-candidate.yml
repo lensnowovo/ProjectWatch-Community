@@ -11,27 +11,56 @@
       }
     }
   },
-  "permissions": {"contents": "read"},
+  "permissions": {
+    "contents": "read"
+  },
   "jobs": {
     "verify": {
       "runs-on": "windows-2022",
       "timeout-minutes": 10,
       "environment": "release-candidate-review",
       "steps": [
-        {"name": "Checkout selected immutable commit", "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803", "with": {"persist-credentials": false}},
-        {"name": "Reject stale or mismatched review input", "shell": "pwsh", "env": {"EXPECTED_SHA": "${{ inputs.expected_sha }}"}, "run": "if ($env:EXPECTED_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full lowercase commit SHA is required' }\n$actual = git rev-parse HEAD\nif ($LASTEXITCODE -ne 0 -or $actual.Trim() -cne $env:EXPECTED_SHA -or $env:GITHUB_SHA -cne $env:EXPECTED_SHA) { throw 'Selected commit differs from the reviewed SHA' }\nWrite-Output \"Verified candidate source $actual; publication remains unauthorized\""}
+        {
+          "name": "Checkout selected immutable commit",
+          "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+          "with": {
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Reject stale or mismatched review input",
+          "shell": "pwsh",
+          "env": {
+            "EXPECTED_SHA": "${{ inputs.expected_sha }}"
+          },
+          "run": "if ($env:EXPECTED_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full lowercase commit SHA is required' }\n$actual = git rev-parse HEAD\nif ($LASTEXITCODE -ne 0 -or $actual.Trim() -cne $env:EXPECTED_SHA -or $env:GITHUB_SHA -cne $env:EXPECTED_SHA) { throw 'Selected commit differs from the reviewed SHA' }\nWrite-Output \"Verified candidate source $actual; publication remains unauthorized\""
+        }
       ]
     },
     "regression": {
       "needs": "verify",
-      "uses": "./.github/workflows/ci.yml"
+      "uses": "./.github/workflows/ci.yml",
+      "with": {
+        "force_full": true
+      },
+      "permissions": {
+        "contents": "read",
+        "actions": "read"
+      }
     },
     "review": {
-      "needs": ["verify", "regression"],
+      "needs": [
+        "verify",
+        "regression"
+      ],
       "runs-on": "windows-2022",
       "timeout-minutes": 5,
       "steps": [
-        {"name": "Record limited CI conclusion", "shell": "pwsh", "run": "Write-Output \"Offline source/wheel regression completed for $env:GITHUB_SHA. This is not installation, live-monitoring, independent-user, licensing or publication approval. Fixed desktop installer hashes and remaining gates require maintainer review. No tags, Releases or deployment were created.\""}
+        {
+          "name": "Record limited CI conclusion",
+          "shell": "pwsh",
+          "run": "Write-Output \"Offline source/wheel regression completed for $env:GITHUB_SHA. This is not installation, live-monitoring, independent-user, licensing or publication approval. Fixed desktop installer hashes and remaining gates require maintainer review. No tags, Releases or deployment were created.\""
+        }
       ]
     }
   }
