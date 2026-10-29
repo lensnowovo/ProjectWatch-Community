@@ -144,6 +144,10 @@ class ExtractionGateway(dsh_runtime.Gateway):
             # Do not globally canonicalize old journalled requests.
             signature = self.signature(body)
             replay = self.received(body)
+            if signature in attempted and not self.recorded(body):
+                # A checkpoint without a journal receipt is not proof of an
+                # unsent request. Preserve the identity and require recovery.
+                raise HttpError('request_outcome_unknown')
             raw = collection_context.wire(body)
             if not replay and len(raw) > collection_context.MAX_WIRE_BYTES:
                 # Final provider body, including role prompt, schemas and history.

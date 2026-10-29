@@ -79,6 +79,55 @@ def test_adapted_length_is_replayed_without_another_call(setup):
     assert len(sent) == 1
 
 
+@pytest.mark.parametrize('cap', [4000, 8000])
+def test_attempt_without_receipt_cannot_dispatch_or_change_wire(setup, cap):
+    gate, body, sent = gateway(setup)
+    legacy = {**body, 'stream': False, 'max_tokens': cap}
+    attempted = [gate.signature(legacy)]
+    gate.research.execution.checkpoint(gate.research.attempt_stage, attempted)
+    with pytest.raises(HttpError, match='request_outcome_unknown'):
+        gate.model_call(body)
+    assert not sent and not gate.research.execution.usage()
+    assert gate.research.execution.read_checkpoint(gate.research.attempt_stage) == attempted
+
+
+@pytest.mark.parametrize('cap', [4000, 8000])
+@pytest.mark.parametrize('status', ['completed', 'unknown', 'started'])
+def test_inherited_material_receipt_retains_exact_wire(setup, monkeypatch, cap, status):
+    from types import SimpleNamespace
+
+    gate, body, sent = gateway(setup)
+    legacy = {**body, 'stream': False, 'max_tokens': cap}
+    gate._send_model(legacy)
+    execution = gate.research.execution
+    original_id = execution.job['id']
+    with closing(execution.store._connect()) as db, db:
+        task_id = db.execute('SELECT id FROM studio_evidence_tasks WHERE job_id=?',
+                             (original_id,)).fetchone()['id']
+        row = db.execute('SELECT call_key,provider FROM studio_job_calls WHERE job_id=?',
+                         (original_id,)).fetchone()
+        db.execute('UPDATE studio_job_calls SET status=? WHERE job_id=?', (status, original_id))
+        db.execute('INSERT INTO studio_material_calls VALUES (?,?,?,?,?)',
+                   (task_id, 'model', row['call_key'], row['provider'], original_id))
+    # Exercise the inherited lookup with no matching current-job receipt.
+    # Real transfer/lease fencing is covered by test_material_ownership.py.
+    proxy = SimpleNamespace(store=execution.store, job={'id': 'synthetic-successor'},
+                            task={'id': task_id}, _guard=execution._guard,
+                            read_checkpoint=execution.read_checkpoint)
+    gate.research.execution = proxy
+    assert gate.recorded(legacy) == {status}
+    monkeypatch.setattr(gate.research, 'guard', lambda: None)
+    if status == 'completed':
+        captured = []
+        monkeypatch.setattr(gate, '_send_model', lambda wire: captured.append(wire) or {'choices': []})
+        gate.model_call(body)
+        assert captured == [legacy]
+    else:
+        with pytest.raises(HttpError, match='request_outcome_unknown'):
+            gate.model_call(body)
+    assert sent == [legacy]
+
+
 @pytest.mark.skipif(not os.environ.get('PW_DSH_TEST_RUNTIME'), reason='requires pinned official DSH')
 def test_native_new_wire_preserves_cwd_tools_and_accepts_arguments(setup, tmp_path):
     parent, settings, _, _ = role_inputs(setup)
