@@ -39,3 +39,7 @@ four preserved report states, four immutable heads and idempotent reopening.
 The earlier R2 failure remains diagnostic evidence; rebuilt artifacts need their
 own identities and affected installation checks. Rollback uses a matching backup
 restored to a new directory, never old code on a migrated active database.
+
+The legacy optional insight generator also keeps its early unavailable return:
+scheduling does not load settings or build provider tools when that component is
+absent. The DSH branch retains its own readiness checks and durable dispatch.

@@ -2417,10 +2417,10 @@ class Pipeline:
 
         if unavailable_reason():
             return None
-        project, settings = self.store.get_project(project_id), self.settings_store.load()
-        if not project or not project['activated'] or project['status'] != 'active' or not settings.model.ready:
-            return None
         if os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
+            project, settings = self.store.get_project(project_id), self.settings_store.load()
+            if not project or not project['activated'] or project['status'] != 'active' or not settings.model.ready:
+                return None
             # Dispatch only durable object/event work from a settled source round.
             from project_watch.studio import event_insight_work
 
