@@ -23,6 +23,8 @@ DOMAINS = ('python', 'frontend', 'native', 'installed')
 WORKFLOW = '.github/workflows/ci.yml'
 FORMAT = 'projectwatch-ci-domain-v1'
 TTL = timedelta(days=7)
+# Reviewed pre-index planner: its attempt-1 plans have no explicit run identity.
+PRIOR_PLANNER_BLOB = '872ac274e9a9eae2876839ad26bb0333d5671e50'
 FRONTEND_TESTS = (
     'tests/test_web_preview.py', 'tests/test_static_asset_mime.py',
     'tests/test_windows_icon.py', 'tests/test_frontend_notices.py',
@@ -233,30 +235,49 @@ def eligible_run(run, *, repository, head_repository, pr_number, base_branch, wo
     if not isinstance(source, str) or not source:
         return False
     linked = merged_prs or {}
-    return any(isinstance(row, dict) and type(row.get('number')) is int and row['number'] > 0 and (
-        (isinstance(pr_number, int) and pr_number > 0 and row.get('number') == pr_number and source == head_repository)
-        or (row['number'] in linked and linked[row['number']] == source)) for row in run['pull_requests'])
+    return source in linked.values() or any(
+        isinstance(row, dict) and type(row.get('number')) is int and row['number'] > 0
+        and isinstance(pr_number, int) and pr_number > 0
+        and row['number'] == pr_number and source == head_repository for row in run['pull_requests'])
+
+
+def merge_anchor(context):
+    value = context.get('sha') if context.get('event') == 'push' else context.get('base_sha')
+    return value if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{40}', value) else None
 
 
 def merged_pr_sources(client, run, context, cache):
-    """Only the PR GitHub says produced this exact main push; no ancestor inference."""
-    if context.get('event') != 'push' or run.get('event') != 'pull_request':
+    """Bind a candidate commit to the exact main merge or PR base, never an ancestor."""
+    anchor, head = merge_anchor(context), run.get('head_sha')
+    if not anchor or run.get('event') != 'pull_request':
         return {}
-    rows = run.get('pull_requests')
-    if not isinstance(rows, list):
+    metadata = run.get('pull_requests')
+    source = run.get('head_repository', {}).get('full_name')
+    if (not isinstance(metadata, list) or not isinstance(source, str) or not source
+            or not isinstance(head, str) or not re.fullmatch(r'[0-9a-f]{40}', head)):
         return {}
+    key = ('commit_pulls', head)
+    if key not in cache:
+        cache[key] = json.loads(client.data(f'commits/{head}/pulls?per_page=4'))
+    rows = cache[key]
+    if not isinstance(rows, list) or len(rows) > 4:
+        raise ValueError('Malformed commit PR association')
+    declared = {row.get('number') for row in metadata
+                if isinstance(row, dict) and type(row.get('number')) is int}
     result = {}
-    for row in rows[:1]:
+    for row in rows:
         number = row.get('number') if isinstance(row, dict) else None
-        if not isinstance(number, int) or number <= 0:
+        if type(number) is not int or number <= 0 or (metadata and number not in declared):
             continue
         if number not in cache:
             cache[number] = client.get(f'pulls/{number}')
         pull = cache[number]
-        if (pull.get('merged') is True and pull.get('merge_commit_sha') == context['sha']
+        if (pull.get('number') == number and pull.get('merged') is True
+                and pull.get('merge_commit_sha') == anchor
                 and pull.get('base', {}).get('ref') == context['base_branch']
-                and pull.get('base', {}).get('repo', {}).get('full_name') == client.repository):
-            result[number] = pull['head']['repo']['full_name']
+                and pull.get('base', {}).get('repo', {}).get('full_name') == client.repository
+                and pull.get('head', {}).get('repo', {}).get('full_name') == source):
+            result[number] = source
     return result
 
 
@@ -392,6 +413,147 @@ def python_command(domain):
     return prefix + 'frontend-python" ' + ' '.join(FRONTEND_TESTS)
 
 
+def executed_origins(client, run, flow, expected, now, *, artifacts=None, jobs=None):
+    if run['id'] == LEGACY['run']:
+        return legacy_origin(client, run, flow, expected, now)
+    if artifacts is None:
+        artifacts = client.get(f"actions/runs/{run['id']}/artifacts?per_page=20")['artifacts']
+    if jobs is None:
+        jobs = client.get(f"actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=30")['jobs']
+    result = {}
+    for domain in DOMAINS:
+        matches = [a for a in artifacts if isinstance(a, dict)
+                   and a.get('name') == f"ci-proof-{domain}-attempt-{run['run_attempt']}"
+                   and not a.get('expired')]
+        if len(matches) != 1:
+            continue
+        with suppress(ValueError, KeyError, TypeError, AttributeError, OSError, zipfile.BadZipFile, NotImplementedError):
+            artifact = matches[0]
+            proof = proof_zip(client.data(f"actions/artifacts/{artifact['id']}/zip"))
+            origin = validate_proof(proof, artifact, run, jobs, repository=client.repository,
+                                    domain=domain, expected=expected[domain], now=now)
+            verify_checkout(client, origin, domain, expected[domain], jobs)
+            result[domain] = origin
+    return result
+
+
+def plan_zip(raw):
+    if len(raw) > 262144:
+        raise ValueError('Oversized plan ZIP')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        entries = archive.infolist()
+        names = [entry.filename for entry in entries]
+        if len(names) != len(set(names)) or set(names) != {'ci-plan.json', 'ci-contracts/pytest.xml'}:
+            raise ValueError('Unexpected plan ZIP entries')
+        for entry in entries:
+            limit = 65536 if entry.filename == 'ci-plan.json' else 262144
+            if entry.file_size > limit or entry.flag_bits & 1 or (entry.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError('Unsafe plan ZIP entry')
+        plan = json.loads(archive.read('ci-plan.json'))
+        if not isinstance(plan, dict):
+            raise ValueError('Malformed plan')
+        return plan
+
+
+def planning_recipe(flow):
+    planner = dict(flow['jobs']['plan'])
+    permissions = planner.pop('permissions', {})
+    if permissions not in ({'contents': 'read', 'actions': 'read'},
+                           {'contents': 'read', 'actions': 'read', 'pull-requests': 'read'}):
+        raise ValueError('Unreviewed planner permissions')
+    return {'env': flow.get('env', {}), 'defaults': flow.get('defaults', {}),
+            'plan': planner, 'summary': flow['jobs']['release_checks']}
+
+
+def plan_index(client, run, artifacts, jobs, rows, flow, expected, context, linked, now):
+    """A trusted exact-anchor plan is only an index into original execution evidence."""
+    anchor = merge_anchor(context)
+    if (run.get('conclusion') != 'success' or not anchor
+            or not (linked or (run.get('event') == 'push' and run.get('head_sha') == anchor))):
+        return {}
+    matches = [a for a in artifacts if isinstance(a, dict) and a.get('name') == 'ci-plan']
+    if len(matches) != 1:
+        return {}
+    artifact = matches[0]
+    if (artifact.get('expired') or artifact.get('workflow_run', {}).get('id') != run['id']
+            or artifact.get('workflow_run', {}).get('head_sha') != run['head_sha']):
+        raise ValueError('Plan artifact owner mismatch')
+    plan = plan_zip(client.data(f"actions/artifacts/{artifact['id']}/zip"))
+    if (plan.get('format') != FORMAT or set(plan.get('domains', {})) != set(DOMAINS)
+            or not re.fullmatch(r'[0-9a-f]{40}', plan.get('sha', ''))
+            or not re.fullmatch(r'[0-9a-f]{40}', plan.get('tree', ''))):
+        raise ValueError('Invalid plan identity')
+    remote = client.get(f"contents/{WORKFLOW}?ref={plan['sha']}")
+    tested_flow = json.loads(base64.b64decode(remote['content']))
+    if planning_recipe(tested_flow) != planning_recipe(flow):
+        raise ValueError('Unreviewed plan execution recipe')
+    script = client.get(f"contents/scripts/ci_scope.py?ref={plan['sha']}")
+    approved = {row['blob'] for row in rows if row['path'] == 'scripts/ci_scope.py'}
+    if script.get('sha') not in approved | {PRIOR_PLANNER_BLOB}:
+        raise ValueError('Unreviewed planner implementation')
+    identity = {'repository': client.repository, 'workflow': WORKFLOW,
+                'run': run['id'], 'attempt': run['run_attempt']}
+    if plan.get('origin') != identity and not (
+            'origin' not in plan and script.get('sha') == PRIOR_PLANNER_BLOB and run['run_attempt'] == 1):
+        raise ValueError('Plan attempt mismatch')
+    for key in ('plan', 'release_checks'):
+        definition = tested_flow['jobs'][key]
+        found = [job for job in jobs if isinstance(job, dict) and job.get('name') == definition['name']]
+        if len(found) != 1:
+            raise ValueError('Ambiguous planning job')
+        job = found[0]
+        if (job.get('run_id') != run['id'] or job.get('run_attempt') != run['run_attempt']
+                or job.get('status') != 'completed' or job.get('conclusion') != 'success'
+                or not fresh(job.get('completed_at'), now)):
+            raise ValueError('Planning did not succeed')
+        for step in definition['steps']:
+            found_steps = [s for s in job['steps'] if s.get('name') == step['name']]
+            if len(found_steps) != 1 or found_steps[0].get('status') != 'completed' or found_steps[0].get('conclusion') != 'success':
+                raise ValueError('Required planning step did not succeed')
+        log = client.data(f"actions/jobs/{job['id']}/logs").decode('utf-8', 'replace')
+        if 'Testing exact source ' + plan['sha'] not in log:
+            raise ValueError('Planning checkout identity missing')
+    commit = client.get('git/commits/' + plan['sha'])
+    if commit.get('tree', {}).get('sha') != plan['tree']:
+        raise ValueError('Planning tree mismatch')
+    tree = client.get('git/trees/' + plan['tree'] + '?recursive=1')
+    if tree.get('truncated'):
+        raise ValueError('Truncated planning tree')
+    tested_rows = [{'path': row['path'], 'mode': row['mode'], 'blob': row['sha']}
+                   for row in tree['tree'] if row['type'] == 'blob']
+    result = {}
+    for domain, item in plan['domains'].items():
+        origin = item.get('origin')
+        if (item.get('run') is False and item.get('fingerprint') == expected[domain]
+                and fingerprint(tested_rows, tested_flow, domain) == expected[domain]
+                and isinstance(origin, dict) and origin.get('kind') in {'executed', 'legacy_verified_steps'}
+                and origin.get('repository') == client.repository and origin.get('workflow') == WORKFLOW
+                and type(origin.get('run')) is int and origin['run'] > 0):
+            result[domain] = origin
+    return result
+
+
+def indexed_origins(client, index, flow, expected, workflow_id, now, cache):
+    result = {}
+    for domain, origin in index.items():
+        run_id = origin['run']
+        if run_id not in cache:
+            cache[run_id] = {}
+            with suppress(ValueError, KeyError, TypeError, AttributeError, OSError, zipfile.BadZipFile, NotImplementedError):
+                run = client.get(f'actions/runs/{run_id}')
+                if (run.get('id') != run_id or run.get('workflow_id') != workflow_id
+                        or run.get('repository', {}).get('full_name') != client.repository
+                        or run.get('head_repository', {}).get('full_name') != client.repository
+                        or run.get('status') != 'completed' or run.get('conclusion') not in {'success', 'failure', 'timed_out'}
+                        or not fresh(run.get('updated_at'), now)):
+                    continue
+                # Never follow another plan. Only the original executed proof or fixed legacy job.
+                cache[run_id] = executed_origins(client, run, flow, expected, now)
+        if cache[run_id].get(domain) == origin:
+            result[domain] = origin
+    return result
+
+
 def select(rows, flow, *, client=None, context=None, force_full=False, now=None):
     now = now or datetime.now(UTC)
     expected = {domain: fingerprint(rows, flow, domain) for domain in DOMAINS}
@@ -417,7 +579,7 @@ def select(rows, flow, *, client=None, context=None, force_full=False, now=None)
         if not any(isinstance(run, dict) and run.get('id') == LEGACY['run'] for run in runs):
             with suppress(ValueError, KeyError, TypeError, AttributeError, OSError, NotImplementedError):
                 runs.append(client.get(f"actions/runs/{LEGACY['run']}"))
-        pulls = {}
+        pulls, originals = {}, {}
         for run in runs:
             linked = {}
             with suppress(ValueError, KeyError, TypeError, AttributeError, OSError):
@@ -428,27 +590,17 @@ def select(rows, flow, *, client=None, context=None, force_full=False, now=None)
                 continue
             try:
                 if run['id'] == LEGACY['run']:
-                    for domain, origin in legacy_origin(client, run, flow, expected, now).items():
-                        if plan['domains'][domain]['run']:
-                            plan['domains'][domain].update(run=False, reason='matching_success', origin=origin)
-                    continue
-                artifacts = client.get(f"actions/runs/{run['id']}/artifacts?per_page=20")['artifacts']
-                jobs = client.get(f"actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=30")['jobs']
-                for domain in DOMAINS:
-                    if not plan['domains'][domain]['run']:
-                        continue
-                    matches = [a for a in artifacts if isinstance(a, dict) and a.get('name') == f"ci-proof-{domain}-attempt-{run['run_attempt']}" and not a.get('expired')]
-                    if len(matches) != 1:
-                        continue
-                    artifact = matches[0]
-                    try:
-                        proof = proof_zip(client.data(f"actions/artifacts/{artifact['id']}/zip"))
-                        origin = validate_proof(proof, artifact, run, jobs, repository=client.repository,
-                                                domain=domain, expected=expected[domain], now=now)
-                        verify_checkout(client, origin, domain, expected[domain], jobs)
+                    origins = executed_origins(client, run, flow, expected, now)
+                else:
+                    artifacts = client.get(f"actions/runs/{run['id']}/artifacts?per_page=20")['artifacts']
+                    jobs = client.get(f"actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=30")['jobs']
+                    origins = executed_origins(client, run, flow, expected, now, artifacts=artifacts, jobs=jobs)
+                    with suppress(ValueError, KeyError, TypeError, AttributeError, OSError, zipfile.BadZipFile, NotImplementedError):
+                        index = plan_index(client, run, artifacts, jobs, rows, flow, expected, context, linked, now)
+                        origins.update(indexed_origins(client, index, flow, expected, workflow['id'], now, originals))
+                for domain, origin in origins.items():
+                    if plan['domains'][domain]['run']:
                         plan['domains'][domain].update(run=False, reason='matching_success', origin=origin)
-                    except (ValueError, KeyError, TypeError, AttributeError, OSError, zipfile.BadZipFile, NotImplementedError):
-                        continue
             except (ValueError, KeyError, TypeError, AttributeError, OSError, NotImplementedError):
                 continue
             if all(not item['run'] for item in plan['domains'].values()):
@@ -511,14 +663,17 @@ def main():
     pr = event.get('pull_request', {})
     context = {'event': os.environ['GITHUB_EVENT_NAME'], 'pr_number': event.get('number'),
                'head_repository': pr.get('head', {}).get('repo', {}).get('full_name'),
-               'base_branch': pr.get('base', {}).get('ref'), 'sha': sha, 'ref': os.environ.get('GITHUB_REF')}
+               'base_branch': pr.get('base', {}).get('ref'), 'base_sha': pr.get('base', {}).get('sha'),
+               'sha': sha, 'ref': os.environ.get('GITHUB_REF')}
     if context['event'] == 'push':
         context.update(head_repository=os.environ['GITHUB_REPOSITORY'], pr_number=None,
                        base_branch=context['ref'].removeprefix('refs/heads/'))
     token = os.environ.get('GITHUB_TOKEN')
     client = GitHub(os.environ['GITHUB_REPOSITORY'], token) if token else None
     plan = select(rows, flow, client=client, context=context, force_full=args.force_full.lower() == 'true')
-    plan.update(sha=sha, tree=tree)
+    plan.update(sha=sha, tree=tree, origin={'repository': os.environ['GITHUB_REPOSITORY'],
+                'workflow': WORKFLOW, 'run': int(os.environ['GITHUB_RUN_ID']),
+                'attempt': int(os.environ['GITHUB_RUN_ATTEMPT'])})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as stream:

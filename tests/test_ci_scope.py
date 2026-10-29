@@ -18,7 +18,7 @@ STAMP = (NOW - timedelta(hours=1)).isoformat()
 REPO = 'synthetic/project'
 ROWS = [{'path': p, 'mode': '100644', 'blob': str(i) * 40} for i, p in enumerate((
     'src/project_watch/studio/pipeline.py', 'frontend/src/App.tsx', 'docs/support.md',
-    'tests/test_studio.py', 'tests/test_web_preview.py', ci.WORKFLOW), 1)]
+    'tests/test_studio.py', 'tests/test_web_preview.py', ci.WORKFLOW, 'scripts/ci_scope.py'), 1)]
 CONTEXT = {'event': 'pull_request', 'pr_number': 5, 'head_repository': REPO, 'base_branch': 'main'}
 
 
@@ -380,8 +380,9 @@ MAIN = {'event': 'push', 'pr_number': None, 'head_repository': REPO,
         'base_branch': 'main', 'ref': 'refs/heads/main', 'sha': 'c' * 40}
 
 
-def main_evidence(evidence, pull):
+def main_evidence(evidence, pull, associations=None):
     original = evidence.get
+    original_data = evidence.data
     def get(path):
         if path == 'pulls/5':
             if pull is None:
@@ -389,11 +390,16 @@ def main_evidence(evidence, pull):
             return pull
         return original(path)
     evidence.get = get
+    def data(path):
+        if path == f"commits/{evidence.run['head_sha']}/pulls?per_page=4":
+            return json.dumps([{'number': 5}] if associations is None else associations).encode()
+        return original_data(path)
+    evidence.data = data
     return evidence
 
 
 def merged_pull():
-    return {'merged': True, 'merge_commit_sha': MAIN['sha'],
+    return {'number': 5, 'merged': True, 'merge_commit_sha': MAIN['sha'],
             'base': {'ref': 'main', 'repo': {'full_name': REPO}},
             'head': {'repo': {'full_name': REPO}}}
 
@@ -441,3 +447,196 @@ def test_main_push_legacy_bridge_obeys_the_same_verified_merge_association(merge
     e = main_evidence(LegacyEvidence(), pull)
     plan = ci.select(ROWS, FLOW, client=e, context=MAIN, now=NOW)
     assert all(value['run'] is not merged for value in plan['domains'].values())
+
+
+@pytest.mark.parametrize('context', [MAIN, {**CONTEXT, 'pr_number': 6, 'base_sha': MAIN['sha']}])
+@pytest.mark.parametrize('kind', [Evidence, LegacyEvidence])
+def test_empty_run_pr_metadata_uses_exact_commit_association(context, kind):
+    e = main_evidence(kind(), merged_pull())
+    e.run['pull_requests'] = []  # GitHub clears this after the PR merges.
+    plan = ci.select(ROWS, FLOW, client=e, context=context, now=NOW)
+    assert all(not value['run'] for value in plan['domains'].values())
+
+
+@pytest.mark.parametrize('fault', ['empty', 'wrong_number', 'bool_number', 'bad_shape', 'oversized',
+                                   'wrong_source', 'wrong_anchor', 'missing_base', 'bad_head',
+                                   'missing_detail_number', 'api_unavailable'])
+def test_commit_pr_fallback_never_broadens_trust(fault):
+    pull, associations = merged_pull(), [{'number': 5}]
+    context = {**CONTEXT, 'pr_number': 6, 'base_sha': MAIN['sha']}
+    e = Evidence()
+    e.run['pull_requests'] = []
+    if fault == 'empty':
+        associations = []
+    elif fault == 'wrong_number':
+        associations = [{'number': 6}]
+    elif fault == 'bool_number':
+        associations = [{'number': True}]
+    elif fault == 'bad_shape':
+        associations = {'number': 5}
+    elif fault == 'oversized':
+        associations *= 5
+    elif fault == 'wrong_source':
+        pull['head']['repo']['full_name'] = 'other/fork'
+    elif fault == 'wrong_anchor':
+        context['base_sha'] = 'd' * 40
+    elif fault == 'missing_base':
+        context.pop('base_sha')
+    elif fault == 'bad_head':
+        e.run['head_sha'] = '../other'
+    elif fault == 'missing_detail_number':
+        pull.pop('number')
+    e = main_evidence(e, pull, associations)
+    if fault == 'api_unavailable':
+        def unavailable(path):
+            raise ValueError('Synthetic GitHub permission or timeout failure')
+        e.data = unavailable
+    plan = ci.select(ROWS, FLOW, client=e, context=context, now=NOW)
+    assert all(value['run'] for value in plan['domains'].values())
+
+
+class PlanEvidence:
+    repository = REPO
+
+    def __init__(self, legacy=False):
+        self.original = LegacyEvidence() if legacy else Evidence()
+        self.run = {**copy.deepcopy(self.original.run), 'id': 200, 'head_sha': 'd' * 40,
+                    'pull_requests': []}
+        self.flow, self.rows = copy.deepcopy(FLOW), copy.deepcopy(ROWS)
+        self.script_blob = '7' * 40
+        self.pull = {**merged_pull(), 'number': 6}
+        self.plan = selected(self.original)
+        self.plan.update(sha='d' * 40, tree='e' * 40, origin={
+            'repository': REPO, 'workflow': ci.WORKFLOW, 'run': 200, 'attempt': 1})
+        self.artifact = {'id': 90, 'name': 'ci-plan', 'expired': False,
+                         'workflow_run': {'id': 200, 'head_sha': 'd' * 40}}
+        self.jobs = [{'id': i, 'name': FLOW['jobs'][key]['name'], 'run_id': 200, 'run_attempt': 1,
+                      'status': 'completed', 'conclusion': 'success', 'completed_at': STAMP,
+                      'steps': [{'name': step['name'], 'status': 'completed', 'conclusion': 'success'}
+                                for step in FLOW['jobs'][key]['steps']]}
+                     for i, key in enumerate(('plan', 'release_checks'), 50)]
+        self.requested = []
+
+    def get(self, path):
+        self.requested.append(path)
+        if path == 'actions/workflows/ci.yml':
+            return {'id': 10}
+        if path == 'actions/workflows/10/runs?per_page=12':
+            return {'workflow_runs': [self.run]}
+        if path == 'pulls/6':
+            return self.pull
+        if path == 'actions/runs/200':
+            return self.run
+        if path == f"actions/runs/{self.original.run['id']}":
+            return self.original.run
+        if path == 'actions/runs/200/artifacts?per_page=20':
+            return {'artifacts': [self.artifact]}
+        if path == 'actions/runs/200/attempts/1/jobs?per_page=30':
+            return {'jobs': self.jobs}
+        if path == 'contents/' + ci.WORKFLOW + '?ref=' + 'd' * 40:
+            return {'content': base64.b64encode(json.dumps(self.flow).encode()).decode()}
+        if path == 'contents/scripts/ci_scope.py?ref=' + 'd' * 40:
+            return {'sha': self.script_blob}
+        if path == 'git/commits/' + 'd' * 40:
+            return {'tree': {'sha': 'e' * 40}}
+        if path == 'git/trees/' + 'e' * 40 + '?recursive=1':
+            return {'truncated': False, 'tree': [{'path': r['path'], 'mode': r['mode'], 'sha': r['blob'], 'type': 'blob'} for r in self.rows]}
+        return self.original.get(path)
+
+    def data(self, path):
+        self.requested.append(path)
+        if path == 'commits/' + 'd' * 40 + '/pulls?per_page=4':
+            return json.dumps([{'number': 6}]).encode()
+        if path == 'actions/artifacts/90/zip':
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, 'w') as archive:
+                archive.writestr('ci-plan.json', json.dumps(self.plan))
+                archive.writestr('ci-contracts/pytest.xml', '<testsuite/>')
+            return stream.getvalue()
+        if path in {'actions/jobs/50/logs', 'actions/jobs/51/logs'}:
+            return ('Testing exact source ' + 'd' * 40).encode()
+        return self.original.data(path)
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_successful_plan_only_indexes_original_execution_across_repeated_merges(legacy):
+    e = PlanEvidence(legacy)
+    for merge_sha in ('c' * 40, 'f' * 40):
+        e.pull['merge_commit_sha'] = merge_sha
+        for context in ({**MAIN, 'sha': merge_sha},
+                        {**CONTEXT, 'pr_number': 7, 'base_sha': merge_sha}):
+            plan = ci.select(ROWS, FLOW, client=e, context=context, now=NOW)
+            assert all(not value['run'] for value in plan['domains'].values())
+            assert all(value['origin']['run'] == e.original.run['id'] for value in plan['domains'].values())
+    assert e.requested.count('actions/artifacts/90/zip') == 4  # No recursive plan lookup.
+
+
+@pytest.mark.parametrize('fault', ['failed_plan', 'failed_summary', 'step_skipped', 'expired', 'artifact_owner',
+                                   'attempt', 'unreviewed_script', 'unreviewed_workflow', 'tree_inputs',
+                                   'original_failed', 'original_expired', 'original_fork', 'wrong_origin',
+                                   'nested_plan', 'missing_original'])
+def test_plan_index_cannot_turn_missing_or_bad_original_evidence_green(fault):
+    e = PlanEvidence()
+    if fault == 'failed_plan':
+        e.jobs[0]['conclusion'] = 'failure'
+    elif fault == 'failed_summary':
+        e.jobs[1]['conclusion'] = 'failure'
+    elif fault == 'step_skipped':
+        e.jobs[0]['steps'][1]['conclusion'] = 'skipped'
+    elif fault == 'expired':
+        e.artifact['expired'] = True
+    elif fault == 'artifact_owner':
+        e.artifact['workflow_run']['id'] = 201
+    elif fault == 'attempt':
+        e.plan['origin']['attempt'] = 2
+    elif fault == 'unreviewed_script':
+        e.script_blob = '0' * 40
+    elif fault == 'unreviewed_workflow':
+        e.flow['jobs']['plan']['steps'][1]['run'] += ' bypass'
+    elif fault == 'tree_inputs':
+        e.rows[0]['blob'] = '0' * 40
+    elif fault == 'original_failed':
+        for job in e.original.jobs:
+            job['conclusion'] = 'failure'
+    elif fault == 'original_expired':
+        e.original.run['updated_at'] = (NOW - timedelta(days=8)).isoformat()
+    elif fault == 'original_fork':
+        e.original.run['head_repository']['full_name'] = 'other/fork'
+    else:
+        for item in e.plan['domains'].values():
+            if fault == 'wrong_origin':
+                item['origin']['job_id'] = 999
+            elif fault == 'nested_plan':
+                item['origin']['run'] = 200
+            else:
+                item['origin']['run'] = 999
+    plan = ci.select(ROWS, FLOW, client=e, context=MAIN, now=NOW)
+    assert all(value['run'] for value in plan['domains'].values())
+    assert e.requested.count('actions/artifacts/90/zip') <= 1
+
+
+def test_reviewed_prior_planner_without_attempt_identity_is_only_compatible_at_attempt_one():
+    e = PlanEvidence()
+    e.script_blob = ci.PRIOR_PLANNER_BLOB
+    e.plan.pop('origin')
+    plan = ci.select(ROWS, FLOW, client=e, context=MAIN, now=NOW)
+    assert all(not value['run'] for value in plan['domains'].values())
+    e.script_blob = '7' * 40
+    assert all(value['run'] for value in ci.select(ROWS, FLOW, client=e, context=MAIN, now=NOW)['domains'].values())
+
+
+@pytest.mark.parametrize('fault', ['traversal', 'extra_entry', 'symlink', 'oversized_entry', 'bad_json'])
+def test_plan_index_archive_rejects_unsafe_or_unexpected_members(fault):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        name = '../ci-plan.json' if fault == 'traversal' else 'ci-plan.json'
+        entry = zipfile.ZipInfo(name)
+        if fault == 'symlink':
+            entry.external_attr = 0o120777 << 16
+        payload = 'x' * 65537 if fault == 'oversized_entry' else ('[]' if fault == 'bad_json' else '{}')
+        archive.writestr(entry, payload)
+        archive.writestr('ci-contracts/pytest.xml', '<testsuite/>')
+        if fault == 'extra_entry':
+            archive.writestr('unexpected', 'data')
+    with pytest.raises(ValueError):
+        ci.plan_zip(stream.getvalue())

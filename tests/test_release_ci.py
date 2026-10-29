@@ -72,7 +72,8 @@ def test_ci_has_read_only_pinned_windows_job_with_mac_deferred():
     for name, job in jobs.items():
         assert job['runs-on'] == 'windows-2022'
         assert job.get('permissions', flow['permissions']) == (
-            {'contents': 'read', 'actions': 'read'} if name == 'plan' else {'contents': 'read'})
+            {'contents': 'read', 'actions': 'read', 'pull-requests': 'read'}
+            if name == 'plan' else {'contents': 'read'})
         assert not job.get('continue-on-error')
         for step in job['steps']:
             if 'uses' in step:
@@ -166,7 +167,7 @@ def test_candidate_gate_requires_exact_commit_and_never_publishes():
     regression = flow['jobs']['regression']
     assert regression == {'needs': 'verify', 'uses': './.github/workflows/ci.yml',
                           'with': {'force_full': True},
-                          'permissions': {'contents': 'read', 'actions': 'read'}}
+                          'permissions': {'contents': 'read', 'actions': 'read', 'pull-requests': 'read'}}
     assert flow['jobs']['review']['needs'] == ['verify', 'regression']
     raw = json.dumps(flow)
     for forbidden in ('pull_request_target', 'secrets.', 'secrets":', 'contents: write',
