@@ -73,8 +73,8 @@ class Extraction:
 
 
 class ExtractionGateway(dsh_runtime.Gateway):
-    def received(self, body):
-        """Exact legacy wire identity may replay even with old attempt hashes."""
+    def recorded(self, body):
+        """Look up exact wire states, including inherited material requests."""
         url = self.model.base_url.rstrip('/') + '/chat/completions'
         headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.model.api_key}
         wire = json.dumps(body, ensure_ascii=False).encode()
@@ -83,17 +83,24 @@ class ExtractionGateway(dsh_runtime.Gateway):
         provider = hashlib.sha256(((urlsplit(url).hostname or 'unknown') + self.model.api_key).encode()).hexdigest()
         execution = self.research.execution
         with closing(execution.store._connect()) as db:
-            row = db.execute("SELECT 1 FROM studio_job_calls WHERE job_id=? AND call_key=? AND provider=? AND status='completed'",
-                             (execution.job['id'], key, provider)).fetchone()
-            if row:
-                return True
+            states = {r[0] for r in db.execute(
+                "SELECT status FROM studio_job_calls WHERE job_id=? AND call_key=? AND provider=?",
+                (execution.job['id'], key, provider))}
             task = getattr(execution, 'task', None)
             if not task:
-                return False
-            return db.execute("SELECT 1 FROM studio_material_calls l JOIN studio_job_calls c "
+                return states
+            states.update(r[0] for r in db.execute("SELECT c.status FROM studio_material_calls l JOIN studio_job_calls c "
                 "ON c.job_id=l.job_id AND c.call_key=l.request_key WHERE l.task_id=? AND l.request_key=? "
-                "AND l.provider=? AND c.provider=? AND c.status='completed'",
-                (task['id'], key, provider, provider)).fetchone() is not None
+                "AND l.provider=? AND c.provider=?",
+                (task['id'], key, provider, provider)))
+            return states
+
+    def received(self, body):
+        return 'completed' in self.recorded(body)
+
+    def signature(self, body):
+        return 'wire-v1:' + hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
+                                                     ensure_ascii=False).encode()).hexdigest()
 
     def model_call(self, payload):
         with self.research.lock, self.research.store.write_scope(self.research.execution._guard):
@@ -109,16 +116,33 @@ class ExtractionGateway(dsh_runtime.Gateway):
                 raise ValueError('unexpected extraction tool exposure')
             body = {key: payload[key] for key in ('model', 'messages', 'tools', 'tool_choice') if key in payload}
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 4000))
-            # Preserve a settled legacy request's exact wire. Fresh extraction
-            # uses the configured allowance (bounded to 8000), including any
-            # provider reasoning tokens, instead of silently halving it.
-            if not self.received(body):
-                body['max_tokens'] = min(self.model.max_output_tokens, 8000)
+            attempted = self.research.execution.read_checkpoint(self.research.attempt_stage) or []
+            legacy = [body, {**body, 'max_tokens': min(self.model.max_output_tokens, 8000)}]
+            recorded = [(wire, self.recorded(wire)) for wire in legacy]
+            # Never turn an old unresolved request into a fresh identity by
+            # adding provider options. Also check inherited material receipts.
+            if any(states & {'started', 'unknown'} for _, states in recorded):
+                raise HttpError('request_outcome_unknown')
+            saved = next((wire for wire, states in recorded if 'completed' in states), None)
+            if saved is None:
+                saved = next((wire for wire, states in recorded
+                              if states or self.signature(wire) in attempted), None)
+            if saved is not None:
+                body = saved
+            else:
+                from project_watch.studio.llm import structured_options
+
+                body = legacy[-1]
+                options = structured_options(self.model)
+                if 'reasoning_effort' in options:
+                    body['reasoning_effort'] = options['reasoning_effort']
+                if 'thinking' in options:
+                    body['thinking'] = {'type': 'enabled' if options['thinking'] else 'disabled'}
+                # Tools return structured arguments. JSON text response mode
+                # belongs to the reviewer, not this tool-calling role.
             # Match the exact non-sorted wire serialization used by Http today.
             # Do not globally canonicalize old journalled requests.
-            signature = 'wire-v1:' + hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
-                                                              ensure_ascii=False).encode()).hexdigest()
-            attempted = self.research.execution.read_checkpoint(self.research.attempt_stage) or []
+            signature = self.signature(body)
             replay = self.received(body)
             raw = collection_context.wire(body)
             if not replay and len(raw) > collection_context.MAX_WIRE_BYTES:

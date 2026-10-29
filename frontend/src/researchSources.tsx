@@ -68,11 +68,13 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
       <div className="item-body">
         <div className="item-meta"><span className={`cat cat-${item.category}`}>{CATEGORY_LABEL[item.category]}</span>
           <span className="muted">{item.source}</span>
+          {item.processing_status === 'pending' && <span className="muted">相关性待核</span>}
           <time className="muted item-date">{item.published_at ? relTime(item.published_at) : `发表日期未提供 · 收录于 ${relTime(item.collected_at)}`}</time>
         </div>
         {href ? <a className="item-title" href={href} target="_blank" rel="noreferrer noopener">{item.title}</a> : <span className="item-title">{item.title}</span>}
         {item.snippet && <p className="item-summary">{item.snippet}</p>}
         <details className="item-reading-detail"><summary className="muted small">来源与匹配信息</summary>
+          <p className="muted small">收录于 {relTime(item.collected_at)}{text(x.doi) ? ` · DOI：${text(x.doi)}` : ''}{text(x.patent_number) ? ` · 专利号：${text(x.patent_number)}` : ''}</p>
           <p className="muted small">{item.category === 'patent' ? '检索线索；权利人及法律状态以专利登记为准。' : '相关来源；不据检索命中认定公司归属。'}
             {item.read_scope === 'summary' ? ' 当前材料为搜索摘录或摘要。' : ''}</p>
           {details.map(([label, value]) => <p key={label}><span className="muted">{label}：</span>{value}</p>)}

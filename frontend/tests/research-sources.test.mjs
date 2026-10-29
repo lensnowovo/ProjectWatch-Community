@@ -34,6 +34,7 @@ test('source rows are escaped, attribution stays a clue and no event mutation co
   assert.match(html,/检索线索/);assert.match(html,/申请人摘录/);assert.match(html,/Independent company/);assert.match(html,/发表日期未提供/);
   assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/javascript:|href=|标记重要|关联与依据 →|本公司专利布局/);
   assert.match(html,/<details/);assert.doesNotMatch(html,/<details[^>]*open/);
+  assert.match(html,/相关性待核/);
 });
 test('professional navigation counts sources even when no model event exists',()=>{
   const detail={project:{id:'synthetic'},counts:{paper:0,trial:0,patent:0},research_source_counts:{paper:4,trial:1,patent:10},jobs:[],trials:[]};
