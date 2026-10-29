@@ -226,7 +226,7 @@ def test_old_database_migration_reopen_preserves_journal(tmp_path):
     call(root, 'old')
     # Synthetic pre-feature store: only remove the three newly introduced empty/opt-in tables.
     with closing(pipeline.store._connect()) as db, db:
-        for name in ('jobs', 'projects', 'batches'):
+        for name in ('releases', 'jobs', 'projects', 'batches'):
             db.execute('DROP TABLE studio_acceptance_' + name)
         original = tuple(db.execute('SELECT * FROM studio_job_calls').fetchone())
     for _ in range(2):

@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS studio_acceptance_jobs (
  parent_job_id TEXT, root_slot TEXT,
  UNIQUE(project_id,root_slot)
 );
+CREATE TABLE IF NOT EXISTS studio_acceptance_releases (
+ batch_id TEXT PRIMARY KEY REFERENCES studio_acceptance_batches(id),
+ job_fence INTEGER NOT NULL, released_at TEXT NOT NULL
+);
 '''
 
 
@@ -110,14 +114,20 @@ def bind_root(store, batch_id, job_id, slot):
         db.execute('INSERT INTO studio_acceptance_jobs VALUES (?,?,NULL,?)', (job_id, job['project_id'], slot))
 
 
-def inherit(db, job_id, parent_id):
+def inherit(db, job_id, parent_id, *, reused=False):
     """Called in the same transaction that admits a declared child."""
     job = db.execute('SELECT * FROM studio_jobs WHERE id=?', (job_id,)).fetchone()
     row = _project(db, job['project_id'])
+    parent = db.execute('SELECT * FROM studio_acceptance_jobs WHERE job_id=?', (parent_id,)).fetchone()
+    if parent and parent['project_id'] != job['project_id']:
+        raise HttpError('acceptance_unbound_successor')
     if row is None:
         return
+    if _ordinary_after_release(db, row, job_id) and not parent:
+        if not _ordinary_after_release(db, row, parent_id):
+            raise HttpError('acceptance_old_successor')
+        return
     _active(db, row)
-    parent = db.execute('SELECT * FROM studio_acceptance_jobs WHERE job_id=?', (parent_id,)).fetchone()
     if not parent or parent['project_id'] != job['project_id'] or job['kind'] not in JOBS:
         raise HttpError('acceptance_unbound_successor')
     old = db.execute('SELECT * FROM studio_acceptance_jobs WHERE job_id=?', (job_id,)).fetchone()
@@ -125,6 +135,9 @@ def inherit(db, job_id, parent_id):
         if old['parent_job_id'] != parent_id:
             raise HttpError('acceptance_parent_changed')
         return
+    # An existing unowned job has no proven parent, even if its input matches.
+    if reused:
+        raise HttpError('acceptance_parent_unproven')
     if db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (job_id,)).fetchone():
         raise HttpError('acceptance_successor_already_started')
     db.execute('INSERT INTO studio_acceptance_jobs VALUES (?,?,?,NULL)', (job_id, job['project_id'], parent_id))
@@ -148,6 +161,8 @@ def guard_send(db, job, kind):
     row = _project(db, job['project_id'])
     if row is None:
         return
+    if _ordinary_after_release(db, row, job['id']):
+        return
     _active(db, row)
     if (job['kind'] not in JOBS or kind not in KINDS or not db.execute(
             'SELECT 1 FROM studio_acceptance_jobs WHERE job_id=? AND project_id=?',
@@ -164,12 +179,68 @@ def close(store, batch_id):
         db.execute("UPDATE studio_acceptance_batches SET state='closed' WHERE id=?", (batch_id,))
 
 
+def _ordinary_after_release(db, row, job_id):
+    """Only newly admitted, independent work may leave the closed batch fence."""
+    release = db.execute('SELECT job_fence FROM studio_acceptance_releases WHERE batch_id=?',
+                         (row['batch_id'],)).fetchone()
+    job = db.execute('SELECT rowid FROM studio_jobs WHERE id=? AND project_id=?',
+                     (job_id, row['project_id'])).fetchone()
+    if not release or not job or job[0] <= release[0]:
+        return False
+    if db.execute('SELECT 1 FROM studio_acceptance_jobs WHERE job_id=?', (job_id,)).fetchone():
+        return False
+    # A new ID with old inherited calls is still old work, not an independent round.
+    return not db.execute('SELECT 1 FROM studio_job_budget_links l JOIN studio_jobs j ON j.id=l.origin_job_id '
+                          'WHERE l.job_id=? AND j.project_id=? AND j.rowid<=? LIMIT 1',
+                          (job_id, row['project_id'], release[0])).fetchone()
+
+
+def guard_transfer(db, origin_job_id, target_job_id):
+    """Releasing a project never authorizes carrying its old work into a new round."""
+    origin = db.execute('SELECT project_id FROM studio_jobs WHERE id=?', (origin_job_id,)).fetchone()
+    row = _project(db, origin[0]) if origin else None
+    if row and _ordinary_after_release(db, row, target_job_id) and not _ordinary_after_release(db, row, origin_job_id):
+        raise HttpError('acceptance_old_successor')
+    if row and not _ordinary_after_release(db, row, origin_job_id):
+        _active(db, row)
+
+
+def release(store, batch_id):
+    """Explicit, irreversible end; retain every member, receipt and original cap."""
+    from project_watch.studio.material_ownership import project_guard
+    from project_watch.studio.recovery import project_request_holds, unknown_queries
+
+    with closing(store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        batch = db.execute('SELECT * FROM studio_acceptance_batches WHERE id=?', (batch_id,)).fetchone()
+        if not batch:
+            raise HttpError('acceptance_missing')
+        if db.execute('SELECT 1 FROM studio_acceptance_releases WHERE batch_id=?', (batch_id,)).fetchone():
+            return  # No new fence, clock or allowance on repeated release.
+        if batch['state'] == 'open' and datetime.fromisoformat(batch['deadline']) > datetime.now(UTC):
+            raise HttpError('acceptance_not_ended')
+        for row in db.execute('SELECT project_id FROM studio_acceptance_projects WHERE batch_id=?', (batch_id,)):
+            pid = row[0]
+            if db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
+                          (pid,)).fetchone():
+                raise HttpError('acceptance_not_drained')
+            project_guard(db, pid, '')
+            if project_request_holds(db, pid) or any(unknown_queries(db, pid, j[0]) for j in db.execute(
+                    'SELECT id FROM studio_jobs WHERE project_id=?', (pid,))):
+                raise HttpError('acceptance_unsettled_requests')
+        fence = db.execute('SELECT coalesce(max(rowid),0) FROM studio_jobs').fetchone()[0]
+        db.execute('INSERT INTO studio_acceptance_releases VALUES (?,?,?)',
+                   (batch_id, fence, datetime.now(UTC).isoformat()))
+
+
 def remaining(store, job):
     """Advisory closeout view only; guard_send remains the atomic authority."""
     with closing(store._connect()) as db:
         db.execute('BEGIN')
         row = _project(db, job['project_id'])
         if row is None:
+            return None
+        if _ordinary_after_release(db, row, job['id']):
             return None
         try:
             _active(db, row)

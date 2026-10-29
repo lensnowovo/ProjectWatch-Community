@@ -98,10 +98,15 @@ def test_terminal_preview_respects_boundaries(terminal, monkeypatch, boundary):
     elif boundary == 'no_dsh':
         monkeypatch.delenv('PROJECT_WATCH_DSH_RUNTIME')
     else:
-        loop.store.enqueue(loop.project_id, 'details')
+        # A separate legacy public-profile request can have an existing unknown.
+        # New details requests are now blocked BEFORE transport by the first 500;
+        # that pre-send refusal cannot manufacture the unknown this case requires.
+        loop.store.enqueue(loop.project_id, 'public_profile')
         ex = JobExecution(loop.store, loop.store.claim())
         with pytest.raises(HttpError):
             ex.call('search', 'other', helpers.lost)
+        with closing(loop.store._connect()) as db:
+            assert db.execute('SELECT status FROM studio_job_calls WHERE job_id=?', (ex.job['id'],)).fetchone()[0] == 'unknown'
         loop.store.finish(ex.job['id'], error='unknown', lease_token=ex.job['lease_token'])
     assert not recovery.preview(loop.pipeline, loop.project_id, loop.execution.job['id'])['can_recover']
 
@@ -121,8 +126,10 @@ def test_project_recovery_index_finds_completed_blocker_not_latest_failure(termi
     assert shown['advice']['action'] == 'recover' and 'HTTP 5xx' in shown['advice']['why']
 
 
-def test_new_finish_cannot_report_done_with_received_model_failure(terminal):
-    loop = terminal
+def test_new_finish_cannot_report_done_with_received_model_failure(tmp_path):
+    # No prior unresolved request: verify finish's received-500 contract itself.
+    loop = fixtures.loop.__wrapped__(tmp_path)
+    loop.store.finish(loop.execution.job['id'], lease_token=loop.execution.job['lease_token'])
     loop.store.enqueue(loop.project_id, 'details')
     execution = JobExecution(loop.store, loop.store.claim())
     execution.call('model', 'new-500', lambda: Response(500, {}, b'{}'))
@@ -130,3 +137,14 @@ def test_new_finish_cannot_report_done_with_received_model_failure(terminal):
     job = next(j for j in loop.store.jobs(loop.project_id) if j['id'] == execution.job['id'])
     assert job['status'] == 'failed' and job['retry_after'] == '9999-12-31'
     assert 'model_http_5xx' in job['error']
+
+
+def test_existing_failure_blocks_new_details_without_manufacturing_unknown(terminal):
+    loop = terminal
+    loop.store.enqueue(loop.project_id, 'details')
+    execution = JobExecution(loop.store, loop.store.claim())
+    for kind in ('search', 'model'):
+        with pytest.raises(HttpError, match='request_outcome_unknown'):
+            execution.call(kind, 'not-sent', lambda: pytest.fail('prior hold must block transport'))
+    with closing(loop.store._connect()) as db:
+        assert db.execute('SELECT count(*) FROM studio_job_calls WHERE job_id=?', (execution.job['id'],)).fetchone()[0] == 0

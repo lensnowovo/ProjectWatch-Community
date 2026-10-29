@@ -114,6 +114,15 @@ def adopt(research):
               AND t.project_id=? AND t.policy=? AND t.status='pending'
             ORDER BY j.created_at,j.id""", (pid, jid, pid, evidence_tasks.TYPED_POLICY)).fetchall()
         for job in candidates:
+            from project_watch.studio.acceptance_batch import guard_transfer
+
+            try:
+                guard_transfer(db, job['id'], jid)
+            except HttpError as exc:
+                if exc.code != 'acceptance_old_successor':
+                    raise
+                receipt['retained'].append(dict(origin=job['id'], reason='acceptance_old_successor'))
+                continue
             origin = JobExecution(execution.store, {'id': job['id']})
             def read(stage, origin=origin):
                 return origin.read_checkpoint(stage, db=db)
@@ -183,11 +192,14 @@ def adopt(research):
                 db.execute('SAVEPOINT material_transfer')
                 try:
                     take_over(execution, task['id'], db=db)
-                except ValueError as exc:
-                    if str(exc) not in ('material dispatch provenance missing', 'material checkpoint conflict'):
+                except (ValueError, HttpError) as exc:
+                    if str(exc) not in ('material dispatch provenance missing', 'material checkpoint conflict',
+                                        'acceptance_old_successor'):
                         raise
                     db.execute('ROLLBACK TO material_transfer')
-                    receipt['retained'].append(dict(task_id=task['id'], reason='material_provenance_not_reusable'))
+                    receipt['retained'].append(dict(task_id=task['id'], reason=(
+                        'acceptance_old_successor' if str(exc) == 'acceptance_old_successor'
+                        else 'material_provenance_not_reusable')))
                     continue
                 finally:
                     db.execute('RELEASE material_transfer')

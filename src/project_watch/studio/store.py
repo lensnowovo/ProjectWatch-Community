@@ -564,6 +564,9 @@ class StudioStore:
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs j WHERE j.project_id=s.project_id
                     AND (j.kind='public_profile' OR (j.kind IN ('external','external_followup')
                         AND (j.status IN ('queued','running') OR (j.status='failed' AND j.retry_after>?
+                            AND NOT EXISTS (SELECT 1 FROM studio_acceptance_jobs a
+                                JOIN studio_acceptance_projects ap ON ap.project_id=a.project_id
+                                JOIN studio_acceptance_releases ar ON ar.batch_id=ap.batch_id WHERE a.job_id=j.id)
                             AND NOT EXISTS (SELECT 1 FROM studio_jobs recovered
                                 WHERE recovered.project_id=j.project_id AND recovered.kind=j.kind
                                 AND recovered.status='done' AND recovered.rowid>j.rowid))))))""", (now(),)).fetchall()
@@ -580,6 +583,9 @@ class StudioStore:
                     AND (q.kind='external' AND q.status IN ('queued','running')
                          OR q.kind='external_followup' AND (q.status IN ('queued','running')
                              OR (q.status='failed' AND q.retry_after>?
+                                 AND NOT EXISTS (SELECT 1 FROM studio_acceptance_jobs a
+                                     JOIN studio_acceptance_projects ap ON ap.project_id=a.project_id
+                                     JOIN studio_acceptance_releases ar ON ar.batch_id=ap.batch_id WHERE a.job_id=q.id)
                                  AND NOT EXISTS (SELECT 1 FROM studio_jobs recovered
                                      WHERE recovered.project_id=q.project_id AND recovered.kind=q.kind
                                      AND recovered.status='done' AND recovered.rowid>q.rowid)))))""",
@@ -1230,29 +1236,35 @@ class StudioStore:
                     "AND kind='external_followup' AND status IN ('queued','running') "
                     "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
                 if continuation:
-                    if parent_job_id:
+                    if parent_job_id and continuation['kind'] == kind and continuation['input_version'] == input_version:
                         from project_watch.studio.acceptance_batch import inherit
 
-                        inherit(db, continuation['id'], parent_job_id)
+                        inherit(db, continuation['id'], parent_job_id, reused=True)
                     return dict(continuation)
             existing = db.execute(
                 "SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1",
                 (project_id, kind)).fetchone()
             if existing:
-                if parent_job_id:
+                if parent_job_id and existing['input_version'] == input_version:
                     from project_watch.studio.acceptance_batch import inherit
 
-                    inherit(db, existing['id'], parent_job_id)
+                    inherit(db, existing['id'], parent_job_id, reused=True)
                 return dict(existing)
             if automatic:
                 held = db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status='failed' "
                                   "AND retry_after>? AND (?='' OR input_version=?) ORDER BY created_at DESC LIMIT 1",
                                   (project_id, kind, now(), input_version, input_version)).fetchone()
-                if held:
-                    if parent_job_id:
+                released = held and db.execute('SELECT 1 FROM studio_acceptance_jobs a '
+                    'JOIN studio_acceptance_projects p ON p.project_id=a.project_id '
+                    'JOIN studio_acceptance_releases r ON r.batch_id=p.batch_id WHERE a.job_id=?', (held['id'],)).fetchone()
+                # A safely ended batch is retained history, not the retry target
+                # for a new independent periodic round. Explicit children still
+                # go through their original parent's closed fence below.
+                if held and not released:
+                    if parent_job_id and held['input_version'] == input_version:
                         from project_watch.studio.acceptance_batch import inherit
 
-                        inherit(db, held['id'], parent_job_id)
+                        inherit(db, held['id'], parent_job_id, reused=True)
                     return dict(held)
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id, project_id, kind, status, created_at,input_version) "
@@ -1308,7 +1320,7 @@ class StudioStore:
             db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)', (child_id, 'external_followup_input', encoded))
             from project_watch.studio.acceptance_batch import inherit
 
-            inherit(db, brief_id, job['id'])
+            inherit(db, brief_id, job['id'], reused=bool(brief))
             inherit(db, child_id, job['id'])
             db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
                        (job['id'], 'external_first_ready', json.dumps({'followup_id': child_id})))

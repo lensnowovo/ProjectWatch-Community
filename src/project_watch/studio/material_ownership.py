@@ -58,6 +58,9 @@ def take_over(execution, task_id, *, db=None):
         previous = task['job_id']
         if previous == next_job:
             return
+        from project_watch.studio.acceptance_batch import guard_transfer
+
+        guard_transfer(db, previous, next_job)
         old = db.execute('SELECT status FROM studio_jobs WHERE id=?', (previous,)).fetchone()
         if old[0] not in ('done', 'failed'):
             raise ValueError('previous material owner is not terminal')
