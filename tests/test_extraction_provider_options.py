@@ -128,6 +128,24 @@ def test_inherited_material_receipt_retains_exact_wire(setup, monkeypatch, cap, 
     assert sent == [legacy]
 
 
+@pytest.mark.parametrize('module,name', [
+    ('bootstrap_collection', 'CollectionGateway'), ('event_insight', 'InsightGateway'),
+    ('question_assessment', 'QuestionGateway'), ('scope_maintenance', 'ScopeGateway'),
+])
+def test_other_roles_can_borrow_received_without_extraction_inheritance(setup, module, name):
+    import importlib
+
+    gate, body, sent = gateway(setup)
+    cls = getattr(importlib.import_module('project_watch.studio.' + module), name)
+    other = object.__new__(cls)
+    other.model, other.research = gate.model, gate.research
+    assert not hasattr(other, 'recorded')
+    assert not other.received(body)
+    gate._send_model(body)
+    assert other.received(body)
+    assert len(sent) == 1
+
+
 @pytest.mark.skipif(not os.environ.get('PW_DSH_TEST_RUNTIME'), reason='requires pinned official DSH')
 def test_native_new_wire_preserves_cwd_tools_and_accepts_arguments(setup, tmp_path):
     parent, settings, _, _ = role_inputs(setup)

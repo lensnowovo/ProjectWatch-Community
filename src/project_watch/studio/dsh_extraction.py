@@ -96,7 +96,8 @@ class ExtractionGateway(dsh_runtime.Gateway):
             return states
 
     def received(self, body):
-        return 'completed' in self.recorded(body)
+        # Other role gateways borrow this method without inheriting this class.
+        return 'completed' in ExtractionGateway.recorded(self, body)
 
     def signature(self, body):
         return 'wire-v1:' + hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
