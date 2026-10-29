@@ -6,18 +6,18 @@
 </picture>
 
 <p align="center">
-  <a href="https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0-alpha.1"><img alt="版本 v0.2.0-alpha.1" src="https://img.shields.io/badge/release-v0.2.0--alpha.1-9a7838?style=flat-square"></a>
-  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-15171c?style=flat-square">
+  <a href="https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1"><img alt="Windows 预览版 0.2.0rc3" src="https://img.shields.io/badge/release-0.2.0rc3%20preview-9a7838?style=flat-square"></a>
+  <img alt="内置 Python 3.13.17" src="https://img.shields.io/badge/python-3.13.17-15171c?style=flat-square">
   <img alt="Windows x64" src="https://img.shields.io/badge/platform-Windows%20x64-15171c?style=flat-square">
   <a href="LICENSE"><img alt="许可：社区使用许可 1.0（source-available）" src="https://img.shields.io/badge/license-source--available-686257?style=flat-square"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0-alpha.1"><b>下载预览版</b></a> ·
+  <a href="https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1"><b>Windows 预览版与下载清单</b></a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="docs/developer-architecture.md">架构</a> ·
   <a href="docs/developer-known-limitations.md">已知边界</a> ·
-  <a href="docs/release-notes-v0.2.0-alpha.1.md">版本说明</a>
+  <a href="docs/releases/0.2.0rc3-preview.1.md">版本说明</a>
 </p>
 
 <br>
@@ -27,8 +27,8 @@
 它跑在你自己的电脑上，用你自己的模型与搜索配置。分析尽量附带来源，缺失信息保留为空；模型输出仍可能出错，重要结论请查看原始材料。
 
 > [!NOTE]
-> 当前公开发布为 **v0.2.0-alpha.1 开发者预览版**，维护者 **qzqzqz**。已有分析实现、提示词、规则与页面全部保留，不依赖另一个私有分析包。新的 Windows `0.2.0rc2` 仍在私下验收，进度见[发布准备状态](docs/release-readiness.md)。
-> 完整功能不代表所有场景都已生产验收；没有 Key 时可看界面，不能进行真实模型分析。
+> 本次版本为 **0.2.0rc3 Windows x64 公开预览版**，维护者 **qzqzqz** 已授权发布；以[指定版本页](https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1)实际列出的资产为准。已有分析实现保留，不依赖另一个私有分析包。
+> 安装器未签名，Mac 新版本暂缓。真实分析质量、新闻发现时效、独立用户首次使用和连续 48 小时观察尚未验证。旧版曾混写不同产品的审批范围，本版尚无真实测试证明该质量问题已消除；离线区间记录与展示也尚未实现。详见[本版限制与验收范围](docs/releases/0.2.0rc3-preview.1.md)。没有 Key 时可看界面，不能进行真实模型分析。
 
 <br>
 
@@ -67,19 +67,19 @@
 
 ## 快速开始
 
-### 普通用户版：Windows 公开预览准备中
+### 普通用户版：Windows 0.2.0rc3 公开预览
 
-维护者正在准备 Windows 公开预览版，不是稳定版。实际下载入口在最终批准后更新；
-当前候选的已知分析错误与未覆盖项见[候选说明](docs/releases/0.2.0rc2-draft.md)。
+在[本版 Release](https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1)查看 `ProjectWatch-Setup.exe`、校验清单和对应源码附件；这不是稳定版。
+资产未列出时不要改用不明安装包。已知分析错误与未覆盖项见[版本说明](docs/releases/0.2.0rc3-preview.1.md)。
 如需让自己的 Agent 排查或贡献修复，请先读[贡献入口](CONTRIBUTING.md)。
 
 | 平台 | 本轮状态 |
 | --- | --- |
-| Windows x64 | 自带 Python / Node / DSH 的标准安装器；最终候选验收中，尚未公开发布 |
-| Apple Silicon Mac（M 系列） | 已有中间应用包；实机验收暂缓，本轮先收尾 Windows，尚未公开发布 |
-| Intel Mac | 正式发行暂缓，不把历史候选当已验证版本 |
+| Windows x64 | 自带 Python / Node / DSH 的标准安装器；已完成本版隔离安装、升级和恢复验证，独立用户验收仍未完成 |
+| Apple Silicon Mac（M 系列） | 本次 rc3 新版本暂缓；旧 Release 中的 Mac 资产不代表本版已验收 |
+| Intel Mac | 本次不提供新用户包，不把历史候选当已验证版本 |
 
-正式资产会在批准后的 Release 中提供；当前顶部下载链接仍是开发者预览，不是上述桌面安装包。详见 [支持矩阵](docs/release-support-matrix.md)。
+本轮只更新指定版本的 Windows 资产，保留旧版本与旧 Mac 包。支持范围见 [支持矩阵](docs/release-support-matrix.md)。
 
 安装、首次配置、退出、备份和升级步骤见 [Windows 使用指南](docs/windows-user-guide.md)。Windows 桌面包不要求安装 Python、Node 或打开终端；源码方式仍需要开发环境。
 
@@ -87,7 +87,7 @@
 
 ### 源码开发者
 
-以下是已发布的开发者版安装方式，仍需要 Python。Mac 源码方式见 [开发指南](docs/macos-developer.md)，用户包构建见 [Mac 用户版](docs/macos-user-build.md)；构建成功不代表实机通过。
+以下是源码开发方式，仍需要 Python；普通 Windows 用户优先使用上面的安装器。Mac 源码方式见 [开发指南](docs/macos-developer.md)，用户包构建见 [Mac 用户版](docs/macos-user-build.md)；构建成功不代表实机通过。
 
 开发回归使用 Windows x64、Python 3.12；当前候选构建固定 Node.js 24.22.1。先克隆仓库，再在源码根目录运行：
 
@@ -175,7 +175,7 @@ flowchart LR
 
 第三方组件、字体及依赖继续适用各自许可，详见 [NOTICE](NOTICE)。[历史 Apache 文本](LICENSES/Apache-2.0.txt)
 保留既有授权，不把本版本新增或改许可的部分重新授权为 Apache。已有授权不会因新仓库而追溯撤回。
-本次为开发者预览，不是稳定生产版本。使用和再分发时须同时遵守第三方原有许可。
+本次为公开预览，不是稳定生产版本。使用和再分发时须同时遵守第三方原有许可。
 
 Key、真实 BP、商业返回、数据库、日志和备份必须保存在源码外。配置外部模型前确认材料披露范围，
 第三方服务的使用与转售权利需自行取得，软件许可不替代数据服务合同。

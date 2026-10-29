@@ -1,6 +1,6 @@
 # 获取帮助与报告问题
 
-当前先收尾 Windows x64；Apple Silicon Mac 验收和 Intel Mac 正式发行均暂缓。Windows 候选仍在验收，下载与支持范围以对应 Release 为准，不把候选说明视为已发布。安装、配置与升级见 [Windows 使用指南](docs/windows-user-guide.md)。
+本次 `0.2.0rc3` 预览范围为 Windows x64，维护者已授权发布；下载清单以[指定 Release](https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1)实际资产为准。Apple Silicon Mac 新版本验收和 Intel Mac 正式发行均暂缓，旧 Mac 包保留原版本边界。安装、配置与升级见 [Windows 使用指南](docs/windows-user-guide.md)，未签名、真实质量未测及其他限制见[版本说明](docs/releases/0.2.0rc3-preview.1.md)。
 
 ## 普通问题
 

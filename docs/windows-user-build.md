@@ -1,6 +1,6 @@
-# Windows 用户版（开发中，尚未发布）
+# Windows 用户版构建（0.2.0rc3 公开预览）
 
-2026-10-29 当前准备 `0.2.0rc3` 完整 Windows 候选。源码合并、安装器发行与现用实例更新分别依据实际回执；本地构建不自动改变下载状态。旧库升级修复及新制品验证状态见[发布准备状态](release-readiness.md)。Mac 验收暂缓，未签名与系统信任提示边界保留。
+2026-10-29，维护者已授权发布 `0.2.0rc3` Windows x64 预览版。已验安装器与对应附件以[指定 Release](https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1)实际清单为准；自行构建不继承已验制品身份。旧库升级修复、隔离安装及 CI 结果见[发布准备状态](release-readiness.md)。Mac 新版本验收暂缓，未签名与系统信任提示边界保留。
 
 目标：Windows x64 用户双击打开，不需要安装 Python、Node、Git，也不需要终端。界面继续在本机浏览器中使用；关闭浏览器不会关闭后台监控，从托盘退出才会等待任务结束并关闭程序。
 

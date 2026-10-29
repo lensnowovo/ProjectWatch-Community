@@ -8,12 +8,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = ('docs/acceptance/', 'docs/plans/', 'docs/handoff/', 'docs/reviews/')
 PAGES = ('README.md', 'SUPPORT.md', 'CONTRIBUTING.md', 'docs/agent-contributing.md',
-         'CHANGELOG.md', 'docs/developer-architecture.md',
+         'CHANGELOG.md', 'docs/developer-architecture.md', 'docs/developer-quickstart.md',
          'docs/release-support-matrix.md', 'docs/release-checklist.md',
          'docs/windows-clean-pc-acceptance.md', 'docs/macos-clean-pc-acceptance.md',
          'docs/windows-signing-distribution-review.md', 'docs/windows-user-build.md',
          'docs/windows-user-guide.md', 'docs/release-readiness.md',
          'docs/monitoring-acceptance-criteria.md', 'docs/releases/0.2.0rc2-draft.md',
+         'docs/releases/0.2.0rc3-preview.1.md',
          'docs/release-security-review.md', 'docs/release-third-party-scope.md')
 
 

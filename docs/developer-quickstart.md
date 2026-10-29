@@ -1,6 +1,7 @@
 # 完整开发者版：本机开发与构建
 
 当前为完整开发者预览版，保留已有分析能力。
+本次 Windows `0.2.0rc3` 用户包入口为[指定 Release](https://github.com/lensnowovo/ProjectWatch-Community/releases/tag/v0.2.0rc3-preview.1)；普通用户安装无需下面的开发环境。验收范围与限制见[版本说明](releases/0.2.0rc3-preview.1.md)。
 机构内部自用免费，对外商业服务须授权；具体条款见根目录 LICENSE，第三方许可见 NOTICE。
 模型、搜索和商业来源均由使用者自行配置；仓库不带账号或项目材料。
 
@@ -8,7 +9,7 @@
 
 Mac 用户使用 [macOS 开发者步骤](macos-developer.md)，不要执行下方 Windows PowerShell 命令或复制 Windows venv。
 
-建议 Windows x64、Python 3.12、Node.js 22+、Git。以下命令在仓库根运行。
+已验开发环境为 Windows x64、Python 3.12，前端构建使用 Node.js 24.22.1；另需 Git。以下命令在仓库根运行。
 不要复用另一个工作树的环境，也不要在旧环境里同时安装新旧产品包。
 
 ```powershell
