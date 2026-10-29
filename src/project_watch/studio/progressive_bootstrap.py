@@ -145,7 +145,7 @@ def _pending(research):
             "AND status='pending' ORDER BY rowid", (research.execution.job['id'], evidence_tasks.TYPED_POLICY))]
 
 
-def _defer(research, *, candidate_task=None):
+def _defer(research, *, candidate_task=None, reason='publication_reserve'):
     execution = research.execution
     with closing(research.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
@@ -163,10 +163,14 @@ def _defer(research, *, candidate_task=None):
                 (execution.job['id'], 'extract_attempt:' + task['id'], 'extract_result:' + task['id'])).fetchone()
             linked = db.execute('SELECT 1 FROM studio_material_calls WHERE task_id=?', (task['id'],)).fetchone()
             if not attempts and not linked:
-                receipt = dict(task_id=task['id'], policy=task['policy'], dispatch='not_started', reason='publication_reserve')
+                context = execution.read_checkpoint(evidence_tasks.DEFERRED + task['id'], db=db)
+                receipt = dict(task_id=task['id'], policy=task['policy'], dispatch='not_started',
+                               reason='material_context_limit' if context else reason)
                 db.execute('INSERT OR IGNORE INTO studio_job_checkpoints VALUES (?,?,?)',
                            (execution.job['id'], 'material_deferred:' + task['id'], json.dumps(receipt)))
-        manifest = {'reason': 'publication_reserve', 'pending_task_ids': [t['id'] for t in pending],
+        context_deferred = [t['id'] for t in pending if execution.read_checkpoint(evidence_tasks.DEFERRED + t['id'], db=db)]
+        manifest = {'reason': reason, 'pending_task_ids': [t['id'] for t in pending],
+                    'context_deferred_task_ids': context_deferred,
                     'continuation': 'material_ownership.take_over', 'requires_terminal_owner': True}
         db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
                    (execution.job['id'], CLOSEOUT, json.dumps(manifest)))
@@ -212,7 +216,11 @@ def run(research, model, http, runtime_root, directory):
         pending = _pending(research)
         if not pending:
             break
-        task = pending[0]
+        eligible = [t for t in pending if not research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id'])]
+        if not eligible:
+            _defer(research, reason='material_context_limit')
+            break
+        task = eligible[0]
         remaining = _remaining(research)
         cached = research.execution.read_checkpoint('extract_result:' + task['id']) is not None
         # A new material can send at most two model requests. Reserve the exact

@@ -13,6 +13,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 POLICY = 'event-observation-v1'
 TYPED_POLICY = 'public-record-candidate-v2'
+DEFERRED = 'extract_deferred:'
+
+
+class MaterialDeferred(Exception):
+    """A locally unsent material request; preserve evidence for later handling."""
+
+    def __init__(self, receipt):
+        self.receipt = receipt
+        super().__init__(receipt['code'])
+
+
 SCHEMA = """CREATE TABLE IF NOT EXISTS studio_evidence_tasks (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
     job_id TEXT NOT NULL REFERENCES studio_jobs(id),
@@ -143,8 +154,10 @@ item-format errors. Invalid returned structure affects only that material.
     with closing(execution.store._connect()) as db:
         execution._guard(db)
         tasks = [dict(row) for row in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
-            "AND policy=? AND status='pending' ORDER BY rowid LIMIT ?",
-            (execution.job['id'], execution.job['project_id'], policy, limit))]
+            "AND policy=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c "
+            "WHERE c.job_id=studio_evidence_tasks.job_id AND c.stage=? || studio_evidence_tasks.id) "
+            "ORDER BY rowid LIMIT ?",
+            (execution.job['id'], execution.job['project_id'], policy, DEFERRED, limit))]
     for task in tasks:
         material = MaterialExecution(execution, task)
         with closing(execution.store._connect()) as db:
@@ -155,7 +168,11 @@ item-format errors. Invalid returned structure affects only that material.
             _save(execution, task, 'rejected', {'code': 'source_withdrawn'})
             continue
         source = _input(execution, task)
-        response = extractor(source, material)
+        try:
+            response = extractor(source, material)
+        except MaterialDeferred as exc:
+            _save(execution, task, 'pending', exc.receipt)
+            continue
         try:
             proposed = (RecordProposal if policy == TYPED_POLICY else Proposal).model_validate(response)
             observations = []

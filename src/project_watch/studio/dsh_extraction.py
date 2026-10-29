@@ -5,8 +5,8 @@ from contextlib import closing
 from copy import copy
 from urllib.parse import urlsplit
 
-from project_watch.studio import dsh_runtime
-from project_watch.studio.evidence_tasks import TYPED_POLICY, Proposal
+from project_watch.studio import collection_context, dsh_runtime
+from project_watch.studio.evidence_tasks import DEFERRED, TYPED_POLICY, MaterialDeferred, Proposal
 from project_watch.studio.http import HttpError
 from project_watch.studio.news_assessment import GUIDANCE as IMPORTANCE_GUIDANCE
 
@@ -29,6 +29,8 @@ class Extraction:
         self.runtime_receipt_stage = 'extract_runtime:' + source['task_id']
         self.submission_stage = 'extract_result:' + source['task_id']
         self.attempt_stage = 'extract_attempt:' + source['task_id']
+        self.deferred_stage = DEFERRED + source['task_id']
+        self.source_identity = {k: source[k] for k in ('task_id', 'evidence_version_id') if k in source}
         self.task = json.dumps(source, ensure_ascii=False, sort_keys=True)
         if source.get('policy') == TYPED_POLICY:
             self.tools = ('pw_submit_records',)
@@ -113,6 +115,17 @@ class ExtractionGateway(dsh_runtime.Gateway):
                                                               ensure_ascii=False).encode()).hexdigest()
             attempted = self.research.execution.read_checkpoint(self.research.attempt_stage) or []
             replay = self.received(body)
+            raw = collection_context.wire(body)
+            if not replay and len(raw) > collection_context.MAX_WIRE_BYTES:
+                # Final provider body, including role prompt, schemas and history.
+                # No clipping, fake empty proposal, attempt allocation or transport.
+                receipt = dict(code='material_context_limit', dispatch='not_sent',
+                    body_bytes=len(raw), limit_bytes=collection_context.MAX_WIRE_BYTES,
+                    body_sha256=hashlib.sha256(raw).hexdigest(), **self.research.source_identity)
+                self.research.execution.checkpoint(self.research.deferred_stage, receipt)
+                self.research.state['finished'] = {'deferred': receipt}
+                return {'choices': [{'message': {'role': 'assistant', 'content': '材料已保留，待后续处理。'},
+                                     'finish_reason': 'stop'}]}
             if self.model_requests >= 2 or (not replay and signature not in attempted and len(attempted) >= 2):
                 self.research.tool(self.research.tools[0], {'invalid': 'material_turn_limit'})
                 return {'choices': [{'message': {'role': 'assistant', 'content': '本份材料提取已停止。'}, 'finish_reason': 'stop'}]}
@@ -136,6 +149,9 @@ def extract(parent, source, model, http, runtime_root, directory, *, execution=N
     role.guard()
     if role.state['finished'] is not None:
         return role.state['finished']['proposal']
+    deferred = role.execution.read_checkpoint(role.deferred_stage)
+    if deferred:
+        raise MaterialDeferred(deferred)
     gateway = ExtractionGateway(role, model, dsh_runtime.guarded_http(role, http))
     try:
         result = dsh_runtime.run_dsh(role, gateway, runtime_root, directory / role.session_id, timeout=180)
@@ -152,6 +168,8 @@ def extract(parent, source, model, http, runtime_root, directory, *, execution=N
             raise
         role.tool(role.tools[0], {'invalid': 'no_candidate_submitted'})
         result = role.state['finished']
+    if 'deferred' in result:
+        raise MaterialDeferred(result['deferred'])
     return result['proposal']
 
 
