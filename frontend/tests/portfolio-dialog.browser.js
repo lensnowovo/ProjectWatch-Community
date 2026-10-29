@@ -1,0 +1,31 @@
+// Run only against the synthetic, network-disabled preview; never a real project.
+async(page)=>{
+  await page.goto('http://127.0.0.1:55182/tests/portfolio-dialog-preview.html');
+  await page.setViewportSize({width:1440,height:1000});
+  await page.getByRole('button',{name:'表格',exact:true}).click();
+  const trigger=()=>page.getByRole('button',{name:'移出',exact:true}).first();
+  const dialog=page.getByRole('dialog',{name:'移出关注？',exact:true});
+  const size=()=>page.locator('.portfolio-wrap').evaluate(e=>({width:e.scrollWidth,left:e.scrollLeft}));
+  await trigger().waitFor();const before=await size();await trigger().click();await dialog.waitFor();
+  if(JSON.stringify(before)!==JSON.stringify(await size()))throw Error('Table moved');
+  if(await page.evaluate(()=>document.activeElement?.textContent)!=='取消')throw Error('Unsafe initial focus');
+  await page.keyboard.press('Shift+Tab');
+  if(!await dialog.evaluate(e=>e.contains(document.activeElement)))throw Error('Focus escaped');
+  await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+  if(!await trigger().evaluate(e=>e===document.activeElement))throw Error('Focus not restored');
+  if(await page.evaluate(()=>document.documentElement.dataset.removeCalls)!=='0')throw Error('Cancel submitted');
+  await page.getByRole('button',{name:'模拟失败：关闭',exact:true}).click();await trigger().click();
+  await dialog.getByRole('button',{name:'确认移出',exact:true}).evaluate(e=>{e.click();e.click();});
+  await page.keyboard.press('Escape');if(!await dialog.isVisible())throw Error('Pending request dismissed');
+  await dialog.getByText('合成失败：请稍后再试',{exact:true}).waitFor();
+  if(await page.evaluate(()=>document.documentElement.dataset.removeCalls)!=='1')throw Error('Duplicate request');
+  await dialog.getByRole('button',{name:'取消',exact:true}).click();
+  await page.getByRole('button',{name:'模拟失败：开启',exact:true}).click();await trigger().click();
+  await dialog.getByRole('button',{name:'确认移出',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  if(await page.locator('.portfolio tbody tr').count()!==4)throw Error('Missing refresh after success');
+  await page.getByRole('button',{name:'卡片',exact:true}).click();await trigger().click();await dialog.waitFor();
+  await page.keyboard.press('Escape');await page.setViewportSize({width:390,height:844});await trigger().click();
+  const fits=await dialog.evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&e.scrollWidth===e.clientWidth;});
+  if(!fits)throw Error('Narrow dialog overflow');await page.keyboard.press('Escape');
+  return {tableStable:true,keyboard:true,failureRetained:true,duplicateSuppressed:true,cards:true,narrow:true};
+};

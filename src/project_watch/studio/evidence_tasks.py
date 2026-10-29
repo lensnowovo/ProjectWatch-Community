@@ -42,6 +42,8 @@ class Proposal(BaseModel):
 
 
 class RecordCandidate(Observation):
+    importance: Literal['major', 'notable', 'routine'] | None = None
+    importance_reason: str = Field(default='', max_length=600)
     kind: Literal['business', 'product', 'person', 'founded', 'location', 'financing', 'milestone',
                   'company', 'competitor', 'industry', 'policy', 'peer', 'relation']
     label: str = Field(min_length=1, max_length=200)

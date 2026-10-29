@@ -40,6 +40,8 @@ const definitions = [
         "financing", "milestone", "company", "competitor", "industry", "policy", "peer", "relation"]},
       label: {type: "string", minLength: 1, maxLength: 200}, source_id: string,
       quote: {type: "string", minLength: 6, maxLength: 1500}, text: {type: "string", minLength: 1, maxLength: 600},
+      importance: {type: ["string", "null"], enum: ["major", "notable", "routine", null]},
+      importance_reason: {type: "string", maxLength: 600, description: "Evidence-based editorial importance: major = material change to company/product/finances/governance/competition; notable = relevant but limited or uncertain impact; routine = general information. Never rate by company name or keywords. Unknown = null."},
       reason: string, axis: string, query: string, exit_rule: string,
       relation_type: {type: "string", enum: ["technology", "product", "indication", "competitor",
         "supplier", "customer", "industry", "policy"]},

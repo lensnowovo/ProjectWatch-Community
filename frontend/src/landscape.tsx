@@ -10,11 +10,12 @@ import { EventStates, StoredEvidence } from "./MonitoringDetails";
 import { Commitments } from "./commitments";
 import { RedFlags } from "./flags";
 import { EASE, useToast } from "./motion";
-import { Empty, ErrorNote, EvidenceLinks, byNewest, seenAt, errorMessage, relTime, useAsync } from "./ui";
+import { Empty, ErrorNote, EvidenceLinks, byNewest, errorMessage, relTime, useAsync } from "./ui";
 import { insightRevision, jobWorkState, monitoringRevision, WORK_LABEL } from "./workState";
 import { companyName, competitionIdentity } from "./peerNames";
 import { Block, Figure, Reference, Skeleton, VerdictBand } from "./frame";
 import { useStagedRead, WorkIndicator } from "./Operational";
+import { inNewsWindow, newsDate, newsImportance, newsSummary } from './newsFacts';
 
 // ------------------------------------------------------------------ 公司动态
 
@@ -56,9 +57,7 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
     setData((items) => (items ?? []).map((i) => (i.id === changed.id ? changed : i)).filter((i) => i.status !== "dismissed"));
   const watchpoints = monitor.data?.watchpoints ?? [];
   const activeWatch = watchpoints.find((w) => w.id === watch);
-  const month = own.filter((i) => Date.now() - Date.parse(i.published_at ?? i.collected_at) < 30 * 86400_000);
-  const majors = month.filter((i) => i.importance === "major").length;
-  const notable = month.filter((i) => i.importance === "notable").length;
+  const {recent: month, major: majors, notable, pending, undated, recentPending} = newsSummary(own);
   const [limit, setLimit] = useState(12);
 
   if (error && !data) return <div className="tab-frame news-view">
@@ -70,15 +69,16 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
   return (
     <div className="tab-frame news-view">
       <VerdictBand eyebrow="公司进展" meta={detail.brief ? `${detail.brief.origin?.producer ?? "AI"} 整理 · ${relTime(detail.brief.updated_at)}` : "等待首次检索"}
-        title={loading && !data ? "正在读取公司动态…" : month.length ? `近 30 天 ${majors ? `${majors} 条重大、` : ""}${notable} 条值得关注的公司动态` : "近 30 天没有新的公司自身动态"}
+        title={loading && !data ? "正在读取公司动态…" : !month.length ? (undated ? `已收录 ${own.length} 条公司动态，日期待确认` : "近 30 天暂无已收录动态") : recentPending ? `近 30 天已收录 ${month.length} 条公司动态，${recentPending} 条待评级` : `近 30 天 ${majors} 条重大、${notable} 条值得关注的公司动态`}
         figures={<>
-          <Figure label="重大" value={majors} unit="条" note="近 30 天" tone={majors ? "loss" : undefined} />
-          <Figure label="值得关注" value={notable} unit="条" note="近 30 天" />
+          <Figure label="重大" value={!month.length && undated || month.length === recentPending && recentPending ? '—' : majors} unit="条" note="近 30 天 · 已评级" tone={majors ? "loss" : undefined} />
+          <Figure label="值得关注" value={!month.length && undated || month.length === recentPending && recentPending ? '—' : notable} unit="条" note="近 30 天 · 已评级" />
           <Figure label="公司动态" value={detail.counts.company ?? 0} unit="条" note="已收录 · 同一事件合并" />
           <Figure label="来源" value={new Set(own.map((i) => i.source)).size} unit="家" note="同一稿件转载合并" />
         </>} />
 
       <NewsStats items={own} counts={detail.counts} />
+      {(pending > 0 || undated > 0) && <p className="muted small">{[pending ? `${pending} 条待评级` : '', undated ? `${undated} 条日期待确认，未计入时间统计` : ''].filter(Boolean).join(' · ')}</p>}
       {!!error && <p role="alert" className="muted small">公司动态读取失败，已读取的内容保留。 <button className="link" onClick={reload}>重新读取</button></p>}
       {staged.failed && <p className="muted small">暂时无法检查更新，当前动态保留。</p>}
       {added > 0 && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); }}>新增 {added} 条 · 点击查看</button>}
@@ -129,34 +129,35 @@ export function NewsView({ detail, financing }: { detail: ProjectDetail; financi
   );
 }
 
-const WEIGHT = [["major", "重大"], ["notable", "关注"], ["routine", "一般"]] as const;
+const WEIGHT = [["major", "重大"], ["notable", "关注"], ["routine", "一般"], ["pending", "待评级"]] as const;
 
 /** 公司进展 opener: how much the company actually moved, month by month, split by how heavy each item was.
- * Dates come from seenAt, so an item dated in the future counts when it was collected, never ahead of today. */
+ * Only known dates count. Undated/future material remains available in the list. */
 export function NewsStats({ items, counts }: { items: Item[]; counts: { company?: number } }) {
   const now = new Date();
-  const months: { key: string; month: number; year: number; major: number; notable: number; routine: number }[] = [];
+  const months: { key: string; month: number; year: number; major: number; notable: number; routine: number; pending: number }[] = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, month: d.getMonth() + 1, year: d.getFullYear(), major: 0, notable: 0, routine: 0 });
+    months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, month: d.getMonth() + 1, year: d.getFullYear(), major: 0, notable: 0, routine: 0, pending: 0 });
   }
   // An item published ahead of today (a scheduled talk, a dated filing) has not happened: it stays in the
   // collected totals but never in a "what moved recently" window.
-  const nowIso = new Date().toISOString();
-  const scheduled = (i: Item) => !!i.published_at && i.published_at > nowIso;
   const byKey = new Map(months.map((m) => [m.key, m]));
   for (const item of items) {
-    if (scheduled(item)) continue;
-    const m = byKey.get(seenAt(item).slice(0, 7));
-    if (m) m[item.importance] += 1;
+    const stamp = newsDate(item);
+    if (stamp === null || stamp > now.getTime()) continue;
+    const d = new Date(stamp);
+    const m = byKey.get(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    if (m) m[newsImportance(item)] += 1;
   }
-  const total = (m: (typeof months)[number]) => m.major + m.notable + m.routine;
+  const total = (m: (typeof months)[number]) => m.major + m.notable + m.routine + m.pending;
   const peak = Math.max(1, ...months.map(total));
   // A single spike would flatten every other month; the scale tops at the peak but marks a readable middle line.
   const mid = peak > 3 ? Math.round(peak / 2) : 0;
-  const recent = items.filter((i) => !scheduled(i) && Date.now() - Date.parse(seenAt(i)) < 90 * 86400_000);
-  const recentMajor = recent.filter((i) => i.importance === "major").length;
-  const major = items.filter((i) => i.importance === "major").length;
+  const recent = items.filter((i) => inNewsWindow(i, 90, now.getTime()));
+  const recentMajor = recent.filter((i) => newsImportance(i) === "major").length;
+  const major = items.filter((i) => newsImportance(i) === "major").length;
+  const rated = items.filter((i) => newsImportance(i) !== 'pending').length;
   const confirmed = items.filter((i) => (i.source_count ?? 1) > 1).length;
   const sources = new Set(items.flatMap((i) => ((i.sources ?? []).map((s) => s.source).filter(Boolean) as string[]).concat(i.source ? [i.source] : []))).size;
   const busiest = months.reduce((a, b) => (total(b) > total(a) ? b : a), months[0]);
@@ -195,14 +196,14 @@ export function NewsStats({ items, counts }: { items: Item[]; counts: { company?
       </div>
       <dl className="ns-side">
         <div><dt>近 90 天</dt><dd><b className="num-display">{recent.length}</b> 条{recentMajor > 0 && <em>含 {recentMajor} 条重大</em>}</dd></div>
-        <div><dt>重大动态</dt><dd><b className="num-display">{major}</b> 条<em>占已收录 {items.length ? Math.round(major / items.length * 100) : 0}%</em></dd></div>
+        <div><dt>已评级重大动态</dt><dd><b className="num-display">{rated ? major : '—'}</b> 条<em>{rated ? `占已评级 ${Math.round(major / rated * 100)}%` : '尚无已评级记录'}</em></dd></div>
         <div><dt>多来源印证</dt><dd><b className="num-display">{confirmed}</b> 条<em>共 {sources} 家来源</em></dd></div>
         <div><dt>有动态的月份</dt><dd><b className="num-display">{active}</b> / 12<em>其余月份没有收录到</em></dd></div>
       </dl>
     </div>
     <ul className="qa-reading ns-reading">
       {items.length >= 6 && total(busiest) > 1 && <li>{busiest.year} 年 {busiest.month} 月最密集，当月 {total(busiest)} 条；12 个月里只有 {active} 个月有动态。</li>}
-      {quiet ? <li>近三个月没有收录到公司自身动态：可能确实安静，也可能是公开渠道没有报道。</li>
+      {quiet ? <li>近三个月暂无日期明确的已收录公司动态。</li>
         : <li>近 90 天 {recent.length} 条，其中 {recentMajor} 条判为重大。</li>}
       {items.length >= 6 && <li>{confirmed ? `${confirmed} 条有两家以上来源互相印证，其余为单一来源。` : "全部为单一来源报道，尚无多来源互相印证。"}</li>}
     </ul>

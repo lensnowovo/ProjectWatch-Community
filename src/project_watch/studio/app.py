@@ -1116,7 +1116,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                limit: int = 50, offset: int = 0):
         limit = max(1, min(limit, 200))
         return store.list_events(project_id=project_id, category=category, importance=importance,
-                                 since_days=days, limit=limit, offset=max(0, offset))
+                                 since_days=days, dated_only=True, limit=limit, offset=max(0, offset))
 
     @app.patch("/api/studio/events/{event_id}")
     def patch_event(event_id: str, body: ItemPatch):

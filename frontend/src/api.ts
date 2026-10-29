@@ -180,6 +180,8 @@ export interface DocChange {
   texts: DocChangeEntry[];
 }
 export interface Item {
+  importance_status?: 'pending' | 'assessed';
+  importance_reason?: string;
   id: string;
   project_id: string;
   project_name: string;
@@ -210,6 +212,8 @@ export interface EventSource {
   body_status: string;
 }
 interface EventDTO {
+  importance_status?: 'pending' | 'assessed';
+  importance_reason?: string;
   id: string;
   project_id: string;
   project_name: string;
@@ -227,6 +231,7 @@ interface EventDTO {
   source_count: number;
 }
 const eventToItem = (e: EventDTO): Item => ({
+  importance_status: e.importance_status, importance_reason: e.importance_reason,
   id: e.id, project_id: e.project_id, project_name: e.project_name, category: e.category,
   title: e.title, url: e.url, source: e.source, snippet: "", published_at: e.event_at ?? (e.sources[0]?.extra?.agent_result ? e.sources[0]?.published_at : null),
   collected_at: e.created_at, importance: e.importance, summary: e.summary, impact: e.impact,

@@ -6,6 +6,7 @@ import json
 from project_watch.studio import dsh_judgment_review as review
 from project_watch.studio.dsh_bootstrap import digest
 from project_watch.studio.http import HttpError
+from project_watch.studio.news_assessment import GUIDANCE as IMPORTANCE_GUIDANCE
 
 VERSION = 'public-record-admission-v2'
 CONTENT = ('label', 'text', 'date', 'reason', 'relation_type', 'relation_target', 'relation_aliases')
@@ -33,8 +34,17 @@ def payload_for(research, rows):
                 'title': ref.get('title', ''), 'read_scope': version['read_scope'],
                 'source_type': version['source_type'], 'evidence_version_id': version['id']}
             bindings[key].append(name)
+        if key.startswith('record:') and row.get('importance') and row.get('importance_reason'):
+            # Separate the editorial judgment from the factual record: an
+            # unsupported rating must not discard otherwise admitted news.
+            rating_key = 'rating:' + key
+            fields[rating_key] = json.dumps({'editorial_assessment': row['importance'],
+                'reason': row['importance_reason'], 'record': content}, ensure_ascii=False, sort_keys=True)
+            bindings[rating_key] = list(bindings[key])
     payload = {'purpose': 'public_record_admission', 'analysis': fields, 'fields': fields,
                'evidence': numbered, 'bound_evidence': bindings}
+    if any(k.startswith('rating:') for k in fields):
+        payload['importance_policy'] = IMPORTANCE_GUIDANCE + '独立复核 rating 字段的影响强度与理由；依据不足判 insufficient。'
     if any(row.get('subject') for row in rows.values()):
         payload['attribution_context'] = {'confirmed_company': research.project['legal_name'],
                                           'policy': TYPED_GUIDANCE}
@@ -159,10 +169,16 @@ def admit(research, records, old_facts):
         if batch['phase'] == 'fields':
             checked.update(saved['checked'])
         for issue in saved['issues']:
-            for field in issue.get('fields', [issue['field']]):
+            fields = issue.get('fields', [issue['field']])
+            # A disagreement between a fact and its editorial assessment
+            # invalidates the assessment, not the independently supported fact.
+            ratings = [field for field in fields if field.startswith('rating:')]
+            if ratings and sum(not field.startswith('rating:') for field in fields) <= 1:
+                fields = ratings
+            for field in fields:
                 rejected[field] = issue['code']
     guard()
-    if checked != set(rows):
+    if checked != set(payload['fields']):
         raise ValueError('record_review_coverage_invalid')
     accepted = set(rows) - set(rejected)
     receipt = {'version': VERSION, 'binding': binding, 'accepted': len(accepted),
@@ -171,5 +187,7 @@ def admit(research, records, old_facts):
     research.execution.checkpoint_chunked('dsh_record_admission', receipt)
     research.execution.checkpoint('dsh_record_review_progress', {
         'total': len(batches), 'status': 'partial' if rejected else 'passed'})
-    return ([r for r in records if 'record:' + r['key'] in accepted],
+    return ([{**r, 'importance_reviewed': 'rating:record:' + r['key'] in checked
+                and 'rating:record:' + r['key'] not in rejected}
+             if r.get('importance') else r for r in records if 'record:' + r['key'] in accepted],
             [f for f in old_facts if 'previous:' + digest(f) in accepted], receipt)

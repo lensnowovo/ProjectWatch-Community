@@ -638,6 +638,10 @@ class PublicBootstrap:
                   "exit_rule": exit_rule, "source_id": source["id"],
                   "relation_type": relation_type, "relation_target": target,
                   "relation_aliases": list(dict.fromkeys(a.strip() for a in aliases))}
+        if kind in CATEGORIES:
+            from project_watch.studio.news_assessment import candidate
+
+            record.update(candidate(args))
         retained = [r for r in self.state["records"] if r["key"] != key] + [record]
         if len(retained) > 100:
             raise ValueError("record bound reached; finish with coverage gaps")
@@ -833,7 +837,11 @@ class PublicBootstrap:
                         retained.append(claim)
                 extra.update(dsh_claims=retained, evidence_version_id=source["evidence_version_id"])
                 db.execute("UPDATE studio_items SET extra=? WHERE id=?", (json.dumps(extra, ensure_ascii=False), item["id"]))
-            self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True}])
+            from project_watch.studio.news_assessment import published_assessment
+
+            assessment = published_assessment(claims, admission.get('binding', ''))
+            self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True,
+                "importance": assessment.get('level'), "importance_assessment": assessment}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
             body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
             if source.get('material_body_evidence_id'):
@@ -845,7 +853,11 @@ class PublicBootstrap:
             if not saved.get("event_id"):
                 # News is a separate semantic projection. Its source retains
                 # its professional discovery category and immutable evidence.
-                news_items.append({**saved, 'category': category})
+                # A source publication date is not an event date. Keep raw source
+                # metadata; only an unambiguous reviewed occurrence date projects.
+                dates = {r.get('date') for r in claims if r.get('date')}
+                event_date = next(iter(dates)) if len(dates) == 1 and all(r.get('date') for r in claims) else None
+                news_items.append({**saved, 'category': category, 'published_at': event_date})
         # News views read events, not raw items. Deterministic materialization is
         # a storage projection; it must not invoke the legacy model/agent loop.
         groups, _ambiguous = events.plan_groups(news_items, self.store.recent_events(

@@ -3,6 +3,7 @@ import { EventContextDrawer } from "./eventContext";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Item } from "./api";
+import { newsDate, newsImportance } from './newsFacts';
 import { EASE } from "./motion";
 import { FeedbackMenu } from "./monitor";
 import { CATEGORY_LABEL, IMPORTANCE_LABEL, ImportanceDot, dayLabel, seenAt, relTime } from "./ui";
@@ -23,19 +24,20 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
     if (item.status === "new") set("read");
     for (const other of also) if (other.status === "new") api.setItem(other.id, "read").then(() => onChange?.({ ...other, status: "read" }));
   };
-  const when = item.published_at ?? item.collected_at;
+  const when = newsDate(item) !== null ? item.published_at : null;
+  const importance = newsImportance(item);
   const [open, setOpen] = useState(false);
   const [why, setWhy] = useState(false);
   const others = (item.source_count ?? 1) - 1;
   return (
     <motion.article
       layout="position"
-      className={`item item-${item.importance} ${item.status === "new" ? "item-new" : ""}`}
+      className={`item item-${importance} ${item.status === "new" ? "item-new" : ""}`}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1, transition: { duration: 0.4, ease: EASE, delay: Math.min(index, 12) * 0.03 } }}
       exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, marginBottom: 0, transition: { duration: 0.28, ease: EASE } }}
     >
-      <div className="item-rail"><ImportanceDot level={item.importance} /></div>
+      <div className="item-rail">{importance === 'pending' ? <span className="dot dot-pending" title="待评级" /> : <ImportanceDot level={importance} />}</div>
       <div className="item-body">
         <div className="item-meta">
           {showProject && (
@@ -45,8 +47,8 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
             <Link key={o.id} to={`/projects/${o.project_id}`} className="item-project item-project-also">{o.project_name}</Link>
           ))}
           <span className={`cat cat-${item.category}`}>{CATEGORY_LABEL[item.category] ?? item.category}</span>
-          {item.importance !== "routine" && (
-            <span className={`imp imp-${item.importance}`}>{IMPORTANCE_LABEL[item.importance]}</span>
+          {importance !== "routine" && (
+            <span className={`imp imp-${importance}`}>{importance === 'pending' ? '待评级' : IMPORTANCE_LABEL[importance]}</span>
           )}
           {watch?.map((w) => <span key={w} className="watch-tag" title="命中你的关注点">◎ {w}</span>)}
           <span className="muted">{item.source}</span>
@@ -56,13 +58,14 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
               共 {item.source_count} 篇报道 {open ? "▴" : "▾"}
             </button>
           )}
-          <time className="muted item-date" dateTime={when || undefined}>· {relTime(when)}</time>
+          <time className="muted item-date" dateTime={when || undefined}>· {when ? relTime(when) : `日期待确认 · 收录于 ${relTime(item.collected_at)}`}</time>
         </div>
         <a className="item-title" href={item.url} target="_blank" rel="noreferrer noopener"
           onClick={markRead}>
           {item.title}
         </a>
         <div className="item-reading-detail">
+        {item.importance_reason && <details><summary className="muted small">评级依据</summary><p>{item.importance_reason}</p></details>}
         {item.summary && item.summary !== item.title && <p className="item-summary">{item.summary}</p>}
         <EventContextDrawer projectId={item.project_id} projectName={item.project_name} eventId={item.id} title={item.title}
           open={why} onClose={() => setWhy(false)} />

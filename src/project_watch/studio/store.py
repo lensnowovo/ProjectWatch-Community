@@ -785,6 +785,10 @@ class StudioStore:
                   str(r.get("summary", ""))[:600], str(r.get("impact", ""))[:600],
                   r.get("category"), r["id"]) for r in results])
             for r in results:
+                if isinstance(r.get("importance_assessment"), dict):
+                    db.execute("UPDATE studio_items SET extra=json_set(COALESCE(extra,'{}'),"
+                               "'$.importance_assessment',json(?)) WHERE id=?",
+                               (json.dumps(r["importance_assessment"], ensure_ascii=False), r["id"]))
                 if isinstance(r.get("triage_binding"), dict):
                     db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
                                "'$.triage_binding',json(?)) WHERE id=?",
@@ -1111,7 +1115,7 @@ class StudioStore:
     def list_events(self, *, project_id: str | None = None, category: str | None = None,
                     importance: str | None = None, include_dismissed: bool = False,
                     since_days: int | None = None, limit: int = 100, offset: int = 0,
-                    event_ids: list[str] | None = None) -> list[dict]:
+                    event_ids: list[str] | None = None, dated_only: bool = False) -> list[dict]:
         where, args = ["1=1"], []
         if event_ids is not None:
             if not event_ids:
@@ -1132,9 +1136,15 @@ class StudioStore:
         if not include_dismissed:
             where.append("e.status != 'dismissed'")
         if since_days:
-            where.append("COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai "
-                         "WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'), e.created_at) >= ?")
+            # Internal research can still read newly collected undated evidence.
+            # Only an explicit news-date filter excludes it from time windows.
+            dated = ("COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai "
+                     "WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'))")
+            where.append((dated if dated_only else f'COALESCE({dated}, e.created_at)') + ' >= ?')
             args.append((datetime.now(UTC) - timedelta(days=since_days)).isoformat())
+            if dated_only:
+                where.append(dated + ' <= ?')
+                args.append(now())
         sql = f"""SELECT e.*, p.name AS project_name FROM studio_events e
             JOIN projects p ON p.id=e.project_id WHERE {' AND '.join(where)}
             ORDER BY COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai
@@ -1142,6 +1152,13 @@ class StudioStore:
         with closing(self._connect()) as db:
             events = [dict(r) for r in db.execute(sql, (*args, limit, offset)).fetchall()]
             ids = [e["id"] for e in events]
+            manual_ratings = {}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_feedback'").fetchone():
+                for chunk in (ids[n:n + 500] for n in range(0, len(ids), 500)):
+                    marks = ','.join('?' * len(chunk))
+                    for rating in db.execute(f"SELECT event_id,after FROM studio_feedback "
+                            f"WHERE kind='importance' AND event_id IN ({marks}) ORDER BY created_at,rowid", chunk):
+                        manual_ratings[rating['event_id']] = rating['after']
             sources: dict[str, list[dict]] = {i: [] for i in ids}
             for chunk in (ids[n:n + 500] for n in range(0, len(ids), 500)):
                 marks = ",".join("?" * len(chunk))
@@ -1154,6 +1171,11 @@ class StudioStore:
                     sources[item.pop("event_id")].append(item)
         for e in events:
             e["sources"] = sources.get(e["id"], [])
+            from project_watch.studio.news_assessment import event_assessment
+
+            e.update(event_assessment(e, e['sources']))
+            if manual_ratings.get(e['id']) == e['importance']:
+                e.update(importance_status='assessed', importance_reason='用户已调整评级')
             e["source_count"] = len(e["sources"])
             # Link to a report the reader can open directly: a read article, then any direct link.
             first = (next((i for i in e["sources"] if i.get("body_status") in ("article_body", "partial_body")), None)

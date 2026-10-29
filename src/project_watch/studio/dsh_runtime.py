@@ -277,6 +277,10 @@ class Gateway:
                 system += GUIDANCE
                 if payload.get('attribution_context'):
                     system += TYPED_GUIDANCE
+                if payload.get('importance_policy'):
+                    from project_watch.studio.news_assessment import GUIDANCE as IMPORTANCE_GUIDANCE
+
+                    system += '\n' + IMPORTANCE_GUIDANCE + '独立复核评级的影响强度和理由；依据不足判 insufficient。'
             aliases = ReviewFieldAliases(payload)
             body = {'model': self.model.model, 'stream': False, 'messages': [
                 {'role': 'system', 'content': system},

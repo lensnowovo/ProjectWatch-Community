@@ -31,6 +31,7 @@ import { FinanceAnalysisView } from "../financeAnalysis";
 import { useDossierMotion } from '../DossierMotion';
 import { ScopeReading, scopeRelations, scopeReports } from '../ScopeReading';
 import { externalCollection } from '../externalCollection';
+import { hasClinicalScope } from '../externalNavigation';
 
 /** Five sections (8945); each holds one or more of the original pages, which stay the URL's ?tab= values so every
  * existing link keeps working. */
@@ -100,8 +101,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
         ))}
       </nav>
       </div>
-      {section.id === "external" && <CategoryStrip key={data.project.id} detail={data} page={tab} go={setTab} />}
-      {section.id === "external" && <DiscoveredSources key={data.project.id} projectId={data.project.id}
+      {section.id === "external" && <CategoryStrip key={`categories:${data.project.id}`} detail={data} page={tab} go={setTab} />}
+      {section.id === "external" && <DiscoveredSources key={`sources:${data.project.id}`} projectId={data.project.id}
         revision={data.collection_report?.observed_at ?? commercialRevision} />}
       {section.id === "internal" && <PageStrip label="内部信息分区" page={tab} go={setTab} cells={internalCounts(data)} />}
       {section.pages.length > 1 && section.id !== "external" && section.id !== "internal" && <nav className="subtabs" aria-label={`${section.label}分区`}>
@@ -517,7 +518,8 @@ const STRIP: { page: Tab; label: string; cats: Category[]; always: true }[] = [
 export function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
   const {data:plan,error,loading}=useAsync(()=>api.monitoringPlan(detail.project.id),[detail.project.id,workRevision(detail)]);
   const chainCount=plan&&!error&&!loading?scopeReports(plan,scopeRelations(plan,detail.project.id,'chain')).length:null;
-  const cells = STRIP.map((s) => {
+  // Preserve an explicitly opened historical clinical URL, even before its scope loads.
+  const cells = STRIP.filter(s => s.page !== 'trials' || hasClinicalScope(detail) || page === 'trials').map((s) => {
     const collection=externalCollection(detail, s.page==='chain'?['chain']:s.page==='industry'?['industry','policy','technology']:s.cats);
     return ({ ...s,
     n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0),
