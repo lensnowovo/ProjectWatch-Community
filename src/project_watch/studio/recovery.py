@@ -84,6 +84,45 @@ def other_pending_requests(db, project_id, job_id):
         AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE})) ORDER BY c.rowid""", (project_id, job_id))]
 
 
+def project_request_holds(db, project_id, *, before=None, exclude_job=''):
+    """Stored request provenance only; never releases or retries a hold."""
+    return [dict(row) for row in db.execute(f"""SELECT c.job_id,c.kind,c.status,c.response_status,
+        c.created_at,j.status AS job_status,j.lease_until
+        FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
+        WHERE j.project_id=? AND c.job_id<>? AND (? IS NULL OR c.created_at<=?)
+        AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE})) ORDER BY c.created_at,c.job_id""",
+        (project_id, exclude_job, before, before))]
+
+
+class RefreshBlocked(ValueError):
+    def __init__(self, rows):
+        active = all(row['status'] == 'started' and row['job_status'] == 'running'
+                     and (row['lease_until'] or '') > now() for row in rows)
+        received = received_models_only(rows)
+        message = ('本次未启动新更新，先前任务仍在执行，请等待完成。' if active else
+                   '本次未执行，先前模型服务错误仍待核对。' if received else
+                   '本次未执行，先前请求结果待核。')
+        super().__init__(message + ' 已有结果保留，请在任务记录中查看对应任务；本次未发送外部请求。')
+        self.jobs = list(dict.fromkeys(row['job_id'] for row in rows))
+
+
+def enqueue_external_refresh(store, project_id):
+    """Owner refresh admission is atomic with queue creation, not retry consent."""
+    with closing(store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        # Preserve the existing in-progress/follow-up coalescing semantics.
+        active = db.execute("SELECT * FROM studio_jobs WHERE project_id=? "
+                            "AND kind IN ('external','external_followup') AND status IN ('queued','running') "
+                            "ORDER BY CASE kind WHEN 'external_followup' THEN 0 ELSE 1 END,created_at,id LIMIT 1",
+                            (project_id,)).fetchone()
+        if active:
+            return dict(active)
+        blockers = project_request_holds(db, project_id)
+        if blockers:
+            raise RefreshBlocked(blockers)
+        return store.enqueue(project_id, 'external', db=db)
+
+
 def pending_reason(rows):
     models = sum(row['kind'] == 'model' and row['status'] == 'completed' for row in rows)
     parts = []
@@ -101,6 +140,43 @@ def received_models_only(rows):
 
 def dsh_enabled():
     return bool(os.environ.get('PROJECT_WATCH_DSH_RUNTIME')) and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
+
+
+def legacy_model_scope(db, job, calls, queries=()):
+    """Frozen independent extractors use exact HTTP replay, never DSH continuation."""
+    prefix = {'business': 'business', 'details': 'detail'}.get(job['kind'])
+    if not prefix or queries or len(calls) != 1 or calls[0]['kind'] != 'model':
+        return False
+    saved = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
+                       (job['id'], prefix + '_inputs')).fetchone()
+    inputs = json.loads(saved[0]) if saved else {}
+    return bool(inputs.get('input_version') and inputs.get('binding'))
+
+
+def guard_legacy_model_dispatch(db, job, kind, request_key, next_key, provider_hash):
+    """Only an explicitly authorized exact request may cross another pending call.
+
+    Runs inside the journal transaction, after lease/cache checks and before
+    budget admission. Other requests, payloads and providers cannot use the slot.
+    """
+    if job['kind'] not in ('business', 'details'):
+        return
+    from project_watch.studio.http import HttpError
+
+    rows = db.execute(f"""SELECT c.* FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
+        WHERE j.project_id=? AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))""",
+        (job['project_id'],)).fetchall()
+    if not rows:
+        return
+    own = [r for r in rows if r['job_id'] == job['id']]
+    if kind != 'model' or not legacy_model_scope(db, job, own):
+        raise HttpError('request_outcome_unknown')
+    call = own[0]
+    slot = db.execute("SELECT 1 FROM studio_call_recoveries WHERE job_id=? AND previous_key=? "
+                      "AND base_key=? AND next_key=? AND consumed_at IS NULL",
+                      (job['id'], call['call_key'], request_key, next_key)).fetchone()
+    if not slot or call['provider'] != provider_hash:
+        raise HttpError('recovery_request_mismatch')
 
 
 def _preview(pipeline, project_id, job_id, db):
@@ -140,9 +216,9 @@ def _preview(pipeline, project_id, job_id, db):
     elif not calls and not queries:
         reason = '没有可恢复的失败请求'
     elif not saved_binding:
-        reason = '旧任务缺少恢复依据，请开始新一轮更新'
+        reason = '旧任务缺少恢复依据，暂不能安全重发。请保留回执并核对服务商记录，交维护者核验原任务；立即更新不能解除此阻挡。'
     elif saved_binding != binding:
-        reason = '公司、材料或服务配置已变化，请开始新一轮更新'
+        reason = '公司、材料或服务配置已变化，暂不能按原请求恢复。仅在输入绑定与原记录重新一致时才能恢复；无法还原时请保留回执交维护者核验，勿反复点击立即更新。'
     elif not project.get('activated') or project.get('status') != 'active':
         reason = '请先恢复项目监控'
     elif project.get('execution_mode') == 'agent':
@@ -160,9 +236,9 @@ def _preview(pipeline, project_id, job_id, db):
     blockers = []
     if dsh_enabled() and (requests.get('site') or requests.get('model')):
         blockers = other_pending_requests(db, project_id, job_id)
-        # An exact authorized GET can settle before a received model failure.
-        # This does NOT admit tools/models or cross any unknown request.
-        if blockers and not (set(requests) == {'site'} and received_models_only(blockers)):
+        # DSH keeps its global hold. Independent frozen extractors have their
+        # own exact single-request journal gate; a GET has its existing scope.
+        if blockers and not legacy_model_scope(db, job, calls, queries) and not (set(requests) == {'site'} and received_models_only(blockers)):
             reason = reason or pending_reason(blockers)
     linked = db.execute("SELECT j.id,j.status FROM studio_job_checkpoints p JOIN studio_jobs j ON j.id=p.job_id "
                         "WHERE p.stage='recovery_origin' AND j.project_id=? AND json_extract(p.data,'$.job_id')=? "
@@ -181,7 +257,9 @@ def _preview(pipeline, project_id, job_id, db):
               'requires_duplicate_cost_consent': True, 'job_status': job['status'],
               'mode': 'checkpoint_continuation' if terminal else 'model_continuation' if model_resume else 'resume',
               'continuation_job_id': linked['id'] if linked else None,
-              'notice': ('只恢复这条网页请求，模型错误仍需另行确认，完整链路暂不继续。'
+              'notice': ('只恢复此任务中明确确认的一条模型请求；其他待核请求保留，普通新更新仍受阻。'
+                         if blockers and not reason and legacy_model_scope(db, job, calls, queries) else
+                         '只恢复这条网页请求，模型错误仍需另行确认，完整链路暂不继续。'
                          if blockers and not reason else '')}
     return public, calls, queries
 

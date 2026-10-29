@@ -143,6 +143,10 @@ def advice(job: dict) -> dict:
             rerun = start the task again; settings = check a service first, then rerun; none = no execution action.
     """
     error = (job.get("error") or "").strip()
+    if job.get('runtime', {}).get('blocking_jobs'):
+        return {'why': '本次未执行，先前请求结果待核。本任务没有发送新的外部请求，已有结果保留。',
+                'todo': '查看先前任务的请求记录；核对服务商结果后按该任务的恢复流程处理，不要反复立即更新。',
+                'action': 'none'}
     if job.get('model_failure') or error.startswith('model_http_5xx'):
         return {'why': '模型服务已返回 HTTP 5xx，但没有可用回答。已有结果保留，计费仍待核。',
                 'todo': '查看恢复选项，确认指定请求后继续；不会自动重发，也不会改写历史完成记录。',

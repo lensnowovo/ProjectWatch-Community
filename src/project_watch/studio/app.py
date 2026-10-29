@@ -881,6 +881,14 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(409, '此项目由已有 Agent 更新。请到“连接 Agent”复制研究指令，不会调用内置 API。')
         if not project.get("activated"):
             raise HTTPException(409, "项目尚未启动监控")
+        if body.kind == 'external':
+            from project_watch.studio.recovery import RefreshBlocked, enqueue_external_refresh
+
+            try:
+                return enqueue_external_refresh(store, project_id)
+            except RefreshBlocked as exc:
+                return JSONResponse(status_code=409, content={'detail': str(exc), 'code': 'refresh_blocked',
+                    'dispatch': 'not_started', 'blocking_jobs': exc.jobs})
         if body.kind == 'external_followup':
             if project['status'] != 'active':
                 raise HTTPException(409, '请先恢复监控')

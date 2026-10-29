@@ -141,7 +141,7 @@ export function FinishedRow({ j }: { j: TaskJob }) {
   return <tr className={j.status === "failed" ? "task-failed" : ""}>
     <td className="muted small num">{relTime(j.finished_at)}</td>
     <td><Link to={`/projects/${j.project_id}`} className="cell-title">{j.project_name}</Link></td>
-    <td>{j.label}{j.status === "failed" && j.error && <div className="task-error">{errorMessage(j.error)}</div>}</td>
+    <td>{j.label}{j.status === "failed" && j.error && <div className="task-error">{j.runtime?.blocking_jobs?.length ? jobReason(j) : errorMessage(j.error)}</div>}</td>
     <td>{j.runtime?.state === "partial" ? <span className="tag tag-warn" title={j.runtime.label}>部分完成</span>
       : j.runtime?.state === 'needs_confirmation' ? <span className="tag tag-warn" title={j.runtime.label}>仍有请求待确认</span>
       : j.status === "done" ? <span className="tag tag-ok">成功</span> : <span className="tag tag-warn">{j.runtime?.label || "失败"}</span>}</td>
@@ -183,9 +183,9 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
     setBusy(true); setError(null);
     try { await fn(); setDone(message); onChanged(); } catch (e) { setError(e); } finally { setBusy(false); }
   };
-  return <li className="fix-row">
+  return <li className="fix-row" id={`task-${j.id}`}>
     <div className="fix-head">
-      <span className="tag tag-warn">{partial ? "部分完成" : j.runtime?.state === "needs_confirmation" ? "结果待确认" : "未完成"}</span>
+      <span className="tag tag-warn">{partial ? "部分完成" : j.runtime?.blocking_jobs?.length ? "本次未执行" : j.runtime?.state === "needs_confirmation" ? "结果待确认" : "未完成"}</span>
       <strong><Link to={`/projects/${j.project_id}`}>{j.project_name}</Link> · {j.label}</strong>
       <span className="muted small">{relTime(j.finished_at)}</span>
     </div>
@@ -198,7 +198,8 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
       {advice.action === "settings" && <Link className="btn btn-sm" to="/settings">去设置测试连接</Link>}
       {(advice.action === "rerun" || advice.action === "settings") && <button className={`btn btn-sm${advice.action === "rerun" ? " btn-primary" : ""}`} disabled={busy}
         onClick={() => act(() => api.refresh(j.project_id, j.kind), "已重新加入队列，可在上方“正在处理”里看到进度。")}>重新运行</button>}
-      {partial && <Link className="btn btn-sm" to={`/projects/${j.project_id}?tab=external`}>查看来源与结果</Link>}
+      {(partial || !!j.runtime?.blocking_jobs?.length) && <Link className="btn btn-sm" to={`/projects/${j.project_id}?tab=external`}>查看来源与结果</Link>}
+      {!!j.runtime?.blocking_jobs?.length && <button className="btn btn-sm" disabled={busy} onClick={() => setRecovering(true)}>查看先前请求</button>}
       {!j.dismissed && <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => act(() => api.dismissTask(j.id), "提醒已收起，任务结果未改变。")}>收起提醒</button>}
       {j.error && <details className="fix-raw"><summary>原始信息</summary><code>{errorMessage(j.error)}</code></details>}
     </div>}

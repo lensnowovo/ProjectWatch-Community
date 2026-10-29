@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api, type Job } from './api';
 import { ErrorNote, Spinner, useAsync } from './ui';
+import { JOB_LABEL } from './workState';
 
 const REQUEST_LABEL: Record<string, string> = {
   search: '检索', model: '模型分析', open_data: '公开数据', page: '原文读取', site: '官网页面',
@@ -57,7 +58,7 @@ export function RecoveryDialog({ projectId, job, onClose, onQueued }: {
       {!!index.data?.items.length && <ul className="recovery-requests" aria-label="待处理请求">{index.data.items.map((item, i) =>
         <li key={item.job_id}><button className="link" disabled={busy} aria-pressed={target === item.job_id}
           onClick={() => { setChosen(item.job_id); actionKey.current = crypto.randomUUID(); setError(null); }}>
-          {i + 1}. {Object.entries(item.requests).map(([kind, count]) => `${REQUEST_LABEL[kind] ?? '其他请求'} ${count} 次`).join('、')}
+          {i + 1}. {JOB_LABEL[item.kind] ?? '任务'} · {Object.entries(item.requests).map(([kind, count]) => `${REQUEST_LABEL[kind] ?? '其他请求'} ${count} 次`).join('、')}
           {item.job_status === 'done' ? ' · 历史任务已完成，仍有待处理请求' : item.can_recover ? ' · 可确认恢复' : ' · 暂不可恢复'}
         </button></li>)}</ul>}
       {index.data && !target && <p id="recovery-description">当前没有待确认的请求。</p>}

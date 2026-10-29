@@ -372,6 +372,7 @@ export interface MonitoringPlanView {
 }
 
 export interface JobRuntime {
+  blocking_jobs?: string[];
   activity?: {
     records_saved?: number | null;
     model_requests: number; model_completed: number; search_completed: number;
@@ -757,6 +758,7 @@ export interface Signals {
 export type FeedbackKind = "irrelevant" | "wrong_entity" | "bad_source" | "importance";
 
 export class ApiError extends Error {
+  code?: string;
   operationId?: string;
   operationStatus?: string;
 }
@@ -778,6 +780,7 @@ async function request<T>(method: string, url: string, body?: unknown, signal?: 
       : Array.isArray(detail) ? detail.map((d: { msg: string }) => d.msg).join("；")
       : `请求失败（${response.status}）`;
     const error = new ApiError(message);
+    if (typeof data?.code === 'string') error.code = data.code;
     if (data?.code === "operation_held" && typeof data.operation_id === "string") {
       error.operationId = data.operation_id;
       error.operationStatus = data.operation_status;

@@ -34,6 +34,15 @@ const base = () => ({ project:{id:'synthetic',activated:true,status:'active'}, j
 const job = (state='running', phase='collect') => ({id:'job',kind:'external_followup',status:state==='queued'?'queued':state==='failed'?'failed':'running',created_at:'2026-10-19T00:00:00Z',stage:'实际执行步骤',runtime:{state,label:state,phase}});
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props));
 
+test('zero-call blocked refresh points to project receipt lookup, not its own retry or dead history anchors', () => {
+  const j={...job('failed'), project_id:'synthetic',project_name:'Synthetic',label:'收集公开信息',
+    error:'request_outcome_unknown',runtime:{state:'blocked',label:'本次未执行',blocking_jobs:['old-omitted-from-list']},
+    advice:{action:'none',why:'本次未执行，先前请求结果待核。',todo:'查看先前请求'}};
+  const html=render(MemoryRouter,{children:React.createElement(FailureRow,{j,onChanged:()=>{}})});
+  assert.match(html,/本次未执行/); assert.match(html,/查看先前请求/); assert.match(html,/查看来源与结果/);
+  assert.doesNotMatch(html,/查看并重发|重新运行|href="#task-/);
+});
+
 test('an unresolved historical receipt survives unrelated later success without claiming success', () => {
   const held = {...job('done'), id:'old',status:'done',finished_at:'2026-10-19T01:00:00Z',
     runtime:{state:'needs_confirmation',label:'模型服务出错，等待确认恢复'}};

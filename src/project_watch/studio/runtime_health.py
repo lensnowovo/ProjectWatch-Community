@@ -208,6 +208,7 @@ def projection(db, job, *, worker='running', at=None):
     """Do not expose prompts, provider URLs, credentials or lease tokens."""
     at = at or datetime.now(UTC)
     state = job['status']
+    blocking_jobs = []
     labels = {'running': '正在处理', 'queued': '等待开始', 'done': '已完成', 'failed': '未完成'}
     label = labels.get(state, state)
     if state == 'running':
@@ -239,6 +240,14 @@ def projection(db, job, *, worker='running', at=None):
                 'partial', '已有结果保留，部分请求结果不明')
         elif db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job['id'],)).fetchone():
             state, label = 'needs_confirmation', '模型服务出错，等待确认恢复'
+        elif (state == 'failed' and job['error'].startswith('request_outcome_unknown')
+              and not db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (job['id'],)).fetchone()):
+            from project_watch.studio.recovery import project_request_holds
+
+            held = project_request_holds(db, job['project_id'], before=job['created_at'], exclude_job=job['id'])
+            if held:
+                blocking_jobs = list(dict.fromkeys(row['job_id'] for row in held))
+                state, label = 'blocked', '本次未执行，先前请求结果待核'
         elif job['error'].startswith('watchdog_'):
             state, label = 'stalled', '多次无进展，已停止恢复'
         elif state == 'done':
@@ -248,7 +257,8 @@ def projection(db, job, *, worker='running', at=None):
             coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='commercial_coverage'", (job['id'],)).fetchone()
             if coverage and json.loads(coverage[0]).get('partial'):
                 state, label = 'partial', '部分来源已更新，其余暂不可用'
-    return {'state': state, 'label': label, 'phase': job_phase(db, job), 'progress_at': job['progress_at'],
+    return {'state': state, 'label': label, 'blocking_jobs': blocking_jobs,
+            'phase': job_phase(db, job), 'progress_at': job['progress_at'],
             'heartbeat_at': job['heartbeat_at'], 'progress_age_seconds': seconds_since(job['progress_at'], at),
             'yield_count': job['yield_count'], 'recovery_attempts': max(0, job['attempts'] - 1),
             'activity': activity(db, job['id'], at)}

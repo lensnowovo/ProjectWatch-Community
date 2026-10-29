@@ -209,6 +209,9 @@ class JobExecution:
                     raise HttpError("request_outcome_unknown")
                 db.execute("INSERT INTO studio_job_cache_hits VALUES (?,?,1) ON CONFLICT(job_id,call_key) DO UPDATE SET hits=hits+1", (self.job["id"], key))
                 return Response(old["response_status"], json.loads(old["response_headers"]), old["response_body"])
+            from project_watch.studio.recovery import guard_legacy_model_dispatch
+
+            guard_legacy_model_dispatch(db, self.job, kind, request_key, key, provider_hash)
             # A pause is a dispatch boundary, not an uncertain transport outcome.
             if self._site_recovery:
                 from project_watch.studio.recovery import dsh_site_recovery

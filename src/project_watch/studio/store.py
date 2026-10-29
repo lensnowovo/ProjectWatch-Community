@@ -403,14 +403,14 @@ class StudioStore:
         """Watched projects. Projects removed from the watchlist keep their data but leave every list and loop."""
         with closing(self._connect()) as db:
             rows = db.execute(
-                """SELECT p.id, p.name, s.*,
+                f"""SELECT p.id, p.name, s.*,
                 (SELECT count(*) FROM studio_events e WHERE e.project_id=p.id
                    AND e.status='new' AND COALESCE(e.event_at, e.created_at) >= ?
                    AND (e.importance='major'
                         OR (e.importance='notable' AND e.category IN ('company','competitor')))) AS unread,
                 (SELECT count(*) FROM studio_events e WHERE e.project_id=p.id
                    AND e.importance='major' AND e.status != 'dismissed'
-                   AND COALESCE(e.event_at, e.created_at) >= ?) AS major_recent,
+                   AND julianday({_EVENT_NEWS_DATE}) BETWEEN julianday(?) AND julianday(?)) AS major_recent,
                 (SELECT count(*) FROM sources src WHERE src.project_id=p.id) AS documents,
                 -- A dated-ahead item (a paper's scheduled issue, a planned event) is never "latest": cap at when it was recorded.
                 (SELECT max(min(COALESCE(e.event_at, e.created_at), e.created_at)) FROM studio_events e
@@ -425,7 +425,7 @@ class StudioStore:
                 # 未读 = what deserves a look: the last UNREAD_DAYS, major items, plus notable company/competitor news.
                 # Backfilled history and routine industry/policy/paper items stay on their own tabs.
                 ((datetime.now(UTC) - timedelta(days=UNREAD_DAYS)).isoformat(),
-                 (datetime.now(UTC) - timedelta(days=30)).isoformat(), include_removed)).fetchall()
+                 (datetime.now(UTC) - timedelta(days=30)).isoformat(), now(), include_removed)).fetchall()
         return [self._project_row(r) for r in rows]
 
     def remove_project(self, project_id: str) -> None:

@@ -87,7 +87,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
       <div className="kpis kpis-split">
         <Kpi label="关注的公司" value={projects.length} />
         <Kpi label="近 30 天重大事件" value={majorRecent} tone={majorRecent ? "major" : undefined} />
-        <Kpi label="未读信息" value={unread} />
+        <div title="按近 14 天收录或事件时间统计的重大及公司/竞品关注信息；与下方按事件日期筛选的动态口径不同。"><Kpi label="未读信息" value={unread} /></div>
         <Kpi label="待核对 / 异常" value={todo} tone={todo ? "major" : undefined} />
       </div>
       <Columns main={<>

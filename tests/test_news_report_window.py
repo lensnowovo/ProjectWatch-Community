@@ -32,6 +32,7 @@ def test_unknown_invalid_old_and_future_are_not_recent_or_reported(app, date):
     assert '光启视界完成3亿元' not in client.get('/api/studio/digest.md?days=7').text
     # Reader filters do not delete the stored event or replace its date.
     assert len(store.list_events(project_id=p['id'])) == 1
+    assert next(x for x in store.list_projects() if x['id'] == p['id'])['major_recent'] == 0
 
 
 def test_offset_date_compares_instants_not_strings(app):
@@ -41,12 +42,14 @@ def test_offset_date_compares_instants_not_strings(app):
     future = (now + timedelta(hours=1)).astimezone(timezone(-timedelta(hours=12)))
     set_date(app.state.studio_store, p['id'], future.isoformat())
     assert TestClient(app).get('/api/studio/events?days=7').json() == []
+    assert app.state.studio_store.list_projects()[0]['major_recent'] == 0
     recent = (now - timedelta(hours=1)).astimezone(timezone(timedelta(hours=14)))
     set_date(app.state.studio_store, p['id'], recent.isoformat())
     client = TestClient(app)
     assert len(client.get('/api/studio/events?days=7').json()) == 1
     report = client.get('/api/studio/digest').json()
     assert report['projects'][0]['events'][0]['when'] == recent.isoformat()
+    assert app.state.studio_store.list_projects()[0]['major_recent'] == 1
 
 
 def test_dated_feed_limit_keeps_newest_instant_across_offsets(app):
@@ -97,6 +100,7 @@ def test_agent_date_is_shared_by_feed_and_report_not_acquisition(app):
     assert event['event_at'] is None and event['news_date'] == published
     report = client.get('/api/studio/digest').json()
     assert report['projects'][0]['events'][0]['when'] == published
+    assert store.list_projects()[0]['major_recent'] == 1
 
 
 def test_filtered_summary_and_removed_projects(app):

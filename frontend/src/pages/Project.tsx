@@ -3,7 +3,7 @@ import { collectionChannelExecution, collectionExecutionLabel } from "../externa
 import { DiscoveredSources } from "../DiscoveredSources";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
+import { api, ApiError, type Category, type BodyCoverage, type ProjectDetail } from "../api";
 import { CompetitionView, IndustryView, NewsView } from "../landscape";
 import { MetricsView } from "../metrics";
 import { Columns, Figure, Reference, Skeleton, TabSkeleton, VerdictBand } from "../frame";
@@ -154,15 +154,17 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
   };
   const [error, setError] = useState<unknown>(null);
   const toast = useToast();
+  const [refreshing, setRefreshing] = useState(false);
   const refresh = async () => {
-    setError(null);
+    if (refreshing) return;
+    setError(null); setRefreshing(true);
     try {
       await api.refresh(project.id, "external");
       toast("已加入更新队列");
       onReload();
     } catch (e) {
       setError(e);
-    }
+    } finally { setRefreshing(false); }
   };
   const toggle = async () => {
     const next = project.status === "paused" ? "active" : "paused";
@@ -180,12 +182,13 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
       <ProjectHeader detail={detail} goto={goto} actions={removed ? null : <>
         <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>
         {project.execution_mode === "agent" ? <Link className="btn" to={`/agents?project=${project.id}`}>用 Agent 更新</Link> : <>
-          <button className="btn" onClick={refresh} disabled={!project.activated}>立即更新</button>
+          <button className="btn" onClick={refresh} disabled={!project.activated || refreshing}>{refreshing ? '正在检查…' : '立即更新'}</button>
           <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
         </>}
       </>} status={status} />
       <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />
       <ErrorNote error={error} />
+      {error instanceof ApiError && error.code === 'refresh_blocked' && <Link className="btn btn-sm" to={`/tasks?project=${project.id}`}>查看先前任务</Link>}
     </>
   );
 }

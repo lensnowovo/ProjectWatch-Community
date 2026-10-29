@@ -75,6 +75,7 @@ export function unresolvedJobs<T extends Job & { project_id?: string }>(jobs: T[
 
 /** A quiet reminder is not a successful outcome. Never infer a retry from partial coverage. */
 export function jobReason(job: Job) {
+  if (job.runtime?.blocking_jobs?.length) return '本次未执行，先前请求结果待核；已有结果保留。';
   const state = job.runtime?.state ?? job.status;
   if (state === "partial") return job.runtime?.label?.trim() || "部分内容已完成，其余暂未取得结果。";
   if (state === "needs_confirmation") return job.runtime?.label?.includes('模型服务出错')
