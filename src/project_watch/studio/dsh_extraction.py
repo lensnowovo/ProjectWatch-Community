@@ -42,6 +42,12 @@ class Extraction:
                 'financing/milestone 为档案事实；peer/relation 必须有引用支持对象、角色和关注理由。'
                 'event_at 仅填明确事件日期，不能使用来源发布日期代替。'
                 '无可支持记录时 observations 为空。候选仍须宿主进行语义复核。' + IMPORTANCE_GUIDANCE)
+            from project_watch.studio.research_records import extraction_contract
+
+            contract = extraction_contract(self.execution, source)
+            if contract:
+                self.prompt += contract['guidance']
+                self.research_records = contract['version']
         self.state = {'finished': self.execution.read_checkpoint(self.submission_stage)}
 
     def guard(self):

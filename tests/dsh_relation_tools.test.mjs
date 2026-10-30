@@ -3,6 +3,32 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('bibliographic schema is opt-in and legacy material wires remain unchanged', () => {
+  const previous = { tools: process.env.PW_DSH_TOOLS, records: process.env.PW_DSH_RESEARCH_RECORDS };
+  try {
+    process.env.PW_DSH_TOOLS = JSON.stringify(['pw_submit_records']);
+    function schema() {
+      const tools = [];
+      apply({tools: {register(tool) { tools.push(tool); }}});
+      return tools[0].parameters.properties.observations.items.properties;
+    }
+    delete process.env.PW_DSH_RESEARCH_RECORDS;
+    const legacy = schema();
+    assert.ok(!legacy.kind.enum.includes('paper'));
+    assert.equal(legacy.research_relation, undefined);
+    process.env.PW_DSH_RESEARCH_RECORDS = 'bibliography-v1';
+    const current = schema();
+    assert.ok(current.kind.enum.includes('paper') && current.kind.enum.includes('patent'));
+    assert.deepEqual(current.research_relation.enum, ['author_affiliation', 'applicant', 'technical_relevance', 'unverified']);
+    delete process.env.PW_DSH_RESEARCH_RECORDS;
+    assert.deepEqual(schema(), legacy);
+  } finally {
+    for (const [key, value] of [['PW_DSH_TOOLS', previous.tools], ['PW_DSH_RESEARCH_RECORDS', previous.records]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 test('independent question tools require an answer state without legacy judgment or source tools', () => {
   const previous = process.env.PW_DSH_TOOLS;
   try {

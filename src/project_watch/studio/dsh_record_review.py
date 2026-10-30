@@ -25,6 +25,8 @@ def payload_for(research, rows):
         content = {k: row[k] for k in CONTENT if row.get(k)}
         if row.get('subject'):
             content.update(subject=row['subject'], kind=row['kind'])
+        if row.get('research_metadata'):
+            content.update(research_metadata=row['research_metadata'], research_relation=row['research_relation'])
         fields[key] = json.dumps(content, ensure_ascii=False, sort_keys=True)
         bindings[key] = []
         for ref in row['refs']:
@@ -48,6 +50,10 @@ def payload_for(research, rows):
     if any(row.get('subject') for row in rows.values()):
         payload['attribution_context'] = {'confirmed_company': research.project['legal_name'],
                                           'policy': TYPED_GUIDANCE}
+    if any(row.get('research_metadata') for row in rows.values()):
+        from project_watch.studio.research_records import GUIDANCE
+
+        payload['research_policy'] = GUIDANCE + '逐项复核机构与作者的实际关系、申请人及法律状态，不能以检索词代替证据。'
     return payload
 
 
@@ -90,6 +96,10 @@ def admission_plan(research, records, old_facts):
     # must not discard a refreshed reference before admission has reviewed it.
     rows = {k: r for k, r in pool.items() if research.partition_public_facts([r])[0]}
     rejected = {k: 'references_unavailable' for k in pool if k not in rows}
+    for key, row in list(rows.items()):
+        if row.get('kind') in ('paper', 'patent') and row.get('research_relation') in (None, 'unverified'):
+            rejected[key] = 'research_relation_unverified'
+            del rows[key]
     generation = research.pipeline.evidence.dependencies.generation(research.project_id)
     payload = payload_for(research, rows)
     binding = digest([VERSION, GUIDANCE, review.VERSION, review.SYSTEM, review.CONSISTENCY_SYSTEM,

@@ -110,6 +110,10 @@ export function apply(ctx) {
     if (x[0] === "pw_submit_records") {
       const properties = { ...x[2].observations.items.properties };
       for (const key of ["source_id", "quote", "exit_rule"]) delete properties[key];
+      if (process.env.PW_DSH_RESEARCH_RECORDS === "bibliography-v1") {
+        properties.kind = {...properties.kind, enum: [...properties.kind.enum, "paper", "patent"]};
+        properties.research_relation = {type: "string", enum: ["author_affiliation", "applicant", "technical_relevance", "unverified"]};
+      }
       return [x[0], x[1], { observations: {...x[2].observations,
         items: {...x[2].observations.items, properties}} }, x[3]];
     }

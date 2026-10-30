@@ -14,7 +14,7 @@ from project_watch.studio import (
     dsh_record_review,
     evidence_tasks,
 )
-from project_watch.studio.dsh_bootstrap import CATEGORIES, COVERAGE
+from project_watch.studio.dsh_bootstrap import COVERAGE, EVENT_CATEGORIES
 from project_watch.studio.http import HttpError
 from project_watch.studio.material_ownership import project_guard
 
@@ -80,7 +80,7 @@ def _map_records(research, *, task_id=None):
             raise ValueError('material page evidence binding changed')
         record = research.store.evidence.get(research.project_id, task['evidence_version_id'], include_internal=False)
         for index, candidate in enumerate(result['observations']):
-            if research.topic_projection and candidate['kind'] not in CATEGORIES:
+            if research.topic_projection and candidate['kind'] not in EVENT_CATEGORIES:
                 continue  # Keep immutable candidates without changing company scope/profile.
             ref = result['refs'][candidate['refs'][0]]
             part = record['parts'][ref['part_index']]['text']
@@ -210,7 +210,7 @@ def run(research, model, http, runtime_root, directory):
     def extract(source, material):
         source = {**source, 'project': {'legal_name': research.project['legal_name']}}
         if research.topic_projection:
-            source.update(purpose='question_news_only', allowed_kinds=list(CATEGORIES), question=research.topic_request['question'])
+            source.update(purpose='question_news_only', allowed_kinds=list(EVENT_CATEGORIES), question=research.topic_request['question'])
         return dsh_extraction.extract(research, source, model, http, runtime_root, directory, execution=material)
 
     _map_records(research)
@@ -230,10 +230,14 @@ def run(research, model, http, runtime_root, directory):
         task = eligible[0]
         remaining = _remaining(research)
         cached = research.execution.read_checkpoint('extract_result:' + task['id']) is not None
+        from project_watch.studio.research_records import proposal
+
+        structured = proposal(research.execution, task, evidence_tasks._input(research.execution, task))
         # A new material can send at most two model requests. Reserve the exact
         # existing admission plan and at least one review for its first candidate.
         # A saved proposal needs no transport and remains locally consumable.
-        if not cached and remaining is not None and remaining < 2 + max(1, _review_calls(research)):
+        extraction_cost = 0 if structured is not None else 2
+        if not cached and remaining is not None and remaining < extraction_cost + max(1, _review_calls(research)):
             if remaining == 0 and not research.state['records'] and not research.execution.budget_used('model'):
                 raise HttpError('request_budget')
             _defer(research)

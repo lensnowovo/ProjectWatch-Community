@@ -31,6 +31,7 @@ from project_watch.studio.public_reading import read_page
 from project_watch.studio.settings import research_binding_settings
 
 CATEGORIES = ("company", "competitor", "industry", "policy")
+EVENT_CATEGORIES = (*CATEGORIES, 'paper', 'patent')
 COVERAGE = ("company", "products", "people", "competitor", "industry", "policy")
 TOOLS = ("pw_search", "pw_collect", "pw_read", "pw_record", "pw_status", "pw_finish")
 HALTS = {"request_outcome_unknown", "request_budget", "provider_backoff", "project_paused"}
@@ -584,7 +585,7 @@ class PublicBootstrap:
 
     def pw_record(self, args):
         kind = text_arg(args, "kind", 30)
-        if kind not in KINDS | set(CATEGORIES) | {"peer", "watch", "relation"}:
+        if kind not in KINDS | set(EVENT_CATEGORIES) | {"peer", "watch", "relation"}:
             raise ValueError("invalid kind")
         source = self.source(text_arg(args, "source_id", 20))
         issues = []
@@ -638,7 +639,13 @@ class PublicBootstrap:
                   "exit_rule": exit_rule, "source_id": source["id"],
                   "relation_type": relation_type, "relation_target": target,
                   "relation_aliases": list(dict.fromkeys(a.strip() for a in aliases))}
-        if kind in CATEGORIES:
+        if kind in ('paper', 'patent'):
+            from project_watch.studio.research_records import attach
+
+            record['research_relation'] = args.get('research_relation')
+            record['research_metadata'] = attach(self.store, self.project_id, source, kind,
+                                                 record['research_relation'], reason)
+        if kind in EVENT_CATEGORIES:
             from project_watch.studio.news_assessment import candidate
 
             record.update(candidate(args))
@@ -650,7 +657,7 @@ class PublicBootstrap:
 
     def pw_status(self, args):
         counts = {kind: sum(r["kind"] == kind for r in self.state["records"])
-                  for kind in sorted(KINDS | set(CATEGORIES) | {"peer", "watch", "relation"})}
+                  for kind in sorted(KINDS | set(EVENT_CATEGORIES) | {"peer", "watch", "relation"})}
         return {"sources": len(self.state["sources"]), "records": counts,
                 "searches": len(self.state["searches"]), "source_errors": self.state["errors"],
                 "collection": collection_dsh.coverage(self),
@@ -785,7 +792,7 @@ class PublicBootstrap:
         for row in records:
             if row["kind"] in KINDS:
                 new_facts.append({k: row[k] for k in ("kind", "label", "text", "date", "refs", "subject") if k in row})
-            if row["kind"] in CATEGORIES:
+            if row["kind"] in EVENT_CATEGORIES:
                 source = self.source(row["source_id"])
                 news.setdefault(urldefrag(source["url"])[0], []).append(row)
         # Reuse legacy category-based keys as well as new URL-based keys, without
@@ -822,7 +829,9 @@ class PublicBootstrap:
                 "key": key, "title": source["title"], "url": source["url"], "source": source["source"],
                 "published_at": source["published_at"], "snippet": source["excerpt"][:5000],
                 "extra": {"dsh_bootstrap": True, "evidence_version_id": source["evidence_version_id"],
-                          "dsh_claims": [{k: row[k] for k in ("kind", "text", "refs", "subject") if k in row} for row in claims]}}])
+                          "dsh_claims": [{k: row[k] for k in ("kind", "text", "refs", "subject", "research_relation",
+                                                            "research_metadata", "reason")
+                                         if k in row and (k != "reason" or row["kind"] in ("paper", "patent"))} for row in claims]}}])
             item = self.store.item_by_key(self.project_id, key)
             # INSERT OR IGNORE deliberately preserves user state. Append new
             # claims separately so later categories do not erase prior findings.
@@ -832,7 +841,9 @@ class PublicBootstrap:
                 extra = json.loads(db.execute("SELECT extra FROM studio_items WHERE id=?", (item["id"],)).fetchone()[0] or "{}")
                 retained = list(extra.get("dsh_claims") or [])
                 for row in claims:
-                    claim = {k: row[k] for k in ("kind", "text", "refs", "subject") if k in row}
+                    claim = {k: row[k] for k in ("kind", "text", "refs", "subject", "research_relation",
+                                               "research_metadata", "reason")
+                                         if k in row and (k != "reason" or row["kind"] in ("paper", "patent"))}
                     if claim not in retained:
                         retained.append(claim)
                 extra.update(dsh_claims=retained, evidence_version_id=source["evidence_version_id"])
@@ -860,8 +871,18 @@ class PublicBootstrap:
                 news_items.append({**saved, 'category': category, 'published_at': event_date})
         # News views read events, not raw items. Deterministic materialization is
         # a storage projection; it must not invoke the legacy model/agent loop.
-        groups, _ambiguous = events.plan_groups(news_items, self.store.recent_events(
-            self.project_id, days=events.lookback_days(news_items)))
+        # Bibliographic identities are not news-title clusters. Similar titles
+        # may be distinct studies or application/grant documents. The retained
+        # source item's event_id provides replay idempotence above; cross-provider
+        # identity reconciliation is deliberately not inferred from wording.
+        ordinary = [item for item in news_items if item['category'] not in ('paper', 'patent')]
+        groups, _ambiguous = events.plan_groups(ordinary, self.store.recent_events(
+            self.project_id, days=events.lookback_days(ordinary)))
+        for item in news_items:
+            if item['category'] in ('paper', 'patent'):
+                group = events.Group(category=item['category'], titles=[], when=events.item_time(item))
+                group.add(item)
+                groups.append(group)
         for group in groups:
             if not group.items:
                 continue

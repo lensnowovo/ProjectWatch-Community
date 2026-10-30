@@ -56,7 +56,8 @@ class RecordCandidate(Observation):
     importance: Literal['major', 'notable', 'routine'] | None = None
     importance_reason: str = Field(default='', max_length=600)
     kind: Literal['business', 'product', 'person', 'founded', 'location', 'financing', 'milestone',
-                  'company', 'competitor', 'industry', 'policy', 'peer', 'relation']
+                  'company', 'competitor', 'industry', 'policy', 'peer', 'relation', 'paper', 'patent']
+    research_relation: Literal['author_affiliation', 'applicant', 'technical_relevance', 'unverified'] | None = None
     label: str = Field(min_length=1, max_length=200)
     subject: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=600)
@@ -176,7 +177,11 @@ item-format errors. Invalid returned structure affects only that material.
             continue
         source = _input(execution, task)
         try:
-            response = extractor(source, material)
+            from project_watch.studio.research_records import proposal
+
+            response = proposal(execution, task, source) if policy == TYPED_POLICY else None
+            if response is None:
+                response = extractor(source, material)
         except MaterialDeferred as exc:
             _save(execution, task, 'pending', exc.receipt)
             if exc.receipt['code'] == 'material_output_limit':

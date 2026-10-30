@@ -99,11 +99,14 @@ def inputs(pipeline, project_id, versions, *, db, only_object=None):
                     if part[ref['start']:ref['end']] != ref['quote']:
                         raise ValueError('event claim evidence changed')
                     identity = digest([event_id, ref['evidence_version_id'], ref['part_index'], ref['start'], ref['end']])
+                    research = claim.get('research_metadata') if claim.get('kind') in ('paper', 'patent') else None
                     item['numbered'].setdefault(identity, dict(kind='public', id=event_id, text=claim['text'],
-                        title=source['title'], context=ref['quote'], url=source['url'], source=source['source'],
+                        title=source['title'], context=part if research else ref['quote'], url=source['url'], source=source['source'],
                         group=event['fields']['category'], date=source.get('published_at') or '',
                         event_at=event['fields'].get('event_at'), read_scope=evidence['read_scope'],
-                        source_type=evidence['source_type'], evidence_version_id=evidence['id'], located_ref=ref))
+                        source_type=evidence['source_type'], evidence_version_id=evidence['id'], located_ref=ref,
+                        **({'research_metadata': research, 'research_relation': claim['research_relation'],
+                            'research_relation_reason': claim.get('reason', '')} if research else {})))
                     item['evidence_ids'].append(evidence['id'])
                 item['event_versions'][event_id] = revision
                 matched.add(target)
