@@ -3,6 +3,32 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { apply } from "../src/project_watch/studio/dsh_tools.mjs";
 
+test('new retrieval tools are frozen opt-in; legacy schema does not change', () => {
+  const previous = {...process.env};
+  const schema = () => {
+    const tools = [];
+    apply({tools: {register(tool) {tools.push(tool);}}});
+    return tools.find(t => t.name === 'pw_collect').parameters;
+  };
+  try {
+    process.env.PW_DSH_TOOLS = JSON.stringify(['pw_collect', 'pw_finish']);
+    delete process.env.PW_DSH_RETRIEVAL_CONTRACT;
+    const legacy = schema();
+    assert.ok(!legacy.properties.adapter.enum.includes('google_patent'));
+    process.env.PW_DSH_RETRIEVAL_CONTRACT = 'evidence-query-v2';
+    const current = schema();
+    assert.ok(current.properties.adapter.enum.includes('europepmc_affiliation'));
+    assert.ok(current.properties.adapter.enum.includes('google_patent'));
+    assert.ok(current.properties.relationship.enum.includes('subsidiary'));
+    delete process.env.PW_DSH_RETRIEVAL_CONTRACT;
+    assert.deepEqual(schema(), legacy);
+  } finally {
+    for (const key of ['PW_DSH_TOOLS', 'PW_DSH_RETRIEVAL_CONTRACT']) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+});
+
 test('bibliographic schema is opt-in and legacy material wires remain unchanged', () => {
   const previous = { tools: process.env.PW_DSH_TOOLS, records: process.env.PW_DSH_RESEARCH_RECORDS };
   try {

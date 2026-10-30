@@ -29,7 +29,14 @@ def payload_for(research, rows):
             content.update(research_metadata=row['research_metadata'], research_relation=row['research_relation'])
         fields[key] = json.dumps(content, ensure_ascii=False, sort_keys=True)
         bindings[key] = []
-        for ref in row['refs']:
+        refs = list(row['refs'])
+        context = (row.get('research_metadata') or {}).get('query_context')
+        if context:
+            from project_watch.studio.retrieval_queries import validate
+
+            validate(research.store, research.project_id, context)
+            refs.append(context['ref'])
+        for ref in refs:
             version = research.store.evidence.get(research.project_id, ref['evidence_version_id'], include_internal=False)
             name = 'E' + digest([version['id'], ref['part_index']])[:24]
             numbered[name] = {'context': version['parts'][ref['part_index']]['text'],

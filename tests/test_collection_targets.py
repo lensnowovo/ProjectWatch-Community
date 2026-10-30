@@ -37,7 +37,12 @@ def research(tmp_path):
             payload = {'announcements': [], 'totalAnnouncement': 0}
         elif host == 'api.tavily.com':
             assert json.loads(body)['query']
-            payload = {'results': []}
+            payload = {'results': [dict(title='Synthetic patent discovery', url='https://example.invalid/disclosure',
+                content='Synthetic Company filed US123456A1.')] if json.loads(body)['query'] == 'google_doc' else []}
+        elif host == 'patents.google.com':
+            from test_retrieval_queries import patent_html
+
+            return Response(200, {}, patent_html().encode())
         else:
             pytest.fail('unexpected synthetic host: ' + host)
         return Response(200, {}, json.dumps(payload).encode())
@@ -73,6 +78,9 @@ def test_specialist_tool_retains_query_and_imports_typed_record_without_repeatin
 @pytest.mark.parametrize('adapter', list(collection_targets.ADAPTERS))
 def test_each_specialist_adapter_is_routed_through_host(research, adapter):
     loop, args, calls, _ = research
+    if adapter == 'google_patent':
+        found = loop.tool('pw_search', dict(query='google_doc', category='company'))
+        args = args | dict(query='US123456A1', source_id=found['sources'][0]['id'], quote='Synthetic Company filed US123456A1.')
     result = loop.tool('pw_collect', args | {'adapter': adapter})
     assert result['collection']['source'] == adapter
     assert result['collection']['outcome'] == 'success'

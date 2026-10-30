@@ -63,6 +63,8 @@ def _record(item):
     snapshot = {k: item.get(k) for k in ('title', 'url', 'source', 'snippet', 'published_at')}
     if raw is not None:
         snapshot['source_record'] = raw
+    if extra.get('query_context'):
+        snapshot['query_context'] = extra['query_context']
     text = _json(snapshot)
     if len(text.encode()) > 1_000_000:
         raise ValueError('collected source record exceeds storage bound')
@@ -86,7 +88,20 @@ class CollectionIngest:
                 db.execute(statement)
 
     def __call__(self, unit, items):
+        context = None
         try:
+            if unit['target_id'].startswith('scope:'):
+                with closing(self.store._connect()) as db:
+                    row = db.execute('SELECT record FROM studio_collection_targets WHERE project_id=? AND id=?',
+                        (self.project_id, unit['target_id'][6:])).fetchone()
+                target = json.loads(row[0]) if row else {}
+                if target.get('query_context'):
+                    from project_watch.studio.retrieval_queries import validate
+
+                    context = validate(self.store, self.project_id, target['query_context'])
+                    if target['query'] != unit['query'] or target['adapter'] != unit['source'] or target['status'] != 'active':
+                        raise ValueError('query scope changed')
+                    items = [{**item, 'extra': {**item.get('extra', {}), 'query_context': context}} for item in items]
             prepared = [(item, *_record(item)) for item in items]
             unique = {}
             for entry in prepared:
@@ -109,6 +124,8 @@ class CollectionIngest:
         with self.store.write_scope(self.execution._guard), closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             self.execution._guard(db)
+            if context:
+                validate(self.store, self.project_id, context, db=db)
             for item, identity, text, structured in prepared:
                 refs.append(self._save(db, unit, item, identity, text, structured, observed))
         # Database evidence and observations are atomic; replay after this write

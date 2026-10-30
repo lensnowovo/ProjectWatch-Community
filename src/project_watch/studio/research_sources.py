@@ -14,8 +14,9 @@ TEXT_FIELDS = ('openalex_id', 'doi', 'nct_id', 'phase', 'status', 'sponsor',
                'europepmc_id', 'pmcid', 'license',
                'patent_number', 'patent_kind', 'patent_country', 'provider_affiliation',
                'legal_status', 'family_status', 'source_first_date', 'date_basis',
-               'assignee_query', 'applicant_quote', 'applicant_basis')
-LIST_FIELDS = ('authors', 'institutions', 'affiliations', 'collaborators', 'conditions', 'applicants')
+               'assignee_query', 'applicant_quote', 'applicant_basis', 'family_id', 'application_number',
+               'filing_date', 'priority_date', 'provider_kind')
+LIST_FIELDS = ('authors', 'institutions', 'affiliations', 'collaborators', 'conditions', 'applicants', 'current_assignees', 'inventors')
 
 
 class SourceRevisionChanged(ValueError):
@@ -38,6 +39,10 @@ def _extra(raw):
     search = value.get('paper_search')
     if isinstance(search, dict):
         out['paper_search'] = {k: search[k][:200] for k in ('query', 'mode') if isinstance(search.get(k), str)}
+    context = value.get('query_context')
+    if isinstance(context, dict):
+        out['query_relationship'] = {k: context[k][:300] for k in ('query', 'subject', 'relationship', 'basis')
+                                     if isinstance(context.get(k), str)}
     return out
 
 
@@ -103,10 +108,20 @@ def research_sources(store, project_id, category, *, limit=40, offset=0, revisio
     with closing(store._connect()) as db:
         db.execute('BEGIN')
         items = [r for r in _rows(db, project_id) if r['category'] == category]
+        groups = {}
+        if category == 'patent':
+            for item in items:
+                family = item['extra'].get('family_id')
+                key = family or 'document:' + item['id']
+                groups.setdefault(key, []).append(item['id'])
+            for item in items:
+                key = item['extra'].get('family_id') or 'document:' + item['id']
+                item['family'] = dict(key=key, document_count=len(groups[key]), document_ids=groups[key])
         digest = hashlib.sha256(json.dumps(items, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         if revision is not None and revision != digest:
             raise SourceRevisionChanged('research_sources_changed')
         return dict(project_id=project_id, category=category, revision=digest, total=len(items), offset=offset,
+                    family_count=len(groups) if category == 'patent' else None,
                     next_offset=offset + limit if offset + limit < len(items) else None,
                     items=items[offset:offset + limit])
 

@@ -62,6 +62,13 @@ def metadata(snapshot):
                 affiliations.extend(a['affiliation'] for a in
                     (author.get('authorAffiliationDetailsList') or {}).get('authorAffiliation') or []
                     if a.get('affiliation'))
+    elif row.get('contract') == 'google-patents-document-v1':
+        from project_watch.studio.google_patents import metadata as patent_metadata
+
+        parsed = patent_metadata(row)
+        ident, title = parsed['publication_number'], parsed['title']
+        kind, applicants = 'patent', parsed['applicants']
+        legal_status, publication_date = 'unknown', parsed['publication_date'] or ''
     elif row.get('contract') == 'patent-registry-record-v1':
         from project_watch.studio.patent_registry import PatentRecord
 
@@ -84,6 +91,11 @@ def metadata(snapshot):
     if kind == 'patent':
         result['date_basis'] = row.get('date_basis', 'unknown')
         result['inventors'] = row.get('inventors', []) if row.get('contract') == 'patent-registry-record-v1' else []
+        if row.get('contract') == 'google-patents-document-v1':
+            result.update({key: row[key] for key in ('inventors', 'current_assignees', 'document_kind',
+                'family_id', 'application_number', 'filing_date', 'priority_date', 'provider_kind')})
+    if snapshot.get('query_context'):
+        result['query_context'] = snapshot['query_context']
     # Keep the whole metadata or decline; no silent shortening of asserted facts.
     if len(json.dumps(result, ensure_ascii=False)) > 3000:
         return None
@@ -97,6 +109,10 @@ def evidence_metadata(store, project_id, evidence_id):
     try:
         snapshot = json.loads(''.join(p['text'] for p in version['parts']))
         value = metadata(snapshot)
+        if value and value.get('query_context'):
+            from project_watch.studio.retrieval_queries import validate
+
+            validate(store, project_id, value['query_context'])
     except (ValueError, TypeError, KeyError, AttributeError):
         return None
     if value:

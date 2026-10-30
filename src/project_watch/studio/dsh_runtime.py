@@ -521,7 +521,7 @@ def guarded_http(research, original):
     return Http(send)
 
 
-def child_environment(directory: Path, port: int, token: str, *, prompt=PROMPT, tools=TOOLS, research_records=None):
+def child_environment(directory: Path, port: int, token: str, *, prompt=PROMPT, tools=TOOLS, research_records=None, retrieval_contract=None):
     keep = {"SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "COMSPEC", "PATHEXT"}
     env = {k: v for k, v in os.environ.items() if k.upper() in keep}
     env.update(DSH_HOME=str(directory / "home"), DSH_TELEMETRY_MODE="DISABLED",
@@ -530,6 +530,8 @@ def child_environment(directory: Path, port: int, token: str, *, prompt=PROMPT, 
                PW_DSH_GATEWAY_TOKEN=token, NO_PROXY="127.0.0.1,localhost")
     if research_records == 'bibliography-v1':
         env['PW_DSH_RESEARCH_RECORDS'] = research_records
+    if retrieval_contract == 'evidence-query-v2':
+        env['PW_DSH_RETRIEVAL_CONTRACT'] = retrieval_contract
     return env
 
 
@@ -553,7 +555,8 @@ def run_dsh(research, gateway, runtime_root: Path, directory: Path, *, timeout=3
         with (directory / "stderr.log").open("a", encoding="utf-8") as diagnostics:
             process = subprocess.Popen([node, str(entry), "--profile", "sdk-minimal", "--patch", str(patch)],
                 cwd=directory, env=child_environment(directory, port, gateway.token,
-                    prompt=research.prompt, tools=research.tools, research_records=getattr(research, 'research_records', None)),
+                    prompt=research.prompt, tools=research.tools, research_records=getattr(research, 'research_records', None),
+                    retrieval_contract=getattr(research, 'retrieval_contract', None)),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostics, text=True, encoding="utf-8",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 

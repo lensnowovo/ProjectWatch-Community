@@ -501,7 +501,8 @@ class PublicBootstrap:
     def pw_collect(self, args):
         return collection_dsh.collect_specialist(self, adapter=text_arg(args, 'adapter', 40),
             query=text_arg(args, 'query', 300), source_id=text_arg(args, 'source_id', 20),
-            quote=text_arg(args, 'quote', 1500), reason=text_arg(args, 'reason', 600))
+            quote=text_arg(args, 'quote', 1500), reason=text_arg(args, 'reason', 600),
+            relationship=args.get('relationship'), subject=args.get('subject'))
 
     def cache_body(self, source, content):
         """Retain all returned text outside the model context and bounded checkpoints."""

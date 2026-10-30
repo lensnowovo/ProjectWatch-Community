@@ -263,7 +263,7 @@ def search(research, query, category, *, target_id=None, adapter='search', evide
     return result
 
 
-def collect_specialist(research, *, adapter, query, source_id, quote, reason):
+def collect_specialist(research, *, adapter, query, source_id, quote, reason, relationship=None, subject=None):
     from project_watch.studio.collection_host import guard_scope
     from project_watch.studio.collection_targets import require_source_enabled, retain
 
@@ -281,7 +281,7 @@ def collect_specialist(research, *, adapter, query, source_id, quote, reason):
         raise ValueError('quote crosses an evidence part')
     index, bounds = span
     offset = start - bounds['start']
-    target = retain(research, adapter=adapter, query=query, reason=reason, ref=dict(
+    target = retain(research, adapter=adapter, query=query, reason=reason, relationship=relationship, subject=subject, ref=dict(
         evidence_version_id=cited['evidence_version_id'], part_index=index,
         start=offset, end=offset + len(quote), quote=quote))
     result = search(research, target['query'], target['category'], target_id='scope:' + target['id'],

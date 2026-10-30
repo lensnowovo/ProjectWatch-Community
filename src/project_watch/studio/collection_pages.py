@@ -1,4 +1,5 @@
 """Bounded structured-source pages, retaining source dates and continuation."""
+import re
 from datetime import date
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
@@ -23,7 +24,9 @@ def public_read_request(method, url, headers, body):
             'searchkey', 'sdate', 'edate', 'isfulltext', 'sortName', 'sortType', 'pageNum', 'pageSize'},
     }
     parameters = contracts.get((endpoint.hostname, endpoint.path))
-    return (method == 'GET' and body is None and endpoint.scheme == 'https'
+    if endpoint.hostname == 'patents.google.com' and re.fullmatch(r'/patent/[A-Z]{2}[0-9]{4,14}[A-Z][0-9]{0,2}/en', endpoint.path):
+        parameters = set()
+    return (method == 'GET' and body is None and endpoint.scheme == 'https' and not endpoint.fragment
             and not endpoint.username and not endpoint.password and endpoint.port in (None, 443)
             and set(key.lower() for key in headers) <= {'accept', 'referer', 'user-agent'}
             and parameters is not None

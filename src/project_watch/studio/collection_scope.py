@@ -125,6 +125,8 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
             add('openalex_author', 'paper', public_plan.get('paper_authors') or [])
         add('patent_search', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
         add('europepmc_patent', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
+        if 'google_patent' in scoped_sources:
+            add('google_patent', 'patent', [], historical=True)
         # is_biomed is deliberately not an applicability decision. Sponsor and
         # intervention searches remain separate, including hospital-led studies.
         sponsors, terms = public_plan.get('trial_sponsors') or [], public_plan.get('trial_terms') or []

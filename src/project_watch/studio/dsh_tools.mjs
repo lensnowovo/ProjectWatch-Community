@@ -86,6 +86,12 @@ export function apply(ctx) {
     ["pw_scope", "Submit a bounded independent scope decision. Select reviewed candidates with retain(record_key), add a temporary question using a frozen standing parent with question(parent_id,text,exit_rule), or propose(watch_id,fields) for human review. No comprehensive judgment prerequisite, permanent scope, exit-rule mutation or source tools. [] preserves all candidates as not selected. This ends the maintenance stage.",
       { changes_json: string, reason: string }, ["changes_json", "reason"]],
   ].filter(x => allowed.includes(x[0])).map(x => {
+    if (x[0] === "pw_collect" && process.env.PW_DSH_RETRIEVAL_CONTRACT === "evidence-query-v2") return [
+      x[0], x[1] + " Google Patents is a third-party document index, not an official legal register. google_patent accepts one exact publication number. relationship/subject describe only an evidence-bound query hypothesis.",
+      {...x[2], adapter: {type: "string", enum: [...x[2].adapter.enum,
+        "europepmc_affiliation", "europepmc_topic", "europepmc_patent", "google_patent"]},
+        relationship: {type: "string", enum: ["same_entity", "former_name", "brand", "subsidiary", "product", "technical", "unverified"]},
+        subject: string}, x[3]];
     if (allowed.includes("pw_assess") && !allowed.includes("pw_judge")) {
       if (x[0] === "pw_context") return [x[0], "Read the fixed public question, unchanged exit rule and numbered evidence. No collection or publication.", {}, []];
       if (x[0] === "pw_status") return [x[0], "Inspect this question stage and its remaining shared budget.", {}, []];

@@ -1014,6 +1014,7 @@ export const api = {
 };
 export type ResearchCategory = 'paper' | 'patent' | 'trial';
 export interface ResearchSource {
+  family?: {key: string; document_count: number; document_ids: string[]};
   id: string; project_id: string; category: ResearchCategory;
   title: string; url: string; source: string; snippet: string;
   published_at: string | null; collected_at: string;
@@ -1022,6 +1023,7 @@ export interface ResearchSource {
   evidence_version_id: string | null; body_evidence_version_id: string | null;
 }
 export interface ResearchSourcePage {
+  family_count?: number | null;
   project_id: string; category: ResearchCategory; revision: string;
   items: ResearchSource[]; total: number; offset: number; next_offset: number | null;
 }

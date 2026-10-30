@@ -54,15 +54,26 @@ const text = (value: unknown) => typeof value === 'string' ? value : '';
 
 /** Source IDs must never be sent to event read/feedback endpoints. */
 export function ResearchSourceList({items}: {items: ResearchSource[]}) {
-  return <div className="items items-flat research-source-list">{items.map(item => {
+  const groups = new Map<string, ResearchSource[]>();
+  items.forEach(item => {
+    const key = item.category === 'patent' && item.family ? item.family.key : item.id;
+    groups.set(key, [...(groups.get(key) || []), item]);
+  });
+  const renderItem = (item: ResearchSource) => {
     const x = item.extra;
     const href = /^https?:\/\//i.test(item.url) ? item.url : undefined;
     const search = x.paper_search as {query?: string; mode?: string} | undefined;
+    const relation = x.query_relationship as {query?: string; subject?: string; relationship?: string} | undefined;
+    const relationLabels: Record<string, string> = {same_entity: '名称对应', former_name: '曾用名', brand: '品牌',
+      subsidiary: '子公司', product: '产品相关', technical: '技术相关', unverified: '关联待核'};
     const details = [
       ['作者', strings(x.authors)], ['机构', strings(x.institutions)], ['原始署名', strings(x.affiliations)],
       ['申办方', text(x.sponsor)], ['合作方', strings(x.collaborators)],
       ['申请人摘录', strings(x.applicants)], ['摘录依据', text(x.applicant_quote)],
-      ['检索词', text(search?.query) || text(x.assignee_query)],
+      ['当前权利人摘录', strings(x.current_assignees)], ['申请日期', text(x.filing_date)],
+      ['优先权日', text(x.priority_date)], ['文献种类', text(x.patent_kind)],
+      ['检索词', text(search?.query) || text(relation?.query) || text(x.assignee_query)],
+      ['匹配线索', relation?.relationship ? `${text(relation.subject)} · ${relationLabels[relation.relationship] || '关联待核'}（待复核）` : ''],
     ].filter(([, value]) => value);
     return <article className="item" key={item.id} data-source-id={item.id}>
       <div className="item-body">
@@ -81,5 +92,15 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
         </details>
       </div>
     </article>;
-  })}</div>;
+  };
+  return <div className="items items-flat research-source-list">{[...groups].map(([key, group]) =>
+    <div key={key}>
+      {renderItem(group[0])}
+      {group[0].family && group[0].family.document_count > group.length && <p className="muted small">
+        同族已显示 {group.length} / {group[0].family.document_count} 份，继续显示可查看其余文件
+      </p>}
+      {group.length > 1 && <details className="item-reading-detail"><summary className="muted small">
+        同族其他文件 · {group.length - 1} 份
+      </summary>{group.slice(1).map(renderItem)}</details>}
+    </div>)}</div>;
 }

@@ -20,15 +20,26 @@ LATE = 'Supported detail from the later article section.'
 URL = 'https://public.example.invalid/overview'
 
 
-def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count=1):
+def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count=1,
+            company='Synthetic Host', institution='Synthetic Institute'):
     if native and not os.environ.get('PW_DSH_TEST_RUNTIME'):
         pytest.skip('requires explicitly verified native DSH runtime')
     pipeline, execution = fixtures.setup.__wrapped__(tmp_path)
+    if company != 'Synthetic Host':
+        from project_watch.studio.execution import JobExecution
+
+        assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
+        project = pipeline.repository.create_project(company)
+        pipeline.store.upsert_project(project.id, {'legal_name': company}, consent=True)
+        pipeline.store.enqueue(project.id, 'external')
+        execution = JobExecution(pipeline.store, pipeline.store.claim())
+        pipeline._execution_state.current = execution
     settings = pipeline.settings_store.load()
     settings.search = SearchConfig('tavily', 'synthetic')
     pipeline.settings_store.save(settings)
     seen = {'pages': [], 'models': [], 'clinical': [], 'materials': [], 'visible': []}
     active = {}
+    professional_body = f'{company} uses {institution}. {institution} filed US123456A1.'
     original = dsh_runtime.run_dsh
 
     def send(_method, url, _headers, raw, _timeout):
@@ -40,6 +51,15 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
             data = {'results': [], 'meta': {'count': 0}}
         elif host == 'www.ebi.ac.uk':
             data = {'hitCount': 0, 'resultList': {'result': []}}
+            if mode == 'professional' and institution in parse_qs(urlsplit(url).query)['query'][0]:
+                data = {'hitCount': 1, 'resultList': {'result': [dict(source='MED', id='123456',
+                    title='Synthetic protein research', firstPublicationDate='2020-01-01',
+                    authorList={'author': [dict(fullName='Synthetic Author', authorAffiliationDetailsList={
+                        'authorAffiliation': [dict(affiliation=institution)]})]})]}}
+        elif host == 'patents.google.com':
+            from test_retrieval_queries import patent_html
+
+            return Response(200, {}, patent_html(applicant=institution).encode())
         elif host == 'www.cninfo.com.cn':
             data = {'announcements': [], 'totalAnnouncement': 0}
         elif host == 'clinicaltrials.gov':
@@ -64,7 +84,14 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
                     assert not pipeline.store.list_events(project_id=execution.job['project_id'])
                     assert pipeline.monitoring_plan.items(execution.job['project_id']) == []
                     prior = [m for m in body['messages'] if m['role'] == 'tool']
-                    if mode == 'turn_limit':
+                    if mode == 'professional' and len(prior) < 2:
+                        page = next(s for s in json.loads(active['task'])['sources'] if s['url'] == URL)
+                        name = 'pw_collect'
+                        args = dict(adapter='europepmc_affiliation' if not prior else 'google_patent',
+                            query=institution if not prior else 'US123456A1',
+                            source_id=page['id'], quote=professional_body, subject=company,
+                            relationship='same_entity' if not prior else 'unverified', reason='Public disclosure supplies a query')
+                    elif mode == 'turn_limit':
                         name, args = 'pw_status', {}
                     elif mode == 'late_scope' and not prior:
                         page = next(s for s in json.loads(active['task'])['sources'] if s['url'] == URL)
@@ -88,7 +115,17 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
                     if pair is None:
                         pair = next(((ref, part, 'Synthetic Hospital') for ref, part in source['refs'].items()
                                      if 'Synthetic Hospital' in part['quote']), None)
-                    if pair:
+                    professional = next(((ref, part, title, kind) for ref, part in source['refs'].items()
+                        for title, kind in [('Synthetic protein research', 'paper'), ('Synthetic protein disclosure', 'patent')]
+                        if title in part['quote']), None) if mode == 'professional' else None
+                    if professional:
+                        ref, part, text, kind = professional
+                        start = part['quote'].index(text)
+                        observations = [dict(kind=kind, subject=company, label=text, text=text,
+                            refs=[ref], start=start, end=start + len(text), research_relation='author_affiliation' if kind == 'paper' else 'applicant',
+                            reason='The original affiliation/applicant and separate public name bridge support attribution.',
+                            event_at='2020-01-01' if kind == 'paper' else '2021-02-03')]
+                    elif pair:
                         ref, part, text = pair
                         start = part['quote'].index(text)
                         observations = [dict(kind='industry', subject='Synthetic Host', label='Public source finding',
@@ -112,7 +149,8 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
             raise HttpError('connection_failed')
         if mode == 'read_failed' or not url.startswith(URL):
             return {'status': 'unavailable', 'text': '', 'error_code': 'http_failure'}
-        text = ('a' * 20500 + BODY + '\n' + LATE) if mode == 'late_scope' else BODY + '\n' + 'a' * 20500 + '\n' + LATE
+        text = professional_body if mode == 'professional' else (
+            ('a' * 20500 + BODY + '\n' + LATE) if mode == 'late_scope' else BODY + '\n' + 'a' * 20500 + '\n' + LATE)
         return {'status': 'article_body', 'text': text}
 
     def turn(research, gateway, runtime, directory, **kwargs):
@@ -145,6 +183,41 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
 def run(pipeline, execution):
     pipeline.run_external(execution.job)
     return execution.read_checkpoint('dsh_state')['finished']
+
+
+@pytest.mark.parametrize('native', [False, True])
+@pytest.mark.parametrize('entry', ['bootstrap', 'incremental'])
+def test_normal_update_discovers_names_reads_patent_reviews_and_keeps_old_dates(tmp_path, monkeypatch, native, entry):
+    from project_watch.studio import digest, news_window
+    from project_watch.studio.research_sources import research_sources
+
+    second = entry == 'incremental'
+    pipeline, execution, seen = install(tmp_path, monkeypatch, mode='professional', native=native,
+        company='Synthetic Devices' if second else 'Synthetic Host',
+        institution='Synthetic Devices Lab' if second else 'Synthetic Institute')
+    if second:
+        monkeypatch.setenv('PROJECT_WATCH_DSH_MONITOR', '1')
+        with closing(pipeline.store._connect()) as db, db:
+            db.execute("UPDATE studio_projects SET last_external_at='2020-01-01T00:00:00+00:00' WHERE project_id=?",
+                       (execution.job['project_id'],))
+        execution.checkpoint('collection_request_v1', dict(schema_version=1, mode='incremental', origin='scheduler'))
+    result = run(pipeline, execution)
+    pid = execution.job['project_id']
+    assert execution.read_checkpoint('collection_retrieval_contract_v2') == 'evidence-query-v2'
+    assert execution.read_checkpoint('material_pipeline_v1')['entry'] == ('monitor' if second else 'bootstrap')
+    assert result['records'] == 2
+    assert research_sources(pipeline.store, pid, 'paper')['total'] == 1
+    assert research_sources(pipeline.store, pid, 'patent')['total'] == 1
+    events = pipeline.store.list_events(project_id=pid)
+    assert {e['category'] for e in events} == {'paper', 'patent'}
+    assert news_window.summarize(pipeline.store, 7)['counts']['older'] == 2
+    assert not digest.build_digest(pipeline.store, 7)['projects']
+    # Independent review is a real model stage in the synthetic transport, not
+    # source ingestion pretending to have completed semantic acceptance.
+    reviews = [json.loads(b['messages'][-1]['content']) for b in seen['models'] if 'tools' not in b]
+    assert any(r.get('purpose') == 'public_record_admission' and r.get('research_policy') for r in reviews)
+    before = execution.usage()
+    assert run(pipeline, execution) == result and execution.usage() == before
 
 
 def test_default_reads_visible_summary_then_extracts_only_selected_body_and_collects_scope(tmp_path, monkeypatch):

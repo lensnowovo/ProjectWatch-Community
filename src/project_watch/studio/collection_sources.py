@@ -40,7 +40,7 @@ class CollectionSources:
         return (dict.fromkeys(('search', 'patent_search', 'cn_regulatory'), ready)
                 | dict.fromkeys(('openalex_topic', 'openalex_author', 'openalex_affiliation',
                                  'clinical_sponsor', 'clinical_term', 'cninfo',
-                                 'europepmc_affiliation', 'europepmc_topic', 'europepmc_patent'), 'available'))
+                                 'europepmc_affiliation', 'europepmc_topic', 'europepmc_patent', 'google_patent'), 'available'))
 
     def snapshot(self):
         job = self.execution.job
@@ -93,7 +93,7 @@ class CollectionSources:
             self.execution.checkpoint_chunked(trace_stage, trace)
         # A paginated resume may only replay its durable pages. The manifest is
         # frozen, so original requests remain valid provenance for these items.
-        relevant_requests = trace['requests'] if source.startswith(('openalex_', 'clinical_', 'europepmc_')) or source == 'cninfo' else requests
+        relevant_requests = trace['requests'] if source.startswith(('openalex_', 'clinical_', 'europepmc_')) or source in ('cninfo', 'google_patent') else requests
         ids = [f"call:{self.execution.job['id']}:{r['call_key']}" for r in relevant_requests]
         cached = [r for r in uses if r['outcome'] == 'cached']
         ids.extend('query-use:' + r['id'] for r in cached)
@@ -111,6 +111,7 @@ class CollectionSources:
         paper = unit['source'].startswith('openalex_')
         biomedical = unit['source'].startswith('europepmc_')
         filing = unit['source'] == 'cninfo'
+        patent = unit['source'] == 'google_patent'
         seen = {(item['extra']['source_identity'], item['extra']['source_version']) for item in state['items']}
         interruption = {}
         while not state['done'] and not state.get('exhausted') and state['pages'] < self.max_pages:
@@ -119,7 +120,11 @@ class CollectionSources:
             try:
                 if cursor in state.get('visited', []):
                     raise HttpError('collection_cursor_cycle')
-                if biomedical:
+                if patent:
+                    from project_watch.studio.google_patents import page as patent_page
+
+                    page = patent_page(self.collectors.http, unit['query'])
+                elif biomedical:
                     page = europepmc_page(self.collectors.http, unit['query'], mode=unit['source'][10:],
                         cursor=state['cursor'], start=(unit.get('window_start') or '')[:10] or None,
                         end=unit['window_end'][:10])
@@ -146,7 +151,7 @@ class CollectionSources:
                 break
             for item in page['items']:
                 extra = item['extra']
-                identity = extra['source_identity'] if filing or biomedical else (
+                identity = extra['source_identity'] if filing or biomedical or patent else (
                     ('openalex:' + extra['openalex_id']) if paper else ('clinical:' + extra['nct_id']))
                 version = hashlib.sha256(json.dumps(extra['source_record'], sort_keys=True,
                                                      ensure_ascii=False).encode()).hexdigest()

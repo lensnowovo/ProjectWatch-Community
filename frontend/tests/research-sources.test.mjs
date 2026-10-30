@@ -41,3 +41,20 @@ test('professional navigation counts sources even when no model event exists',()
   const html=renderToStaticMarkup(React.createElement(CategoryStrip,{detail,page:'patents',go:()=>{}}));
   assert.match(html,/论文<\/span><b>4/);assert.match(html,/临床<\/span><b>1/);assert.match(html,/专利与注册<\/span><b>10/);
 });
+
+test('patent family keeps both document versions, with click-only expansion and separate owner fields',()=>{
+  const items = ['a','b'].map(id=>({...row(id), family:{key:'google-patents:123',document_count:2,document_ids:['a','b']},
+    extra:{...row(id).extra,current_assignees:['Later Owner'],patent_kind:id==='a'?'A1':'B2',filing_date:'2020-01-01'}}));
+  const html=renderToStaticMarkup(React.createElement(ResearchSourceList,{items}));
+  assert.equal((html.match(/data-source-id=/g)||[]).length,2);
+  assert.match(html,/同族其他文件 · 1 份/);assert.match(html,/当前权利人摘录/);assert.match(html,/Later Owner/);
+  assert.doesNotMatch(html,/<details[^>]*open|已授权|独立发明/);
+});
+
+test('partially loaded family discloses remaining documents instead of claiming completeness',()=>{
+  const html=renderToStaticMarkup(React.createElement(ResearchSourceList,{items:[{
+    ...row('a'),family:{key:'google-patents:123',document_count:3,document_ids:['a','b','c']}}]}));
+  assert.match(html,/同族已显示 1 \/ 3 份/);
+  assert.match(html,/继续显示可查看其余文件/);
+  assert.doesNotMatch(html,/同族其他文件 · 0/);
+});

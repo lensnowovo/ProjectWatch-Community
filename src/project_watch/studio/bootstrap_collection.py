@@ -48,6 +48,11 @@ class Collection:
         self.data = self.execution.read_checkpoint(STAGE) or {'actions': {}, 'pending': [], 'finished': None, 'phase': 'prepare'}
         self.state = {'finished': self.data['finished']}
         self.task = self.execution.read_checkpoint('bootstrap_collection_input_v1')
+        self.retrieval_contract = self.execution.read_checkpoint('collection_retrieval_contract_v2')
+        if self.retrieval_contract == 'evidence-query-v2':
+            from project_watch.studio.retrieval_queries import GUIDANCE
+
+            self.prompt = PROMPT + GUIDANCE
 
     def guard(self):
         collection_host.guard_scope(self.parent)
@@ -184,6 +189,10 @@ class Collection:
                         return self.defer(operation, 'page_budget_reserved')
                 self.data['actions'][key] = {'operation': operation, 'status': 'started'}
                 self.save()
+            if name == 'pw_collect' and self.retrieval_contract == 'evidence-query-v2':
+                from project_watch.studio.retrieval_queries import require_product_fallback
+
+                require_product_fallback(self, args)
             result = self.parent.tool(name, args)
             if name == 'pw_read' and result.get('collection_parent'):
                 result = self.adopt_page(result)
@@ -383,6 +392,13 @@ def run(parent, model, http, runtime_root, directory):
             return _done(role, 'existing_material_input_frozen')
     role.read_pages()
     if role.task is None:
+        # Only untouched collection inputs receive the new prompt/schema. Old
+        # requests, attempts, resume identities and tool caches remain unchanged.
+        if not parent.execution.read_checkpoint(role.attempt_stage) and not parent.execution.read_checkpoint(role.runtime_receipt_stage):
+            from project_watch.studio.retrieval_queries import CONTRACT, GUIDANCE
+
+            parent.execution.checkpoint('collection_retrieval_contract_v2', CONTRACT)
+            role.retrieval_contract, role.prompt = CONTRACT, PROMPT + GUIDANCE
         entries = collection_dsh.catalog(parent, limit=8)
         sources = []
         for source in entries['sources']:
