@@ -87,7 +87,7 @@ def other_pending_requests(db, project_id, job_id):
 def project_request_holds(db, project_id, *, before=None, exclude_job=''):
     """Stored request provenance only; never releases or retries a hold."""
     return [dict(row) for row in db.execute(f"""SELECT c.job_id,c.kind,c.status,c.response_status,
-        c.created_at,j.status AS job_status,j.lease_until
+        c.created_at,j.status AS job_status,j.lease_until,j.kind AS job_kind
         FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
         WHERE j.project_id=? AND c.job_id<>? AND (? IS NULL OR c.created_at<=?)
         AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE})) ORDER BY c.created_at,c.job_id""",
@@ -117,10 +117,20 @@ def enqueue_external_refresh(store, project_id):
                             (project_id,)).fetchone()
         if active:
             return dict(active)
-        blockers = project_request_holds(db, project_id)
+        blockers = [row for row in project_request_holds(db, project_id)
+                    if row['job_kind'] not in INDEPENDENT_HOLD_KINDS]
         if blockers:
             raise RefreshBlocked(blockers)
         return store.enqueue(project_id, 'external', db=db)
+
+
+# Frozen-input extractors whose pending request is not an input to a new public
+# collection round: its unknown answer was never stored, so nothing downstream
+# reads it, and the new round sends only its own journal keys. Their holds stay
+# on their own jobs, keep blocking their own dispatch (guard_legacy_model_dispatch)
+# and still need their own explicit consent; nothing is retried or relabelled.
+# Holds in external/DSH or any other work still refuse the refresh.
+INDEPENDENT_HOLD_KINDS = frozenset(('business', 'details'))
 
 
 def pending_reason(rows):

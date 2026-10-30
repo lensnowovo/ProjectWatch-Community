@@ -26,6 +26,7 @@ class Fields(HTMLParser):
     def __init__(self, html):
         super().__init__(convert_charrefs=True)
         self.stack, self.rows, self.spans = [], [], []
+        self.top = None  # start offset of the page's first top-level microdata item
         self.html = html
         self.lines = [0]
         self.lines.extend(m.end() for m in re.finditer('\n', html))
@@ -52,20 +53,23 @@ class Fields(HTMLParser):
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         field = attrs.get('itemprop')
-        # Only this document's bibliographic definition lists, heading and head
-        # metadata. Citation/family tables, claims and other nested records must
-        # never supply missing dates, owners or numbers for this document.
+        start = self.position()
+        # Microdata scope, as the live page is built: this document's fields are
+        # properties of the first top-level item (the result article), wherever
+        # they sit in its layout — the title is a bare span and most dates/owners
+        # are dd elements outside any dl. "Other versions", events, citation rows,
+        # family members and claims are nested items; their numbers, dates and
+        # owners never become this document's fields.
+        scopes = [e for e in self.stack if e['itemscope']]
+        if 'itemscope' in attrs and not scopes and self.top is None:
+            self.top = start
+        own_item = len(scopes) == 1 and scopes[0]['start'] == self.top and 'itemscope' not in attrs
         blocked = any(e['blocked'] for e in self.stack) or tag in ('table', 'script', 'style', 'template')
         blocked |= any(word in (attrs.get('itemprop', '') + ' ' + attrs.get('id', '')).lower()
                        for word in ('citation', 'references', 'similar', 'familyt', 'description', 'claims'))
-        in_dl = any(e['tag'] == 'dl' for e in self.stack)
-        in_heading = tag == 'h1' or any(e['tag'] == 'h1' for e in self.stack)
-        selected = (not blocked and field in FIELDS and
-                    ((in_dl and tag in ('dd', 'span', 'time', 'meta')) or
-                     (field == 'title' and in_heading) or
-                     (tag == 'meta' and any(e['tag'] == 'head' for e in self.stack))))
+        selected = not blocked and field in FIELDS and own_item and tag in ('dd', 'span', 'time', 'meta')
         attribute = 'datetime' if tag == 'time' and attrs.get('datetime') else 'content' if tag == 'meta' else None
-        entry = dict(tag=tag, field=field if selected else None, parts=[], start=self.position(),
+        entry = dict(tag=tag, field=field if selected else None, parts=[], start=start, itemscope='itemscope' in attrs,
                      attribute=attribute, attribute_value=attrs.get(attribute) if attribute else None, blocked=blocked)
         if tag == 'meta':
             self.capture(entry, self.position() + len(self.get_starttag_text()))

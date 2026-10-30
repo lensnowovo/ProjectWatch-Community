@@ -10,7 +10,13 @@ their original prompt/tools; untouched collection roles freeze a new contract.
    Both subject and query must occur in that span. This is a query hypothesis,
    never an automatic company-ownership assertion. Withdrawn or changed scope
    is rejected before dispatch and downstream evidence use.
-2. Try institution/applicant names before product topics. A product fallback
+2. The ordinary entry's base plan sends the owner-confirmed subject names (the
+   subject object's name, current public aliases, then public aliases whose
+   validity has ended) to the institution and applicant indexes, at most three
+   per adapter, as the legacy collector did. A name change during the round
+   stops it before further dispatch. Internal and not-yet-valid aliases are not
+   sent. Model-discovered names still need the evidence-bound query below.
+   Try institution/applicant names before product topics. A product fallback
    requires a current public excerpt naming subject, institution and product,
    plus this project's current job's successful query of that institution. Zero
    results or candidates whose original affiliations do not contain that name
@@ -25,11 +31,18 @@ their original prompt/tools; untouched collection roles freeze a new contract.
    and explicit original assignee fields, retain current owner separately, and
    never infer grant/legal validity from a suffix. HTML/identity/parser failures
    stay failed source receipts; no fabricated empty success or retry.
-   Dates accept bibliographic `time datetime` and text fields; nested citation
-   tables/claims cannot supply missing fields. Each field retains the HTML slice,
+   Dates accept bibliographic `time datetime` and text fields. Fields are the
+   microdata properties of the page's first top-level item (the result
+   article), wherever its layout puts them: the live page has the title as a
+   bare span and owners/dates as `dd` rows outside any `dl`. Properties of nested
+   items (other versions, events, family, citation rows, claims) never supply
+   or override this document's fields. Each field retains the HTML slice,
    character offsets and attribute, with decoded and raw response SHA-256 hashes.
-   No original live HTML response was available for this batch: these parser
-   shapes are synthetic tests, not a live-provider compatibility certification.
+   The layout was checked offline against saved public US grant, WO application
+   and TW application pages; committed tests use synthetic values in that
+   layout. The live pages carry no family ID, so documents from this provider
+   stay independent unless another basis exists. This is not a live-provider
+   compatibility certification or a product network run.
 4. Preserve publication dates, application dates, discovered-at and source
    versions separately. Family grouping is a display/count view only: retained
    documents and amendments are not deleted or merged by similar title. Unknown

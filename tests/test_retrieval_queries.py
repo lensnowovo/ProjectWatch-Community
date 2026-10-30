@@ -1,5 +1,6 @@
 """Bounded ordinary collection, synthetic companies only; never real transport."""
 import json
+import re
 from contextlib import closing
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -20,12 +21,38 @@ from project_watch.studio.research_sources import research_sources
 
 
 def patent_html(number='US123456A1', applicant='Synthetic Institute', family='987654', current='Other Owner'):
-    fields = dict(publicationNumber=number, applicationNumber='US2020000001', title='Synthetic protein disclosure',
-        assigneeOriginal=applicant, assigneeCurrent=current, inventor='Synthetic Person',
-        filingDate='2020-01-02', priorityDate='2019-01-02', publicationDate='2021-02-03', familyId=family)
-    return '<html><dl>' + ''.join(
-        f'<dd><time itemprop="{k}" datetime="{v}">{v}</time></dd>' if k.endswith('Date') else
-        f'<dd itemprop="{k}">{v}</dd>' for k, v in fields.items()) + '</dl></html>'
+    """Synthetic values in the live result-page layout.
+
+    Layout observed on public US B2, WO A1 and TW A pages (2026-10-30); no
+    provider HTML is committed. One top-level article item; the title is a bare
+    span; the first dl closes early, so owners and dates are bare dd rows. Nested
+    items (other versions, events, family) repeat other numbers, dates and
+    owners as decoys. The live pages carry no familyId; family is optional here.
+    """
+    def day(key, value):
+        return f'<dd><time itemprop="{key}" datetime="{value}">{value}</time></dd>'
+    kind = re.search(r'[A-Z][0-9]*$', number)[0]
+    current_row = f'<dt>Current Assignee</dt><dd itemprop="assigneeCurrent" repeat>\n  {current}\n</dd>' if current else ''
+    return ('<html><head><title>' + number + ' - Google Patents</title></head><body>'
+        '<article class="result" itemscope itemtype="http://schema.org/ScholarlyArticle">'
+        f'<h1 itemprop="pageTitle">{number} - Synthetic protein disclosure - Google Patents</h1>'
+        '<span itemprop="title">Synthetic protein disclosure\n  </span>'
+        f'<dl><dt>Publication number</dt><dd itemprop="publicationNumber">{number}</dd>'
+        f'<meta itemprop="kindCode" content="{kind}"><span>{number}</span>'
+        '<dt>Legal status</dt><dd itemprop="legalStatusIfi" itemscope><span itemprop="status">Active</span></dd></dl>'
+        '<dt>Application number</dt><dd itemprop="applicationNumber">US2020000001</dd>'
+        '<dt>Other versions</dt><dd itemprop="directAssociations" itemscope repeat>'
+        '<a href="/patent/US999998A1/en"><span itemprop="publicationNumber">US999998A1</span></a></dd>'
+        '<dt>Inventor</dt><dd itemprop="inventor" repeat>Synthetic Person</dd>'
+        + current_row +
+        f'<dt>Original Assignee</dt><dd itemprop="assigneeOriginal" repeat>{applicant}</dd>'
+        + day('priorityDate', '2019-01-02') + day('filingDate', '2020-01-02') + day('publicationDate', '2021-02-03')
+        + (f'<dt>Family</dt><dd itemprop="familyId">{family}</dd>' if family else '') +
+        '<dd itemprop="events" itemscope repeat><time itemprop="date" datetime="2018-05-05">2018-05-05</time>'
+        '<span itemprop="title">Application filed by Decoy Holder</span></dd>'
+        '<section itemprop="family" itemscope><h1>Family</h1><span itemprop="priorityDate">2017-07-07</span>'
+        '<span itemprop="assigneeOriginal">Decoy Holder</span><span itemprop="publicationNumber">US999997A1</span></section>'
+        '</article></body></html>')
 
 
 def test_document_is_third_party_publication_not_grant_or_current_owner():
@@ -197,6 +224,52 @@ def test_nested_citation_cannot_fill_missing_primary_date():
     assert record['publication_date'] is None and record['date_basis'] == 'unknown'
 
 
+def test_live_layout_fields_come_only_from_the_documents_own_item():
+    """Title outside h1/dl, owners/dates outside dl; nested items are decoys."""
+    record = google_patents.parse(patent_html(family=None), 'US123456A1')
+    assert record['title'] == 'Synthetic protein disclosure'
+    assert record['applicants'] == ['Synthetic Institute'] and record['current_assignees'] == ['Other Owner']
+    assert record['application_number'] == 'US2020000001' and record['inventors'] == ['Synthetic Person']
+    assert (record['priority_date'], record['filing_date'], record['publication_date']) == (
+        '2019-01-02', '2020-01-02', '2021-02-03')
+    # Other versions, events and the family section never leak into this record.
+    flat = json.dumps(record['field_evidence'])
+    for decoy in ('US999998A1', 'US999997A1', 'Decoy Holder', '2017-07-07', '2018-05-05', 'Application filed'):
+        assert decoy not in flat
+    # No familyId on the live page: the document stays independent, not guessed.
+    assert record['family_id'] is None
+    assert google_patents.metadata(record) == record
+
+
+def test_application_is_not_promoted_to_grant_and_missing_owner_stays_missing():
+    record = google_patents.parse(patent_html(number='WO2099123456A1', current=None, family=None), 'WO2099123456A1')
+    assert record['document_kind'] == 'A1' and record['legal_status'] == 'unknown'
+    assert record['current_assignees'] == []  # absent field is not filled from the original or a decoy
+    granted = google_patents.parse(patent_html(number='US1234567B2', family=None), 'US1234567B2')
+    assert granted['document_kind'] == 'B2' and granted['legal_status'] == 'unknown'
+
+
+def test_second_top_level_item_cannot_supply_or_override_fields():
+    html = patent_html(family=None).replace('<article', '<div itemscope itemtype="http://schema.org/WebSite">'
+        '<span itemprop="title">Other page item</span><dd itemprop="publicationNumber">US999999A1</dd></div><article', 1)
+    with pytest.raises(HttpError, match=r'invalid_patent_document_(publicationNumber|identity)'):
+        google_patents.parse(html, 'US123456A1')
+    # When the foreign item follows the document, it is ignored outright.
+    later = patent_html(family=None).replace('</body>', '<div itemscope><dd itemprop="assigneeOriginal">Wrong Owner</dd>'
+                                             '<dd itemprop="publicationNumber">US999999A1</dd></div></body>')
+    record = google_patents.parse(later, 'US123456A1')
+    assert record['applicants'] == ['Synthetic Institute']
+
+
+def test_owner_named_only_in_a_nested_citation_is_not_the_applicant():
+    """A citation row naming the monitored company does not make it the applicant."""
+    html = patent_html(applicant='Unrelated Applicant Co', current=None, family=None).replace(
+        '</article>', '<table><tr itemprop="backwardReferencesFamily" itemscope><td>'
+        '<span itemprop="assigneeOriginal">Synthetic Institute</span></td></tr></table></article>')
+    record = google_patents.parse(html, 'US123456A1')
+    assert record['applicants'] == ['Unrelated Applicant Co'] and record['current_assignees'] == []
+
+
 def test_query_bridge_is_bound_to_independent_review_and_withdrawal(tmp_path):
     loop, args, _ = setup(tmp_path)
     result = loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
@@ -215,3 +288,28 @@ def test_query_bridge_is_bound_to_independent_review_and_withdrawal(tmp_path):
                    (loop.project_id, bridge))
     with pytest.raises((KeyError, ValueError)):
         payload_for(loop, {'record:one': row})
+
+
+def test_refused_product_fallback_is_not_recorded_and_allowed_one_is(tmp_path):
+    """A refused, never-dispatched query keeps no action slot or receipt-less started action."""
+    from project_watch.studio import bootstrap_collection
+
+    loop, args, calls = setup(tmp_path, empty=True)
+    role = bootstrap_collection.Collection(loop)
+    role.retrieval_contract = 'evidence-query-v2'
+    product = args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product')
+    before = len(calls)
+    with pytest.raises(ValueError, match='product_fallback_requires'):
+        role.tool('pw_collect', product)  # no same-subject institution receipt yet
+    assert role.data['actions'] == {} and len(calls) == before
+    assert role.execution.read_checkpoint('collection_product_dimension_v2') is None
+    # Same subject's institution query returns zero results: the fallback opens once.
+    role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
+    result = role.tool('pw_collect', product)
+    assert result['collection']['outcome'] == 'success'
+    assert [a['status'] for a in role.data['actions'].values()] == ['complete', 'complete']
+    assert role.execution.read_checkpoint('collection_product_dimension_v2')['query'] == 'SYN-101'
+    # A second product dimension is refused before recording, too.
+    with pytest.raises(ValueError, match='one_product_dimension'):
+        role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202', relationship='product'))
+    assert len(role.data['actions']) == 2

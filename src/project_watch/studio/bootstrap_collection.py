@@ -172,6 +172,13 @@ class Collection:
                 result = JobExecution(self.store, {'id': owner}).read_checkpoint(RESULT + key)
                 if result is not None:
                     return self.expose(result)
+            if name == 'pw_collect' and self.retrieval_contract == 'evidence-query-v2' and key not in self.data['actions']:
+                from project_watch.studio.retrieval_queries import require_product_fallback
+
+                # Refuse before recording: a never-dispatched query must not use an
+                # action slot or leave a receipt-less started action, which would
+                # also make this round's explicit continuation inadmissible.
+                require_product_fallback(self, args, claim=False)
             if external and key not in self.data['actions']:
                 if sum(not a.get('origin_job_id') for a in self.data['actions'].values()) >= MAX_ACTIONS:
                     return self.defer(operation, 'collection_action_limit')

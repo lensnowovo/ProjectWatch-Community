@@ -5,6 +5,15 @@ before creating a job. A blocked refresh returns HTTP 409 with `refresh_blocked`
 and `dispatch: not_started`. This describes the refresh action, not a new
 `not_sent` provider receipt. Existing queued/running external work is coalesced.
 
+Exception (2026-10-30): a hold owned by an independent frozen-input extractor
+(`business`, `details`) does not refuse an external refresh. Its unknown answer
+was never stored, so no collection input depends on it, and the new round only
+sends its own journal keys. The scheduler's queue claim already admitted
+external work past such holds; only the manual button refused it. The hold stays
+on its job, still blocks that job's own dispatch and still needs its own consent;
+no receipt is retried, settled or relabelled. Holds in external, follow-up,
+public-profile, insight or any other work still refuse the refresh.
+
 Failed historical jobs with zero request receipts can be shown as blocked by
 earlier effective requests. A job that actually sent a request retains its own
 uncertainty state. The task view opens the project-wide receipt lookup, including

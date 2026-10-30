@@ -80,7 +80,14 @@ def test_two_independent_requests_recover_sequentially_without_unlocking_other(c
         assert sends==['business','details'][:index+1]
         assert len(pending(p,pid))==1-index
         if index==0:
-            assert web.post(f'/api/studio/projects/{pid}/refresh',json={'kind':'external'}).status_code==409
+            # The remaining details hold belongs to an independent extractor: a public
+            # refresh is admitted without sending, settling or unlocking that request.
+            calls=pending(p,pid)
+            refresh=web.post(f'/api/studio/projects/{pid}/refresh',json={'kind':'external'})
+            assert refresh.status_code==202 and refresh.json()['kind']=='external'
+            assert pending(p,pid)==calls and sends==['business']
+            with p.store._connect() as db:  # outside this test's recovery-order scope
+                db.execute("UPDATE studio_jobs SET status='done' WHERE id=?",(refresh.json()['id'],))
     with p.store._connect() as db:
         for job in jobs:
             # No history is overwritten when a successor request succeeds.

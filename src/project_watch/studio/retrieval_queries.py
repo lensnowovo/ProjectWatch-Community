@@ -50,11 +50,13 @@ def validate(store, project_id, value, *, db=None):
     return expected
 
 
-def require_product_fallback(role, args):
+def require_product_fallback(role, args, *, claim=True):
     """One product dimension, bound to this job's same-subject name receipt.
 
     Literal affiliation matching is only a conservative search gate, never
     semantic acceptance. Unconfirmed candidates are retained for later review.
+    claim=False only validates: the caller runs it before recording an action,
+    so a refused (never dispatched) fallback is not left as a started action.
     """
     if args.get('relationship') != 'product' or args.get('adapter') not in ('openalex_topic', 'europepmc_topic'):
         return
@@ -96,5 +98,5 @@ def require_product_fallback(role, args):
     dimension = {'query': query, 'subject': subject, 'evidence_version_id': cited['evidence_version_id']}
     if prior is not None and prior != dimension:
         raise ValueError('one_product_dimension_per_collection')
-    if prior is None:
+    if prior is None and claim:
         role.execution.checkpoint('collection_product_dimension_v2', dimension)

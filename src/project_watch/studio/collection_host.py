@@ -1,4 +1,6 @@
 """Host-owned collection admission before the DSH research turn."""
+from datetime import date
+
 from project_watch.studio import collection_continuation, collection_history
 from project_watch.studio.collection_ingest import CollectionIngest
 from project_watch.studio.collection_ledger import STAGE, SUPPLEMENTS, CollectionLedger
@@ -40,6 +42,27 @@ def limit_budgets(execution, mode):
         execution.budgets[kind] = maximum if old is None else min(old, maximum)
 
 
+NAME_QUERIES = 3
+
+
+def subject_names(research):
+    """Confirmed subject names only; internal aliases and resolver guesses are excluded.
+
+    Current names first, then public aliases whose validity has ended (former
+    names): institution and applicant indexes are historical, so older papers
+    and filings carry them. Not-yet-valid aliases are never used.
+    """
+    objects = research.pipeline.objects
+    names = list(objects.query_inputs(research.project_id)['company_names'])
+    today = date.today().isoformat()
+    for row in objects.page(research.project_id, include_internal=False, current_aliases_only=True):
+        if row.get('purpose') != 'subject' or row['kind'] != 'company':
+            continue
+        names.extend(a['name'] for a in row['aliases'] if a['visibility'] == 'public' and a['valid_to']
+                     and a['valid_to'] < today and (not a['valid_from'] or a['valid_from'] <= a['valid_to']))
+    return list(dict.fromkeys(names))
+
+
 def _watches(research):
     return [{key: watch.get(key) for key in WATCH_FIELDS}
             for watch in research.pipeline.monitoring_plan.items(research.project_id)
@@ -54,7 +77,9 @@ def guard_scope(research):
         current_watches = {w['id']: w for w in _watches(research)}
         if (research.binding != frozen['settings_binding'] or current.get('website') != frozen['project']['website']
                 or source_decisions(research.store, research.project_id) != frozen.get('source_decisions', {})
-                or any(current_watches.get(w['id']) != w for w in frozen['watches'])):
+                or any(current_watches.get(w['id']) != w for w in frozen['watches'])
+                # A withdrawn or edited confirmed name stops queries already frozen from it.
+                or ('subject_names' in frozen and subject_names(research) != frozen['subject_names'])):
             raise RuntimeError('collection scope changed during round')
     current_targets = {r['id']: r for r in targets(research)}
     if any(current_targets.get(r['id']) != r for r in (frozen or {}).get('source_queries', [])):
@@ -157,8 +182,17 @@ def prepare(research):
                                 ('policy', 'policy_queries')):
             public_plan[field] = [q for w in watches if w['scope_kind'] == 'relation'
                                   and w['relation_type'] == relation for q in w['queries'] or []]
+        names = None if topic is not None else subject_names(research)
+        if names:
+            # Owner-confirmed public company names (the subject object and its
+            # current public aliases), as the legacy collector already used them.
+            # Without this, institution/applicant indexes only received the legal
+            # name, which English affiliation and assignee fields rarely contain.
+            public_plan['affiliation_names'] = names[:NAME_QUERIES]
+            public_plan['patent_assignees'] = names[:NAME_QUERIES]
         frozen = dict(project={k: research.project.get(k) for k in ('id', 'legal_name', 'name', 'website')},
                       watches=watches, public_plan=public_plan, source_queries=[] if topic else targets(research),
+                      **({'subject_names': names} if names else {}),
                       source_decisions=source_decisions(research.store, research.project_id),
                       settings_binding=research.binding,
                       history_policy=dict(overlap_days=settings.collection_overlap_days,
