@@ -143,3 +143,100 @@ def test_withdrawn_confirmed_name_stops_the_round_before_further_dispatch(entry)
         collection_host.guard_scope(research)
     assert len(calls) == before
     assert execution.read_checkpoint(collection_host.SCOPE)['subject_names'] == [LEGAL, 'Synthetic Host Biologics', 'SynHost']
+
+
+def test_english_indexes_try_english_names_first_and_web_search_keeps_owner_order(entry):
+    pipeline, pid, _calls, _held, start = entry
+    confirm(pipeline, pid, ['Synthetic Host Biologics', 'SynHost', 'Synthetic Host Suzhou'])
+    execution = start()
+    by_source = {}
+    for unit in execution.read_checkpoint(STAGE)['plan']['units']:
+        by_source.setdefault(unit['source'], set()).add(unit['query'])
+    english = {'Synthetic Host Biologics', 'SynHost', 'Synthetic Host Suzhou'}
+    for source in ('openalex_affiliation', 'europepmc_affiliation', 'europepmc_patent'):
+        assert by_source[source] == english, source  # no request spent on the Chinese legal name
+    assert by_source['patent_search'] == {LEGAL, 'Synthetic Host Biologics', 'SynHost'}
+
+
+DISCLOSURE = f'{LEGAL}（Synthetic Host Biologics）正在开发 SYN-101。'
+
+
+@pytest.fixture
+def disclosed(entry, monkeypatch):
+    """The real entry plus one collected public disclosure naming subject, name and product."""
+    from project_watch.studio.settings import SearchConfig
+
+    pipeline, pid, calls, held, start = entry
+    settings = pipeline.settings_store.load()
+    settings.search = SearchConfig(provider='tavily', api_key='synthetic')
+    pipeline.settings_store.save(settings)
+    mode = {'affiliation': ''}
+    original = pipeline.http_factory(None).transport
+
+    def send(method, url, headers, raw, timeout):
+        host = urlsplit(url).hostname
+        if host == 'api.tavily.com':
+            calls.append(url)
+            return Response(200, {}, json.dumps({'results': [dict(title='Synthetic disclosure',
+                url='https://example.invalid/disclosure', content=DISCLOSURE)]}).encode())
+        if host == 'www.ebi.ac.uk' and mode['affiliation'] and 'AFF' in unquote_plus(url):
+            calls.append(url)
+            return Response(200, {}, json.dumps({'hitCount': 1, 'resultList': {'result': [dict(source='MED', id='1',
+                title='Synthetic research', firstPublicationDate='2020-01-01', authorList={'author': [dict(
+                    fullName='Synthetic Author', authorAffiliationDetailsList={'authorAffiliation': [
+                        dict(affiliation=mode['affiliation'])]})]})]}}).encode())
+        return original(method, url, headers, raw, timeout)
+
+    pipeline.http_factory = lambda _: Http(send)
+    return pipeline, pid, held, start, mode
+
+
+def fallback_args(research, **change):
+    from project_watch.studio import collection_dsh
+
+    sources = [collection_dsh.source(research, s['id']) for s in collection_dsh.catalog(research)['sources']]
+    source = next(s for s in sources if 'SYN-101' in s['excerpt'])
+    return dict(adapter='europepmc_topic', query='SYN-101', relationship='product', subject=LEGAL,
+                source_id=source['id'], quote=DISCLOSURE, reason='Disclosure names the product') | change
+
+
+def gate(research, args):
+    from types import SimpleNamespace
+
+    from project_watch.studio.retrieval_queries import require_product_fallback
+
+    require_product_fallback(SimpleNamespace(parent=research, execution=research.execution), args, claim=False)
+
+
+def test_confirmed_name_with_no_matching_affiliation_opens_the_product_fallback(disclosed):
+    pipeline, pid, held, start, _mode = disclosed
+    confirm(pipeline, pid, ['Synthetic Host Biologics'])
+    start()
+    gate(held['research'], fallback_args(held['research']))  # zero-result confirmed-name receipt: allowed
+
+
+def test_unrelated_affiliation_hit_still_opens_but_a_literal_match_keeps_it_shut(disclosed):
+    pipeline, pid, held, start, mode = disclosed
+    confirm(pipeline, pid, ['Synthetic Host Biologics'])
+    mode['affiliation'] = 'Unrelated Hospital'  # a candidate whose real affiliation is someone else
+    start()
+    gate(held['research'], fallback_args(held['research']))
+
+
+def test_literal_affiliation_match_keeps_the_fallback_shut(disclosed):
+    pipeline, pid, held, start, mode = disclosed
+    confirm(pipeline, pid, ['Synthetic Host Biologics'])
+    mode['affiliation'] = 'Synthetic Host Biologics, Suzhou'
+    start()
+    with pytest.raises(ValueError, match='requires_unconfirmed'):
+        gate(held['research'], fallback_args(held['research']))
+
+
+def test_unconfirmed_name_in_the_excerpt_cannot_open_it(disclosed):
+    pipeline, pid, held, start, _mode = disclosed
+    confirm(pipeline, pid, ['SynHost'])  # 'Synthetic Host Biologics' is NOT confirmed here
+    start()
+    # The quoted span names the product and an unconfirmed name, but no confirmed name.
+    quote = 'Synthetic Host Biologics）正在开发 SYN-101。'
+    with pytest.raises(ValueError, match='requires_unconfirmed'):
+        gate(held['research'], fallback_args(held['research'], quote=quote, subject='Synthetic Host Biologics'))

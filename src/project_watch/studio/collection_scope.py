@@ -124,7 +124,8 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         if public_plan.get('paper_authors') or 'openalex_author' in scoped_sources:
             add('openalex_author', 'paper', public_plan.get('paper_authors') or [])
         add('patent_search', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
-        add('europepmc_patent', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
+        add('europepmc_patent', 'patent', public_plan.get('patent_index_assignees')
+            or public_plan.get('patent_assignees') or [name], historical=True)
         if 'google_patent' in scoped_sources:
             add('google_patent', 'patent', [], historical=True)
         # is_biomed is deliberately not an applicability decision. Sponsor and

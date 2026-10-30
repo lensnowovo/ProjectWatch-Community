@@ -16,7 +16,8 @@ TEXT_FIELDS = ('openalex_id', 'doi', 'nct_id', 'phase', 'status', 'sponsor',
                'legal_status', 'family_status', 'source_first_date', 'date_basis',
                'assignee_query', 'applicant_quote', 'applicant_basis', 'family_id', 'application_number',
                'filing_date', 'priority_date', 'provider_kind')
-LIST_FIELDS = ('authors', 'institutions', 'affiliations', 'collaborators', 'conditions', 'applicants', 'current_assignees', 'inventors')
+LIST_FIELDS = ('authors', 'institutions', 'affiliations', 'collaborators', 'conditions', 'applicants', 'current_assignees', 'inventors',
+               'other_versions')
 
 
 class SourceRevisionChanged(ValueError):
@@ -102,6 +103,42 @@ def _rows(db, project_id):
     return result
 
 
+def _patent_groups(items):
+    """Display grouping only; nothing is merged, deleted or fetched.
+
+    A provider family ID wins. Otherwise collected documents linked by a
+    document's own listed other versions (same application, e.g. A1 and B2)
+    form one group. Anything else stays an independent document.
+    """
+    parent = {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    numbers = {item['extra'].get('patent_number'): item['id'] for item in items
+               if not item['extra'].get('family_id') and item['extra'].get('patent_number')}
+    for item in items:
+        if item['id'] not in numbers.values():
+            continue
+        for other in item['extra'].get('other_versions') or []:
+            if other in numbers:
+                parent[find(item['id'])] = find(numbers[other])
+    keys = {}
+    for item in items:
+        family = item['extra'].get('family_id')
+        if family:
+            keys[item['id']] = (family, 'family_id')
+            continue
+        root = find(item['id'])
+        members = sorted(n for n, i in numbers.items() if find(i) == root)
+        keys[item['id']] = (('versions:' + members[0], 'listed_versions') if len(members) > 1
+                            else ('document:' + item['id'], 'document'))
+    return keys
+
+
 def research_sources(store, project_id, category, *, limit=40, offset=0, revision=None):
     if category not in CATEGORIES or type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or offset < 0:
         raise ValueError('invalid research source page')
@@ -110,13 +147,12 @@ def research_sources(store, project_id, category, *, limit=40, offset=0, revisio
         items = [r for r in _rows(db, project_id) if r['category'] == category]
         groups = {}
         if category == 'patent':
+            keys = _patent_groups(items)
             for item in items:
-                family = item['extra'].get('family_id')
-                key = family or 'document:' + item['id']
-                groups.setdefault(key, []).append(item['id'])
+                groups.setdefault(keys[item['id']][0], []).append(item['id'])
             for item in items:
-                key = item['extra'].get('family_id') or 'document:' + item['id']
-                item['family'] = dict(key=key, document_count=len(groups[key]), document_ids=groups[key])
+                key, basis = keys[item['id']]
+                item['family'] = dict(key=key, basis=basis, document_count=len(groups[key]), document_ids=groups[key])
         digest = hashlib.sha256(json.dumps(items, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         if revision is not None and revision != digest:
             raise SourceRevisionChanged('research_sources_changed')

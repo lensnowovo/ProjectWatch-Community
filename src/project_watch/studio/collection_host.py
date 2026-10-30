@@ -45,6 +45,13 @@ def limit_budgets(execution, mode):
 NAME_QUERIES = 3
 
 
+def latin_first(names):
+    """Stable: Latin-script names first, then names containing CJK characters."""
+    def cjk(name):
+        return any('㐀' <= ch <= '鿿' or '豈' <= ch <= '﫿' for ch in name)
+    return sorted(names, key=cjk)
+
+
 def subject_names(research):
     """Confirmed subject names only; internal aliases and resolver guesses are excluded.
 
@@ -188,7 +195,11 @@ def prepare(research):
             # current public aliases), as the legacy collector already used them.
             # Without this, institution/applicant indexes only received the legal
             # name, which English affiliation and assignee fields rarely contain.
-            public_plan['affiliation_names'] = names[:NAME_QUERIES]
+            # OpenAlex/Europe PMC index English affiliations and applicants, so a
+            # Chinese legal name there spends a request on a near-certain zero.
+            # The web patent search keeps the owner's order (CN filings).
+            public_plan['affiliation_names'] = latin_first(names)[:NAME_QUERIES]
+            public_plan['patent_index_assignees'] = latin_first(names)[:NAME_QUERIES]
             public_plan['patent_assignees'] = names[:NAME_QUERIES]
         frozen = dict(project={k: research.project.get(k) for k in ('id', 'legal_name', 'name', 'website')},
                       watches=watches, public_plan=public_plan, source_queries=[] if topic else targets(research),

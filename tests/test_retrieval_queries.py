@@ -20,7 +20,8 @@ from project_watch.studio.http import Http, HttpError, Response
 from project_watch.studio.research_sources import research_sources
 
 
-def patent_html(number='US123456A1', applicant='Synthetic Institute', family='987654', current='Other Owner'):
+def patent_html(number='US123456A1', applicant='Synthetic Institute', family='987654', current='Other Owner',
+                versions=('US999998A1',)):
     """Synthetic values in the live result-page layout.
 
     Layout observed on public US B2, WO A1 and TW A pages (2026-10-30); no
@@ -41,8 +42,9 @@ def patent_html(number='US123456A1', applicant='Synthetic Institute', family='98
         f'<meta itemprop="kindCode" content="{kind}"><span>{number}</span>'
         '<dt>Legal status</dt><dd itemprop="legalStatusIfi" itemscope><span itemprop="status">Active</span></dd></dl>'
         '<dt>Application number</dt><dd itemprop="applicationNumber">US2020000001</dd>'
-        '<dt>Other versions</dt><dd itemprop="directAssociations" itemscope repeat>'
-        '<a href="/patent/US999998A1/en"><span itemprop="publicationNumber">US999998A1</span></a></dd>'
+        '<dt>Other versions</dt>' + ''.join('<dd itemprop="directAssociations" itemscope repeat>'
+        f'<a href="/patent/{v}/en"><span itemprop="publicationNumber">{v}</span>'
+        '(<span itemprop="primaryLanguage">en</span>)</a></dd>' for v in versions) +
         '<dt>Inventor</dt><dd itemprop="inventor" repeat>Synthetic Person</dd>'
         + current_row +
         f'<dt>Original Assignee</dt><dd itemprop="assigneeOriginal" repeat>{applicant}</dd>'
@@ -232,8 +234,10 @@ def test_live_layout_fields_come_only_from_the_documents_own_item():
     assert record['application_number'] == 'US2020000001' and record['inventors'] == ['Synthetic Person']
     assert (record['priority_date'], record['filing_date'], record['publication_date']) == (
         '2019-01-02', '2020-01-02', '2021-02-03')
-    # Other versions, events and the family section never leak into this record.
-    flat = json.dumps(record['field_evidence'])
+    # Listed other versions are kept as numbers only; they never become this
+    # document's identity. Events and the family section never leak in.
+    assert record['other_versions'] == ['US999998A1'] and record['publication_number'] == 'US123456A1'
+    flat = json.dumps({k: v for k, v in record['field_evidence'].items() if k != 'otherVersion'})
     for decoy in ('US999998A1', 'US999997A1', 'Decoy Holder', '2017-07-07', '2018-05-05', 'Application filed'):
         assert decoy not in flat
     # No familyId on the live page: the document stays independent, not guessed.
@@ -313,3 +317,85 @@ def test_refused_product_fallback_is_not_recorded_and_allowed_one_is(tmp_path):
     with pytest.raises(ValueError, match='one_product_dimension'):
         role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202', relationship='product'))
     assert len(role.data['actions']) == 2
+
+
+def test_listed_versions_are_validated_numbers_with_provenance():
+    html = patent_html(versions=('US123456A1', 'US123456B2', 'not-a-number', 'US123456B2'), family=None)
+    record = google_patents.parse(html, 'US123456A1')
+    assert record['other_versions'] == ['US123456B2']  # self, malformed and repeated numbers are dropped
+    assert google_patents.metadata(record) == record
+    tampered = dict(record, other_versions=['US123456B2', 'US777777A1'])
+    with pytest.raises(ValueError, match='versions changed'):
+        google_patents.metadata(tampered)
+
+
+def test_application_and_grant_group_only_through_their_own_listed_versions(tmp_path):
+    """No family ID on the page: link A1/B2 by listed versions, never by title or applicant."""
+    loop, args, calls = setup(tmp_path)
+    pages = {'US123456A1': patent_html('US123456A1', family=None, versions=('US123456B2',)),
+             'US123456B2': patent_html('US123456B2', family=None, versions=('US123456A1',))}
+
+    def send(method, url, headers, raw, timeout):
+        calls.append(url)
+        if urlsplit(url).hostname != 'patents.google.com':
+            pytest.fail('unexpected source: ' + url)
+        return Response(200, {}, pages[url.split('/')[-2]].encode())
+
+    loop.pipeline.http_factory = lambda _: Http(send)
+    loop.collectors = loop.pipeline.tools()[3]
+    for number in pages:
+        result = loop.tool('pw_collect', args | dict(adapter='google_patent', query=number, relationship='unverified'))
+        assert result['collection']['outcome'] == 'success'
+    page = research_sources(loop.store, loop.project_id, 'patent')
+    groups = {r['extra']['patent_number']: r['family'] for r in page['items']}
+    assert groups['US123456A1']['key'] == groups['US123456B2']['key'] == 'versions:US123456A1'
+    assert groups['US123456A1']['basis'] == 'listed_versions' and groups['US123456B2']['document_count'] == 2
+    assert page['family_count'] == 1 and page['total'] == 2  # both documents are kept, not merged
+    assert all(r['extra']['legal_status'] == 'unknown' for r in page['items'])
+    assert not loop.store.list_events(project_id=loop.project_id)
+
+
+def test_unlinked_documents_and_provider_family_keep_their_own_grouping():
+    from project_watch.studio.research_sources import _patent_groups
+
+    def item(i, number, versions=(), family=None):
+        extra = {'patent_number': number, 'other_versions': list(versions)}
+        if family:
+            extra['family_id'] = family
+        return {'id': i, 'extra': extra}
+
+    keys = _patent_groups([
+        item('a', 'US1000001A1', ['US9999999B2']),            # lists a document that was not collected
+        item('b', 'US2000002A1'),                              # same applicant/title would not matter
+        item('c', 'EP3000003A1', ['US1000001A1'], family='google-patents:42'),  # provider family wins
+        item('d', 'WO4000004A1', ['CN5000005A']), item('e', 'CN5000005A')])     # one-sided listing links
+    assert keys['a'] == ('document:a', 'document') and keys['b'] == ('document:b', 'document')
+    assert keys['c'] == ('google-patents:42', 'family_id')
+    assert keys['d'] == keys['e'] == ('versions:CN5000005A', 'listed_versions')
+
+
+def test_validation_refusal_is_forgotten_but_a_journaled_request_is_not(tmp_path):
+    from project_watch.studio import bootstrap_collection
+
+    loop, args, calls = setup(tmp_path)
+    role = bootstrap_collection.Collection(loop)
+    bad = args | dict(adapter='europepmc_affiliation', query='Synthetic Institute', quote='not in the excerpt')
+    before = len(calls)
+    with pytest.raises(ValueError, match='exact public quote'):
+        role.tool('pw_collect', bad)
+    assert role.data['actions'] == {} and len(calls) == before  # refused before dispatch: no slot, no started
+
+    original = loop.tool
+
+    def sent_then_failed(name, tool_args):
+        # A request reaches the journal, then local processing fails.
+        loop.execution.call('open_data', 'synthetic-sent', lambda: Response(200, {}, b'{}'), provider='synthetic')
+        raise ValueError('post-dispatch processing failed')
+
+    loop.tool = sent_then_failed
+    try:
+        with pytest.raises(ValueError, match='post-dispatch'):
+            role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
+    finally:
+        loop.tool = original
+    assert [a['status'] for a in role.data['actions'].values()] == ['started']  # conservative, as before

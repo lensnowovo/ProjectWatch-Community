@@ -94,6 +94,7 @@ def metadata(snapshot):
         if row.get('contract') == 'google-patents-document-v1':
             result.update({key: row[key] for key in ('inventors', 'current_assignees', 'document_kind',
                 'family_id', 'application_number', 'filing_date', 'priority_date', 'provider_kind')})
+            result['other_versions'] = row.get('other_versions', [])
     if snapshot.get('query_context'):
         result['query_context'] = snapshot['query_context']
     # Keep the whole metadata or decline; no silent shortening of asserted facts.

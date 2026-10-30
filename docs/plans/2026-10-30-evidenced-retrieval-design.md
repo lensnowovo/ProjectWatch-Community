@@ -13,9 +13,13 @@ their original prompt/tools; untouched collection roles freeze a new contract.
 2. The ordinary entry's base plan sends the owner-confirmed subject names (the
    subject object's name, current public aliases, then public aliases whose
    validity has ended) to the institution and applicant indexes, at most three
-   per adapter, as the legacy collector did. A name change during the round
-   stops it before further dispatch. Internal and not-yet-valid aliases are not
-   sent. Model-discovered names still need the evidence-bound query below.
+   per adapter, as the legacy collector did. OpenAlex and Europe PMC (papers and
+   patents) try Latin-script names first; the web patent search keeps the
+   owner's order. A name change during the round stops it before further
+   dispatch. Internal and not-yet-valid aliases are not sent. Model-discovered
+   names still need the evidence-bound query below. A successful base query of
+   a confirmed name counts as the institution receipt for a product fallback
+   when the cited excerpt names that confirmed name, the subject and the product.
    Try institution/applicant names before product topics. A product fallback
    requires a current public excerpt naming subject, institution and product,
    plus this project's current job's successful query of that institution. Zero
@@ -40,13 +44,16 @@ their original prompt/tools; untouched collection roles freeze a new contract.
    character offsets and attribute, with decoded and raw response SHA-256 hashes.
    The layout was checked offline against saved public US grant, WO application
    and TW application pages; committed tests use synthetic values in that
-   layout. The live pages carry no family ID, so documents from this provider
-   stay independent unless another basis exists. This is not a live-provider
+   layout. The live pages carry no family ID. The page's own "Other versions"
+   list (same application, e.g. a pre-grant A1 beside its B2) is kept as
+   publication numbers with field provenance; nothing is fetched from it. This is not a live-provider
    compatibility certification or a product network run.
 4. Preserve publication dates, application dates, discovered-at and source
    versions separately. Family grouping is a display/count view only: retained
-   documents and amendments are not deleted or merged by similar title. Unknown
-   families remain independent documents. Independent semantic review still
+   documents and amendments are not deleted or merged by similar title. Without a
+   provider family ID, collected documents linked by one document's listed other
+   versions are grouped (`basis: listed_versions`); never by title or applicant.
+   Unknown families remain independent documents. Independent semantic review still
    precedes events, analysis, today's view and weekly reports.
    The UI exposes loaded / total collected family documents across pagination;
    that total is not the worldwide family size.

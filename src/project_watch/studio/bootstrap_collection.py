@@ -196,11 +196,24 @@ class Collection:
                         return self.defer(operation, 'page_budget_reserved')
                 self.data['actions'][key] = {'operation': operation, 'status': 'started'}
                 self.save()
-            if name == 'pw_collect' and self.retrieval_contract == 'evidence-query-v2':
-                from project_watch.studio.retrieval_queries import require_product_fallback
+                recorded = self._journal_rows()
+            else:
+                recorded = None
+            try:
+                if name == 'pw_collect' and self.retrieval_contract == 'evidence-query-v2':
+                    from project_watch.studio.retrieval_queries import require_product_fallback
 
-                require_product_fallback(self, args)
-            result = self.parent.tool(name, args)
+                    require_product_fallback(self, args)
+                result = self.parent.tool(name, args)
+            except (ValueError, KeyError):
+                # A validation refusal with no new request-journal row sent
+                # nothing: forget the action this call recorded so it neither
+                # uses a slot nor blocks continuation. Anything that reached the
+                # journal keeps its started state, as before.
+                if recorded is not None and self._journal_rows() == recorded:
+                    self.data['actions'].pop(key, None)
+                    self.save()
+                raise
             if name == 'pw_read' and result.get('collection_parent'):
                 result = self.adopt_page(result)
             if external:
@@ -209,6 +222,11 @@ class Collection:
                     'outcome': result.get('collection', {}).get('outcome') or result.get('read_status') or result.get('error', 'observed')}
                 self.save()
             return self.expose(result)
+
+    def _journal_rows(self):
+        with closing(self.store._connect()) as db:
+            return db.execute('SELECT count(*) FROM studio_job_calls WHERE job_id=?',
+                              (self.execution.job['id'],)).fetchone()[0]
 
     def adopt_page(self, source):
         """Choose one immutable body for this round before summary dispatch."""

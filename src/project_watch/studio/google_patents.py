@@ -64,12 +64,22 @@ class Fields(HTMLParser):
         if 'itemscope' in attrs and not scopes and self.top is None:
             self.top = start
         own_item = len(scopes) == 1 and scopes[0]['start'] == self.top and 'itemscope' not in attrs
+        # The one nested item read on purpose: "Other versions" lists this
+        # application's other publication numbers (e.g. its pre-grant A1).
+        # Only the number is kept; nothing is fetched or inherited from it.
+        listed = (len(scopes) == 2 and scopes[0]['start'] == self.top and scopes[1].get('versions')
+                  and field == 'publicationNumber' and 'itemscope' not in attrs)
+        versions = (field == 'directAssociations' and 'itemscope' in attrs and len(scopes) == 1
+                    and scopes[0]['start'] == self.top)
         blocked = any(e['blocked'] for e in self.stack) or tag in ('table', 'script', 'style', 'template')
         blocked |= any(word in (attrs.get('itemprop', '') + ' ' + attrs.get('id', '')).lower()
                        for word in ('citation', 'references', 'similar', 'familyt', 'description', 'claims'))
         selected = not blocked and field in FIELDS and own_item and tag in ('dd', 'span', 'time', 'meta')
+        if listed and not blocked and tag in ('dd', 'span'):
+            field, selected = 'otherVersion', True
         attribute = 'datetime' if tag == 'time' and attrs.get('datetime') else 'content' if tag == 'meta' else None
         entry = dict(tag=tag, field=field if selected else None, parts=[], start=start, itemscope='itemscope' in attrs,
+                     versions=versions,
                      attribute=attribute, attribute_value=attrs.get(attribute) if attribute else None, blocked=blocked)
         if tag == 'meta':
             self.capture(entry, self.position() + len(self.get_starttag_text()))
@@ -134,6 +144,7 @@ def parse(html, number):
         except ValueError as exc:
             raise HttpError('invalid_patent_document_date') from exc
         dates[key] = value
+    other_versions = _versions(values, number)
     family = one('familyId')
     if family and not re.fullmatch(r'[0-9]{1,30}', family):
         raise HttpError('invalid_patent_family')
@@ -144,8 +155,22 @@ def parse(html, number):
         family_id='google-patents:' + family if family else None,
         publication_date=dates['publicationDate'], filing_date=dates['filingDate'], priority_date=dates['priorityDate'],
         legal_status='unknown', date_basis='publication' if dates['publicationDate'] else 'unknown',
+        other_versions=other_versions,
         field_evidence=values, field_spans=parser.spans, span_encoding='unicode_codepoints',
         decoded_html_sha256=hashlib.sha256(html.encode()).hexdigest())
+
+
+def _versions(fields, number):
+    """Valid, distinct listed numbers other than this document; malformed ones are ignored."""
+    result = []
+    for value in fields.get('otherVersion', [])[:20]:
+        try:
+            publication_number(value)
+        except ValueError:
+            continue
+        if value != number and value not in result:
+            result.append(value)
+    return result
 
 
 def metadata(record):
@@ -169,6 +194,8 @@ def metadata(record):
             raise ValueError('patent fields changed')
     if record['family_id'] != ('google-patents:' + fields['familyId'][0] if fields.get('familyId') else None):
         raise ValueError('patent family changed')
+    if record.get('other_versions', []) != _versions(fields, record['publication_number']):
+        raise ValueError('patent versions changed')
     for field, values in fields.items():
         if not all(any(s['field'] == field and s['value'] == v and s['end'] - s['start'] == len(s['html'])
                        for s in record['field_spans']) for v in values):
@@ -189,7 +216,8 @@ def page(http, query):
         extra=dict(source_identity='google-patents:' + number, source_record=record,
             patent_number=number, patent_kind=record['document_kind'], applicants=record['applicants'],
             current_assignees=record['current_assignees'], inventors=record['inventors'],
-            family_id=record['family_id'], legal_status='unknown', provider_kind='third_party_index',
+            family_id=record['family_id'], other_versions=record['other_versions'],
+            legal_status='unknown', provider_kind='third_party_index',
             application_number=record['application_number'], filing_date=record['filing_date'],
             priority_date=record['priority_date'], date_basis=record['date_basis']))
     return dict(items=[item], next_cursor=None, truncated=False, window_applied=False,

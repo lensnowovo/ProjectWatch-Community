@@ -73,12 +73,19 @@ def require_product_fallback(role, args, *, claim=True):
         if t['capability'] == 'available' and t.get('query_context', {}).get('subject') == subject
         and t['query_context']['relationship'] in ('same_entity', 'former_name', 'brand', 'subsidiary')
         and t['ref']['evidence_version_id'] == cited['evidence_version_id'] and t['query'] in quote }
+    # The base plan's owner-confirmed subject names count too, when the same
+    # public excerpt names that confirmed name, the subject and the product.
+    from project_watch.studio.collection_host import SCOPE
+
+    confirmed = set((parent.execution.read_checkpoint(SCOPE) or {}).get('subject_names') or [])
     receipts, matched = [], False
     for state in collection_dsh.rounds(parent):  # validates project, job and binding
         units = {u['id']: u for u in state['plan']['units']}
         for receipt in state['receipts']:
             unit = units[receipt['unit_id']]
             target = eligible.get(unit['target_id'])
+            if target is None and unit['target_id'] == parent.project_id and unit['query'] in confirmed and unit['query'] in quote:
+                target = {'query': unit['query']}
             if (not target or unit['source'] not in ('openalex_affiliation', 'europepmc_affiliation')
                     or unit['query'] != target['query'] or receipt['outcome'] != 'success'):
                 continue
