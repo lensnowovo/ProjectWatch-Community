@@ -87,7 +87,16 @@ class JobExecution:
         if time.monotonic() - self.slice_started >= self.slice_seconds:
             raise JobYield()
 
+    def _progress(self, db):
+        progress(db, self.job['id'])
+
+    def _receipt_guard(self, db):
+        self._guard(db)
+
     def _guard(self, db):
+        from project_watch.studio.public_source_once import guard_other_execution
+
+        guard_other_execution(db, self.job['project_id'])
         row = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
                          (self.job["id"], self.job["lease_token"], now())).fetchone()
         if not row:
@@ -103,7 +112,7 @@ class JobExecution:
             old = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
                              (self.job['id'], stage)).fetchone()
             if not old or old[0] != encoded:
-                progress(db, self.job['id'])
+                self._progress(db)
             db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data",
                        (self.job["id"], stage, encoded))
 
@@ -159,7 +168,7 @@ class JobExecution:
                             for i, part in enumerate(parts)])
             db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data",
                        (self.job["id"], stage, manifest))
-            progress(db, self.job["id"])
+            self._progress(db)
 
     def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
         if kind not in self.budgets or not key or len(key) > 200:
@@ -281,7 +290,7 @@ class JobExecution:
             with closing(self.store._connect()) as db, db:
                 if failed_read:
                     db.execute("BEGIN IMMEDIATE")
-                    self._guard(db)
+                    self._receipt_guard(db)
                 db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
                            ("failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
                 phase = getattr(exc, 'transport_phase', 'unknown')
@@ -302,8 +311,8 @@ class JobExecution:
             raise
         with closing(self.store._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            self._guard(db)
-            progress(db, self.job['id'])
+            self._receipt_guard(db)
+            self._progress(db)
             safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
             from project_watch.studio.usage import FIELDS, reported
 

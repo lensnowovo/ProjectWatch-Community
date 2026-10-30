@@ -30,6 +30,16 @@ def trial(status='RECRUITING', url='https://clinicaltrials.gov/study/NCT00000001
                         'status': status, 'source_record': {'nctId': 'NCT00000001', 'overallStatus': status}})
 
 
+def test_source_only_cannot_resurrect_withdrawn_snapshot(host):
+    research, unit, ingest = host
+    ref = ingest(unit, [trial()])['evidence_refs'][0]
+    research.pipeline.evidence.dependencies.withdraw(research.project_id, ref['evidence_version_id'],
+                                                     'Synthetic withdrawal', actor='test')
+    with pytest.raises(HttpError, match='source_only_withdrawn_item'):
+        CollectionIngest(research.execution, admit_materials=False)(
+            unit | {'id': 'new-metadata'}, [trial('COMPLETED')])
+
+
 def rows(research, table):
     assert table in ('studio_items', 'studio_evidence_versions', 'studio_collection_observations')
     with closing(research.store._connect()) as db:

@@ -70,8 +70,9 @@ def _record(item):
 
 
 class CollectionIngest:
-    def __init__(self, execution):
+    def __init__(self, execution, *, admit_materials=True):
         self.execution, self.store = execution, execution.store
+        self.admit_materials = admit_materials
         self.project_id = execution.job['project_id']
         with self.store.write_scope(execution._guard), closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
@@ -135,7 +136,17 @@ class CollectionIngest:
                 raise HttpError('ambiguous_collection_identity')
             existing = matches[0] if matches else None
         item_id = existing['id'] if existing else uuid.uuid4().hex
+        if not self.admit_materials and existing is not None and (
+                existing['triaged'] or existing['event_id'] or existing['status'] == 'dismissed' or not existing['relevant']):
+            # A source-only grant cannot invalidate or replace admitted events.
+            raise HttpError('source_only_admitted_item')
         key = 'collection:' + hashlib.sha256(identity.encode()).hexdigest()
+        if not self.admit_materials and db.execute(
+                "SELECT 1 FROM studio_evidence_lifecycle l JOIN studio_evidence_versions v ON v.id=l.evidence_version_id "
+                "WHERE l.project_id=? AND l.status='withdrawn' AND (v.source_key=? OR v.id IN ("
+                "SELECT evidence_version_id FROM studio_collection_observations WHERE item_id=?)) LIMIT 1",
+                (self.project_id, key, item_id)).fetchone():
+            raise HttpError('source_only_withdrawn_item')
         older_source = source is not None and _time(observed) < _time(source['observed_at'])
         # A second adapter can discover an already indexed URL. It must not
         # downgrade that item with an older cached representation either.
@@ -180,7 +191,7 @@ class CollectionIngest:
                        'observed_at=excluded.observed_at', (self.project_id, identity, item_id, record['id'], observed))
         db.execute('INSERT OR IGNORE INTO studio_collection_observations VALUES (?,?,?,?,?,?)',
                    (self.execution.job['id'], unit['id'], item_id, record['id'], operation, observed))
-        if operation != 'historical':
+        if operation != 'historical' and self.admit_materials:
             evidence_tasks.admit(db, self.execution, record['id'])
         return dict(item_id=item_id, evidence_version_id=record['id'], identity=identity,
                     operation=prior['operation'] if prior else operation, observed_at=prior['observed_at'] if prior else observed,

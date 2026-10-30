@@ -80,9 +80,17 @@ class ApiRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def urllib_transport(proxy_url: str = "") -> Transport:
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """A finite exact-GET grant never authorizes a second URL implicitly."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise HttpError('unsafe_redirect')
+
+
+def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Transport:
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else system_proxies()
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies), ApiRedirectHandler())
+    redirect = ApiRedirectHandler() if allow_redirects else NoRedirectHandler()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies), redirect)
 
     def send(method: str, url: str, headers: dict[str, str], body: bytes | None,
              timeout: float) -> Response:
