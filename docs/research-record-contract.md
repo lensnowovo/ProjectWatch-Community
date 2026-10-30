@@ -20,6 +20,23 @@ settled or unknown request keeps its original contract; this feature does not
 reset tasks or authorize their replay. New native DSH extraction schemas are
 opted into by a frozen `bibliography-v1` task contract; old schemas remain intact.
 
+An explicit `bibliography_once` maintenance entry can review one original paper
+whose only deferral is an unattempted `publication_reserve`. It has no scheduler
+or HTTP route. A separately reviewed finite grant and exact original-job plan
+are required. It retains the same material task, original inputs, failed/unknown
+requests and deferral history; extraction and source calls are prohibited. One
+independent admission call must fit the original material budget. Failure or an
+unknown result consumes this single operation without retry or choosing another
+paper. The ordinary path does not silently clear such deferrals.
+
+After admission, the normal analysis child inherits all original calls and the
+original round cap. An existing tail must be terminal and have no spent analysis
+model balance or unresolved calls. Its exact budget pointer is archived in the
+new operation's START plan before the normal shared-budget tail advances;
+original calls, extraction checkpoints and terminal job contents are preserved.
+This does not reset a round or authorize additional real testing. A successful
+admission alone is not proof that analysis or date-filtered brief pages finished.
+
 Admitted records become events and feed the existing independently reviewed
 analysis. Today/week windows use the reviewed event date, not collection time.
 Weekly digests still require a reviewed major/notable assessment. Undated and

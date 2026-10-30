@@ -131,10 +131,15 @@ def proposal(execution, task, source):
             return None
         if db.execute('SELECT 1 FROM studio_material_calls WHERE task_id=?', (task['id'],)).fetchone():
             return None
-    value = evidence_metadata(execution.store, task['project_id'], task['evidence_version_id'])
+    return bibliographic_proposal(execution.store, task, source)
+
+
+def bibliographic_proposal(store, task, source):
+    """Pure proposal builder; callers own admission and original-task guards."""
+    value = evidence_metadata(store, task['project_id'], task['evidence_version_id'])
     if not value or value['kind'] != 'paper' or not value['authors'] or len(value['title']) > 200:
         return None
-    company = execution.store.get_project(task['project_id'])['legal_name']
+    company = store.get_project(task['project_id'])['legal_name']
     # Use only the saved confirmed name. Alias discovery is separate, evidenced work.
     matches = [a for a in value['affiliations'] if re.search(
         r'(?<!\w)' + re.escape(company) + r'(?!\w)', a, re.IGNORECASE)] if company.strip() else []
