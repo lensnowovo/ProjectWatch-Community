@@ -809,6 +809,9 @@ class StudioStore:
                     db.execute("UPDATE studio_items SET extra=json_set(COALESCE(extra,'{}'),"
                                "'$.importance_assessment',json(?)) WHERE id=?",
                                (json.dumps(r["importance_assessment"], ensure_ascii=False), r["id"]))
+                if r.get("relation") in ("subject", "competitor", "field", "unrelated"):
+                    db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
+                               "'$.research_relation',?) WHERE id=? AND category IN ('paper','patent')", (r["relation"], r["id"]))
                 if isinstance(r.get("triage_binding"), dict):
                     db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
                                "'$.triage_binding',json(?)) WHERE id=?",

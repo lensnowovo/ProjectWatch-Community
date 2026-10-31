@@ -45,8 +45,13 @@ def _permitted(db, project_id, version_id):
 
 
 def _guard(execution, db):
+    from project_watch.studio.dispatch import KINDS
+
     execution._guard(db)
-    project_guard(db, execution.job['project_id'], execution.job['id'])
+    if execution.job.get('kind') not in KINDS:
+        # Legacy owners keep their cross-job hold. The rewritten pipeline treats
+        # another job's unknown request as accounting, not a reason to stop.
+        project_guard(db, execution.job['project_id'], execution.job['id'])
     project = db.execute('SELECT status,consent_at FROM studio_projects WHERE project_id=?',
                          (execution.job['project_id'],)).fetchone()
     if not project or project[0] != 'active':

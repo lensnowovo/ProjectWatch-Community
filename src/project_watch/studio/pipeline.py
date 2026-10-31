@@ -121,6 +121,7 @@ _TRIAGE_SYSTEM = """你是投资机构的研究助理，负责筛选与被监控
 - relevant：是否真的与该公司、它的直接竞品、所在赛道或相关政策有关，或直接涉及下方列出的跟踪事项的对象和问题（同名不同公司、广告、无关内容为 false）；
 - category：company（公司本身）| competitor（竞品）| industry（赛道/技术）| policy（政策监管）| paper（论文）| trial（临床试验）| patent（专利）；
 - importance：major（融资、并购、重大合作/订单、监管处罚、关键管线进展、核心人员变动、重大负面）| notable（值得一看）| routine（一般）；
+- relation（仅论文 paper / 专利 patent 必填）：subject（作者单位或申请人明确写着被监控公司或其已知名称）| competitor（明确是竞品的署名或申请）| field（同领域、同技术或同靶点，但不是公司署名或申请）| unrelated。检索命中、标题相似不是署名证明；没有署名或申请人证据时不得填 subject；
 - summary：一句话中文摘要（20-60 字）；
 - impact：对这家公司意味着什么，一句话，major 与 notable 必须填写。优先结合“内部背景”里的计划、关键数字、客户和风险具体说明：
   是验证还是挑战了哪项计划或假设、可能影响哪个数字（例如“竞品降价 20%，BP 中 2026 年收入预测的单价假设承压”）；
@@ -131,7 +132,7 @@ _TRIAGE_SYSTEM = """你是投资机构的研究助理，负责筛选与被监控
 - 巨潮资讯公告：只有公告确实涉及该公司（投资/入股、合同订单、关联交易、客户或供应商披露、诉讼）才算相关，并说明是哪家上市公司、什么关系；仅字面同名或泛泛提及判为不相关。
 - 工商变更：股东/投资人、注册资本、法定代表人、名称、经营状态变更为 major；经营范围、地址、高管备案为 notable；其余 routine。
 - 国内临床登记/审评（药物临床试验登记平台、CDE、NMPA）：新登记、受理、获批、临床阶段推进为 major。
-输出 JSON：{"results":[{"id":"原样返回","relevant":true,"category":"company","importance":"notable","summary":"","impact":""}]}"""
+输出 JSON：{"results":[{"id":"原样返回","relevant":true,"category":"company","relation":"","importance":"notable","summary":"","impact":""}]}"""
 
 _BODY_PREFILTER_SYSTEM = """为项目监控选择值得读取正文的公开材料，只判断相关性，不做重要性或投资判断。
 输入是标题和检索摘要，不是完整正文。明确同名不同主体、广告或无关内容可 read=false；
@@ -1375,7 +1376,9 @@ class Pipeline:
                 continue
             for r in answered:
                 if isinstance(r, dict) and r.get("id") in by_id:
-                    category = "paper" if by_id[r["id"]]["category"] == "paper" else r.get("category")
+                    # Research records keep their kind; relevance is the model's call, the page is not.
+                    kind = by_id[r["id"]]["category"]
+                    category = kind if kind in ("paper", "patent") else r.get("category")
                     results.append({**r, "category": category if category in (
                         "company", "competitor", "industry", "policy", "paper", "trial", "patent")
                         else None})
@@ -1438,6 +1441,19 @@ class Pipeline:
                 truncated = abstract.get("truncated") or len(abstract["text"]) > len(text)
                 return metadata + "论文摘要（OpenAlex，不是全文" + ("；部分摘要" if truncated else "") + f"）：{text}"
             return metadata + "未取得论文摘要；仅有书目信息：" + (row.get("snippet") or "")[:800]
+        if row["category"] == "patent":
+            extra = row.get("extra") or {}
+            if isinstance(extra, str):
+                extra = json.loads(extra)
+            applicants = "、".join([*extra.get("applicants", []), *([extra["provider_affiliation"]] if extra.get("provider_affiliation") else [])])[:600]
+            number = (extra.get("patent_number") or "") + (extra.get("patent_kind") or "")
+            dates = "；".join(f"{label}{extra[key]}" for label, key in (("优先权日 ", "priority_date"), ("申请日 ", "filing_date"))
+                             if extra.get(key))
+            lines = [f"申请人（提供方原始字段）：{applicants or '未知'}", f"公开号：{number or '未知'}；法律状态未核"]
+            if dates:
+                lines.append(dates)
+            lines.append(f"摘要：{row['snippet'][:800]}")
+            return "\n".join(lines)
         if row.get("body"):
             return f"{BODY_LABEL.get(row.get('body_status'), '正文摘录')}：{row['body'][:BODY_EXCERPT]}"
         return f"摘要：{row['snippet'][:800]}"

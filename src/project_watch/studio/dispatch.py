@@ -4,8 +4,10 @@ A request journal is accounting, not a gate:
 
 - every dispatched request counts against the project's monthly budget for its
   kind, whatever its outcome (completed, failed, unknown);
-- a request key whose earlier outcome is unknown (or still started) anywhere in
-  the project is never sent again; the caller gets a definite "not sent";
+- a request key whose earlier outcome is unknown, or a model request answered
+  with a 5xx, is never sent again automatically; the caller gets a definite
+  "not sent". The owner's explicit redo is consent to resend; a request still
+  in flight is never sent twice;
 - nothing else blocks work. Another job's pending request is not a reason to
   stop an independent request.
 
@@ -27,6 +29,15 @@ DEFAULT_MONTHLY = {'model': 400, 'search': 400, 'open_data': 1500, 'page': 400, 
 LEGACY_KINDS = frozenset(('external', 'external_followup', 'insight', 'scope', 'assessment'))
 SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_project_budgets (
     project_id TEXT PRIMARY KEY REFERENCES projects(id), monthly TEXT NOT NULL, updated_at TEXT NOT NULL)'''
+
+
+RECEIVED_FAILURE = '(500,502,503,504,529)'  # answered, but no usable reply; billing may be unknown
+REDO_PREFIX = 'redo:'
+
+
+def explicit_redo(job):
+    """Jobs the owner started from the "re-analyse with saved material" action."""
+    return (job.get('input_version') or '').startswith(REDO_PREFIX)
 
 
 class NotSent(HttpError):
@@ -59,11 +70,18 @@ def check(db, job, kind, call_key, provider_hash):
         raise NotSent('project_paused')
     if not project['consent_at']:
         raise NotSent('project_not_consented')
-    # The same request anywhere in the project with an unresolved outcome.
-    unresolved = db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-                            "WHERE j.project_id=? AND c.call_key=? AND c.status IN ('unknown','started') LIMIT 1",
-                            (job['project_id'], call_key)).fetchone()
-    if unresolved:
+    # A request still in flight is never sent twice, whoever asks.
+    if db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
+                  "WHERE j.project_id=? AND c.call_key=? AND c.status='started' AND j.status='running' "
+                  "AND j.lease_until>? LIMIT 1", (job['project_id'], call_key, now())).fetchone():
+        raise NotSent('request_in_flight')
+    # The same request with an unresolved or billing-ambiguous outcome: never
+    # resent automatically. An owner's explicit redo is consent to resend it.
+    if not explicit_redo(job) and db.execute(
+            "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
+            "WHERE j.project_id=? AND c.call_key=? AND (c.status IN ('unknown','started') "
+            f"OR (c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE})) LIMIT 1",
+            (job['project_id'], call_key)).fetchone():
         raise NotSent('unknown_not_resent')
     backoff = db.execute('SELECT retry_after FROM studio_provider_backoff WHERE provider=?', (provider_hash,)).fetchone()
     if backoff and backoff[0] > now():

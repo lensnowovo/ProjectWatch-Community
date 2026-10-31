@@ -25,6 +25,8 @@ INPUT = 'collect_input_v1'
 RESULT = 'collect_result_v1'
 PATENTS = SUPPLEMENT_PREFIX + 'patent_documents'
 MAX_PATENT_DOCUMENTS = 6
+MAX_BODY_PAGES = 8
+BODIES = 'collect_bodies_v1'
 WATCH_FIELDS = ('id', 'visibility', 'status', 'scope_kind', 'relation_type', 'relation_target',
                 'axis', 'queries', 'lifecycle_version')
 
@@ -104,6 +106,30 @@ def _patent_followups(execution, receipts_items):
     return list(dict.fromkeys(numbers))[:MAX_PATENT_DOCUMENTS]
 
 
+def read_bodies(pipeline, execution, collectors):
+    """Bounded article reading for this round's news: the model only picks what to read.
+
+    Reading is collection, so it happens here and never in analysis. Without a
+    model every candidate stays readable by its summary; nothing is dropped.
+    """
+    pid = execution.job['project_id']
+    _, _, llm, _ = pipeline.tools()
+    with closing(pipeline.store._connect()) as db:
+        ids = {r[0] for r in db.execute('SELECT DISTINCT o.item_id FROM studio_collection_observations o '
+                                        "JOIN studio_items i ON i.id=o.item_id WHERE o.job_id=? AND i.category NOT IN ('paper','patent','trial')",
+                                        (execution.job['id'],))}
+    if not ids or not llm.ready:
+        return {'read': 0, 'candidates': len(ids)}
+    project = pipeline.store.get_project(pid) or {}
+
+    def stage(text):
+        pipeline.store.set_stage(execution.job['id'], text)
+    plan = execution.read_checkpoint(INPUT)['public_plan']
+    eligible = pipeline.prefilter_bodies(pid, llm, project, plan, stage, item_ids=ids)
+    read = pipeline.fetch_bodies(pid, stage, eligible_ids=eligible, collectors=collectors, page_limit=MAX_BODY_PAGES)
+    return {'read': read, 'candidates': len(ids)}
+
+
 def run(pipeline, execution, *, mode='refresh'):
     frozen = freeze(pipeline, execution, mode=mode)
     pid = execution.job['project_id']
@@ -138,12 +164,17 @@ def run(pipeline, execution, *, mode='refresh'):
                                mode=frozen['mode'], candidates=candidates, at=frozen['at'])
         extra = run_collection(CollectionLedger(execution, extra_plan, stage=PATENTS), collect=sources.collect,
                                ingest=ingest, guard=guard)
+    bodies = execution.read_checkpoint(BODIES)
+    if bodies is None:
+        bodies = read_bodies(pipeline, execution, collectors)
+        execution.checkpoint(BODIES, bodies)
     rows = coverage['rows'] + (extra['rows'] if extra else [])
     outcomes = [r['outcome'] for r in rows if r['capability'] == 'available' and r['outcome'] != 'not_due']
     status = ('failed' if outcomes and all(o in ('failed', 'unknown') for o in outcomes)
               else 'complete' if all(o == 'success' for o in outcomes) else 'partial')
     result = dict(status=status, finished_at=now(), sources=len(rows),
-                  outcomes={o: outcomes.count(o) for o in set(outcomes)}, patent_documents=numbers)
+                  outcomes={o: outcomes.count(o) for o in set(outcomes)}, patent_documents=numbers,
+                  bodies_read=bodies.get('read', 0))
     execution.checkpoint(RESULT, result)
     pipeline.store.touch(pid, 'last_external_at')
     if status != 'failed':

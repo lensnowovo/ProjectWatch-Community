@@ -15,7 +15,7 @@ TEXT_FIELDS = ('openalex_id', 'doi', 'nct_id', 'phase', 'status', 'sponsor',
                'patent_number', 'patent_kind', 'patent_country', 'provider_affiliation',
                'legal_status', 'family_status', 'source_first_date', 'date_basis',
                'assignee_query', 'applicant_quote', 'applicant_basis', 'family_id', 'application_number',
-               'filing_date', 'priority_date', 'provider_kind')
+               'filing_date', 'priority_date', 'provider_kind', 'research_relation')
 LIST_FIELDS = ('authors', 'institutions', 'affiliations', 'collaborators', 'conditions', 'applicants', 'current_assignees', 'inventors',
                'other_versions')
 
