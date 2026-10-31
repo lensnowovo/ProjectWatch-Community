@@ -99,6 +99,52 @@ def test_semantic_paths_and_complete_analysis_remain_available():
     assert list(aliases.payload['fields'].values()) == list(source['fields'].values())
 
 
+def test_semantic_quote_anchors_preserve_all_source_text_and_exact_offsets():
+    ctx = {'numbered': {'N1': {'context': 'First fact.\n' + '长' * 660, 'title': 'Title'},
+                        'N2': {'context': 'Counterevidence.', 'title': 'Other title'}}}
+    source = judgment.review_input({'headline': 'First fact.'}, ctx)
+    before = deepcopy(source)
+    aliases = judgment.ReviewFieldAliases(source)
+    spans = aliases.payload['evidence_spans']
+    for ref, evidence in source['evidence'].items():
+        for field in ('context', 'title'):
+            pieces = [s for s in spans.values() if s['ref'] == ref and s['field'] == field]
+            assert ''.join(s['quote'] for s in pieces) == evidence[field]
+            assert all(evidence[field][s['start']:s['end']] == s['quote'] for s in pieces)
+    value = {'checks': [{'field': 'F1', 'status': 'supported', 'reason': 'Exact source',
+                         'evidence': [{'ref': 'N1', 'quote_id': 'Q1'}]}]}
+    result = aliases.decode(value)
+    assert judgment.validate_review(result, source) == []
+    assert result['checks'][0]['evidence'] == [{'ref': 'N1', 'quote': 'First fact.\n'}]
+    assert source == before and value['checks'][0]['evidence'][0]['quote_id'] == 'Q1'
+
+
+@pytest.mark.parametrize('witness', [
+    {'ref': 'N1', 'quote_id': 'Q999'}, {'ref': 'N2', 'quote_id': 'Q1'},
+    {'ref': 'N1', 'quote_id': []}, {'ref': 'N1', 'quote_id': ' Q1'},
+    {'ref': 'N1', 'quote_id': 'Q1', 'quote': 'Altered fact'},
+])
+def test_quote_anchor_cannot_invent_or_swap_source_or_override_original(witness):
+    source = judgment.review_input({'headline': 'First fact.'},
+        {'numbered': {'N1': {'context': 'First fact.'}, 'N2': {'context': 'Other fact.'}}})
+    value = {'checks': [{'field': 'F1', 'status': 'supported', 'reason': 'Synthetic',
+                         'evidence': [witness]}]}
+    with pytest.raises(ValueError, match='review_evidence_invalid'):
+        judgment.ReviewFieldAliases(source).decode(value)
+
+
+def test_quote_anchor_does_not_override_semantic_rejection_or_field_coverage():
+    source = judgment.review_input({'headline': 'Unsupported claim.'},
+                                  {'numbered': {'N1': {'context': 'Only a limited fact.'}}})
+    aliases = judgment.ReviewFieldAliases(source)
+    value = {'checks': [{'field': 'F1', 'status': 'insufficient', 'reason': 'Too strong',
+                         'evidence': [{'ref': 'N1', 'quote_id': 'Q1'}]}]}
+    assert judgment.validate_review(aliases.decode(value), source)[0]['code'] == 'evidence_insufficient'
+    value['checks'].append(deepcopy(value['checks'][0]))
+    with pytest.raises(ValueError, match='coverage'):
+        judgment.validate_review(aliases.decode(value), source)
+
+
 @pytest.mark.parametrize('bad', [None, [], {'checks': None}, {'checks': [None]},
                                {'checks': [{}]}])
 def test_malformed_response_cannot_be_decoded(bad):
@@ -154,3 +200,35 @@ def test_prior_policy_receipt_does_not_skip_new_record_review(research, monkeypa
     records.admit(research, research.state['records'], [])
     records.admit(research, research.state['records'], [])
     assert len(calls) == 2
+
+@pytest.mark.parametrize('form', ['paths', 'mixed', 'duplicate', 'unknown'])
+def test_semantic_review_accepts_exact_paths_but_keeps_unique_complete_coverage(form):
+    source = judgment.review_input({'headline': 'One', 'operations': {'summary': 'Two'}},
+        {'numbered': {'N1': {'context': 'One Two'}}})
+    aliases = judgment.ReviewFieldAliases(source)
+    value = synthetic_review(aliases.payload)
+    for i, row in enumerate(value['checks']):
+        if form != 'mixed' or i == 0:
+            row['field'] = aliases.reverse[row['field']]
+    if form == 'duplicate':
+        value['checks'][1]['field'] = 'F1'
+    elif form == 'unknown':
+        value['checks'][1]['field'] = 'operations.missing'
+    if form in ('duplicate', 'unknown'):
+        with pytest.raises(ValueError, match='coverage'):
+            judgment.validate_review(aliases.decode(value), source)
+    else:
+        result = aliases.decode(value)
+        assert judgment.validate_review(result, source) == []
+        assert [r['field'] for r in result['checks']] == list(source['fields'])
+
+
+def test_semantic_consistency_accepts_exposed_paths_without_guessing():
+    source = judgment.review_input({'headline': 'One', 'operations': {'summary': 'Two'}},
+        {'numbered': {'N1': {'context': 'One Two'}}})
+    source['phase'] = 'consistency'
+    aliases = judgment.ReviewFieldAliases(source)
+    result = aliases.decode({'consistent': False, 'reason': 'Synthetic',
+        'conflicts': [{'fields': ['headline', 'F2'], 'reason': 'Synthetic conflict'}]})
+    assert result['conflicts'][0]['fields'] == ['headline', 'operations.summary']
+    assert len(judgment.validate_consistency(result, source)) == 1

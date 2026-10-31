@@ -262,6 +262,7 @@ class Gateway:
         from project_watch.studio.dsh_judgment_review import (
             CONSISTENCY_SYSTEM,
             OUTPUT_TOKENS,
+            SPAN_GUIDANCE,
             SYSTEM,
             ReviewFieldAliases,
         )
@@ -282,6 +283,8 @@ class Gateway:
 
                     system += '\n' + IMPORTANCE_GUIDANCE + '独立复核评级的影响强度和理由；依据不足判 insufficient。'
             aliases = ReviewFieldAliases(payload)
+            if aliases.payload.get('evidence_spans') and payload.get('phase') != 'consistency':
+                system += SPAN_GUIDANCE
             body = {'model': self.model.model, 'stream': False, 'messages': [
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': json.dumps(aliases.payload, ensure_ascii=False)}]}
@@ -294,7 +297,11 @@ class Gateway:
             if options.get('json_object'):
                 body['response_format'] = {'type': 'json_object'}
             self.research.store.set_stage(self.research.execution.job['id'], 'DSH 复核判断依据')
-            data = self._send_model(body)
+            from project_watch.studio.research_budget import PHASES, phase
+
+            review_phase = max(('review', phase(self.research.execution)), key=PHASES.index)
+            with self.research.execution.research_budget_phase(review_phase):
+                data = self._send_model(body)
             try:
                 choice = data['choices'][0]
                 message = choice['message']
@@ -498,10 +505,11 @@ def drain_gateway(research, gateway):
 
 
 def settled_error(research, error):
+    from project_watch.studio.dsh_closeout import active_hold
     # Resolve only AFTER drain. A late receipt may supersede SDK idle/error.
     if any(row["unknown"] for row in research.execution.usage().values()):
         return "request_outcome_unknown"
-    hold = research.execution.read_checkpoint("dsh_hold")
+    hold = active_hold(research.execution.read_checkpoint("dsh_hold"))
     if hold:
         return hold["code"]
     return error or (None if research.state["finished"] else "dsh_no_valid_submission")
@@ -697,6 +705,10 @@ def recover_authorized_site(pipeline, execution):
 def run_bootstrap(pipeline, execution, runtime_root: Path):
     from project_watch.studio import collection_host, event_insight_work, progressive_bootstrap
 
+    if execution.read_checkpoint('update_run_owner_v1'):
+        from project_watch.studio import update_run
+
+        return update_run.run(pipeline, execution, runtime_root)
     owner = progressive_bootstrap.freeze(execution, 'bootstrap')
     admission = collection_host.admit(execution, mode='first')
     if admission['enabled']:
@@ -738,6 +750,14 @@ def run_bootstrap(pipeline, execution, runtime_root: Path):
 def run_monitor(pipeline, execution, runtime_root: Path, *, analysis_only=False):
     from project_watch.studio import collection_host, progressive_bootstrap
     from project_watch.studio.dsh_monitor import PublicMonitor
+    from project_watch.studio.independent_collection import run_if_admitted
+
+    if not analysis_only and execution.read_checkpoint('update_run_owner_v1'):
+        from project_watch.studio import update_run
+
+        return update_run.run(pipeline, execution, runtime_root)
+    if not analysis_only and run_if_admitted(pipeline, execution):
+        return execution.read_checkpoint('independent_public_collection_result_v1')
 
     research_class = PublicMonitor
     request = execution.read_checkpoint('collection_request_v1') or {}

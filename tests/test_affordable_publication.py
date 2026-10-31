@@ -13,7 +13,8 @@ def test_small_cap_delivers_events_and_same_job_replays_without_new_calls(tmp_pa
 
     def bounded(current, mode):
         limit(current, mode)
-        current.budgets['model'] = min(current.budgets['model'], cap)
+        existing = current.budgets.get('model')
+        current.budgets['model'] = cap if existing is None else min(existing, cap)
 
     monkeypatch.setattr(collection_host, 'limit_budgets', bounded)
     pipeline.run(execution.job)
@@ -25,6 +26,11 @@ def test_small_cap_delivers_events_and_same_job_replays_without_new_calls(tmp_pa
     used = execution.budget_used('model')
     assert 2 <= used <= cap
     assert execution.usage()['model']['unknown'] == 0
+    from project_watch.studio import snapshot_work, update_run
+    analysis = execution.read_checkpoint(update_run.STATE)['phases']['analysis']
+    assert analysis['status'] == 'partial'
+    assert analysis['output']['result']['reason'] == 'analysis_allowance_insufficient'
+    assert not execution.read_checkpoint(snapshot_work.RESULT)
     calls = len(seen['models'])
     pipeline.run(execution.job)
     assert execution.budget_used('model') == used and len(seen['models']) == calls

@@ -97,6 +97,13 @@ class Index:
         return result
 
 
+def wire_limit(execution):
+    from project_watch.studio.research_budget import model_limits
+
+    limits = model_limits(execution)
+    return limits['wire_bytes'] if limits else MAX_WIRE_BYTES
+
+
 def fit(body, execution):
     """Return a bounded view or None when irreducible history cannot fit.
 
@@ -104,8 +111,9 @@ def fit(body, execution):
     Index only user/tool content; never summarize assistant reasoning or invent
     a continuation. The caller closes collection partially on a hard limit.
     """
+    maximum = wire_limit(execution)
     before = wire(body)
-    if len(before) <= MAX_WIRE_BYTES:
+    if len(before) <= maximum:
         return body
     result = deepcopy(body)
     index = Index(execution)
@@ -137,12 +145,12 @@ def fit(body, execution):
             continue
         message['content'] = compact
         changed.append({'message': position, 'raw_message': raw_ref, 'index': ref})
-        if len(wire(result)) <= MAX_WIRE_BYTES:
+        if len(wire(result)) <= maximum:
             break
     after = wire(result)
     receipt = {'version': 1, 'original_sha256': hashlib.sha256(before).hexdigest(),
                'original_bytes': len(before), 'wire_sha256': hashlib.sha256(after).hexdigest(),
-               'wire_bytes': len(after), 'limit': MAX_WIRE_BYTES, 'indexes': changed,
-               'fits': len(after) <= MAX_WIRE_BYTES}
+               'wire_bytes': len(after), 'limit': maximum, 'indexes': changed,
+               'fits': len(after) <= maximum}
     execution.checkpoint_chunked('cc-fit:' + receipt['original_sha256'][:40], receipt)
     return result if receipt['fits'] else None

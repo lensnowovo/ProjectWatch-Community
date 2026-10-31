@@ -52,16 +52,27 @@ CREATE TABLE IF NOT EXISTS studio_provider_backoff (
 class JobExecution:
     def __init__(self, store, job, *, budgets=None):
         self.store, self.job = store, job
-        # Model work scales with the authorized material, not an arbitrary
-        # per-job count. Explicit acceptance-batch budgets still take precedence.
+        # Retain historical values for frozen receipt compatibility only.
+        # Neither these values nor acceptance counts limit dispatch.
         self.budgets = {"search": 64, "model": None, "open_data": 128, "page": 30,
                         # Official-site checks: a few candidate homepages, robots files and up to MAX_PAGES pages.
                         "site": 16, **(budgets or {})}
+        self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
         self.last_replay = False
         self.slice_started = time.monotonic()
         self.slice_seconds = 120
         self._model_continuation = None
         self._site_recovery = None
+
+    @contextmanager
+    def call_scope(self, kinds):
+        """Restrict capabilities temporarily, without creating a request quota."""
+        previous = self.allowed_call_kinds
+        self.allowed_call_kinds = frozenset(kinds) if previous is None else previous & frozenset(kinds)
+        try:
+            yield
+        finally:
+            self.allowed_call_kinds = previous
 
     @contextmanager
     def site_recovery(self, pipeline, slot):
@@ -86,6 +97,15 @@ class JobExecution:
     def yield_if_due(self):
         if time.monotonic() - self.slice_started >= self.slice_seconds:
             raise JobYield()
+
+    @contextmanager
+    def research_budget_phase(self, phase):
+        previous = getattr(self, '_research_budget_phase', None)
+        self._research_budget_phase = phase
+        try:
+            yield
+        finally:
+            self._research_budget_phase = previous
 
     def _progress(self, db):
         progress(db, self.job['id'])
@@ -170,7 +190,7 @@ class JobExecution:
                        (self.job["id"], stage, manifest))
             self._progress(db)
 
-    def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
+    def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300, cost_request=None):
         if kind not in self.budgets or not key or len(key) > 200:
             raise ValueError("invalid request journal key")
         # Provider values are only hashes, not URLs, keys or private prompts.
@@ -180,6 +200,9 @@ class JobExecution:
             db.execute("BEGIN IMMEDIATE")
             self._guard(db)
             request_key = key
+            from project_watch.studio.public_research_admission import held_jobs
+
+            held_jobs(db, self.job['project_id'], self.job['id'])
             recovery_owner = self.job['id']
             recovery = db.execute('SELECT next_key FROM studio_call_recoveries WHERE job_id=? AND base_key=? '
                                   'ORDER BY rowid DESC LIMIT 1', (self.job['id'], key)).fetchone()
@@ -221,6 +244,13 @@ class JobExecution:
             from project_watch.studio.recovery import guard_legacy_model_dispatch
 
             guard_legacy_model_dispatch(db, self.job, kind, request_key, key, provider_hash)
+            # Removing quotas must not turn a new key into an implicit retry
+            # around an unresolved request in this job. Explicit recovery retains
+            # its existing identity/consent checks and completed replies replay above.
+            if not recovery and db.execute(
+                    "SELECT 1 FROM studio_job_calls WHERE job_id=? AND status='unknown' LIMIT 1",
+                    (self.job['id'],)).fetchone():
+                raise HttpError('request_outcome_unknown')
             # A pause is a dispatch boundary, not an uncertain transport outcome.
             if self._site_recovery:
                 from project_watch.studio.recovery import dsh_site_recovery
@@ -242,14 +272,20 @@ class JobExecution:
             from project_watch.studio.material_handoff import restore_limits
 
             restore_limits(self, db)
-            count = self.budget_used(kind, db=db)
-            if self.budgets[kind] is not None and count >= self.budgets[kind]:
-                raise HttpError("request_budget")
+            from project_watch.studio.research_work_budget import restore as restore_work_budget
+
+            restore_work_budget(self, db)
+            if self.allowed_call_kinds is not None and kind not in self.allowed_call_kinds:
+                raise HttpError("call_kind_not_permitted")
             from project_watch.studio.acceptance_batch import guard_send
 
             guard_send(db, self.job, kind)
             db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) VALUES (?,?,?,?,'started',?,1,?)",
-                       (self.job["id"], key, kind, provider_hash, now(), self.budgets[kind]))
+                       (self.job["id"], key, kind, provider_hash, now(), None))
+            from project_watch.studio.research_budget import reserve
+
+            reserve(db, self, key, kind, {**(cost_request or {}),
+                'trusted_public_read': read_only and public_read})
             db.execute('UPDATE studio_job_calls SET deadline_at=? WHERE job_id=? AND call_key=?',
                        ((datetime.now(UTC) + timedelta(seconds=max(1, float(timeout)) + CALL_GRACE_SECONDS)).isoformat(),
                         self.job['id'], key))
@@ -266,6 +302,7 @@ class JobExecution:
                     db.execute("""INSERT INTO studio_job_checkpoints VALUES (?,?,?)
                         ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data""",
                         (self.job["id"], "dsh_request:" + request_key, json.dumps({"next_key": key})))
+        self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
         self.last_replay = False
         started = time.monotonic()
         try:
@@ -321,6 +358,9 @@ class JobExecution:
                        'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
                        (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
                         int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+            from project_watch.studio.research_budget import settle
+
+            settle(db, self.job['id'], key, response, counts)
             if response.status in (401, 403, 429):
                 db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
                     (provider_hash, (datetime.now(UTC) + timedelta(minutes=30 if response.status == 429 else 60)).isoformat(), response.status))
@@ -329,9 +369,13 @@ class JobExecution:
     def http(self, original, classify, *, public_read=None):
         def send(method, url, headers, body, timeout):
             kind, provider = classify(url)
+            from project_watch.studio.research_budget import prepare_request
+
+            body = prepare_request(self, kind, body)
             digest = hashlib.sha256(json.dumps([method, url, sorted(headers.items())]).encode() + (body or b"")).hexdigest()
             return self.call(kind, digest, lambda: original.transport(method, url, headers, body, timeout),
                              provider=provider, read_only=method == "GET", timeout=timeout,
+                             cost_request=dict(url=url, body=body),
                              public_read=bool(public_read and public_read(method, url, headers, body)))
         return Http(send)
 

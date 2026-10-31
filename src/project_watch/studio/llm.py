@@ -203,13 +203,15 @@ class LLM:
             return text
         raise ModelError(f"模型服务连续失败：{last_error}")
 
-    def json(self, system: str, user: str, *, max_tokens: int = 4096):
+    def json(self, system: str, user: str, *, max_tokens: int = 4096, repair_invalid: bool = True):
         system = system + "\n\n只输出 JSON，不要输出任何解释或 Markdown。"
         options = structured_options(self.config)
         text = self.complete(system, user, max_tokens=max_tokens, **options)
         try:
             return _extract_json(text)
         except ModelError:
+            if not repair_invalid:
+                raise
             repair = self.complete(
                 "将下面内容修正为符合原始要求的 JSON 对象，不能输出顶层数组。只输出 JSON。\n原始要求：\n" + system,
                 text[:20000],

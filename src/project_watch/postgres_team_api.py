@@ -1212,7 +1212,7 @@ def create_postgres_team_app(
             eligible=target is not None
             and (
                 provider == "gdelt"
-                or (bool(brave_api_key) and brave_monthly_limit > repo.brave_news_usage())
+                or (bool(brave_api_key))
             ),
             monthly_limit=brave_monthly_limit if provider == "brave" else None,
             monthly_used=repo.brave_news_usage() if provider == "brave" else None,
@@ -1231,7 +1231,7 @@ def create_postgres_team_app(
         if project is None:
             raise HTTPException(status_code=404, detail="project not found")
         if body.provider == "brave":
-            if not brave_api_key or brave_monthly_limit <= repo.brave_news_usage():
+            if not brave_api_key:
                 raise HTTPException(
                     status_code=409, detail="Brave News key or monthly budget unavailable"
                 )

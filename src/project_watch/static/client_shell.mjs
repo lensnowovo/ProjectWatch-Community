@@ -199,7 +199,7 @@ export function createClientShell(bridge) {
     try {
       const config=await request('/api/settings/status');if(ticket!==epoch)return;
       if(settingsTab==='limits'){
-        value(body,'配置模型',config.model||'未启用');value(body,'当前进程剩余次数',config.remaining_runs??'—');value(body,'单次材料范围','一个原文片段，最多 1500 字符');
+        value(body,'配置模型',config.model||'未启用');value(body,'调用次数','不设上限');value(body,'单次材料范围','一个原文片段，最多 1500 字符');
         body.append(el('p','','这是当前进程的调用限制，不是月度套餐余额。连接测试也消耗一次调用，服务重启后计数重新开始。'));return;
       }
       if(settingsTab==='advanced'){

@@ -152,9 +152,12 @@ item-format errors. Invalid returned structure affects only that material.
         raise ValueError('unsupported material policy')
     from project_watch.studio.material_ownership import MaterialExecution, project_guard
 
+    isolated_limit = (policy == TYPED_POLICY and task_id is not None
+                      and execution.read_checkpoint('material_local_limits_v1')
+                      == {'isolate_received_output_limit': True})
     with closing(execution.store._connect()) as db:
         execution._guard(db)
-        if db.execute("SELECT 1 FROM studio_evidence_tasks t JOIN studio_job_checkpoints c "
+        if not isolated_limit and db.execute("SELECT 1 FROM studio_evidence_tasks t JOIN studio_job_checkpoints c "
                 "ON c.job_id=t.job_id AND c.stage=? || t.id WHERE t.job_id=? AND t.project_id=? "
                 "AND t.status='pending' AND json_extract(c.data,'$.code')='material_output_limit' LIMIT 1",
                 (DEFERRED, execution.job['id'], execution.job['project_id'])).fetchone():

@@ -10,6 +10,7 @@ from project_watch.studio import (
 )
 from project_watch.studio.dsh_bootstrap import digest
 from project_watch.studio.execution import JobExecution
+from project_watch.studio.http import HttpError
 from project_watch.studio.material_ownership import project_guard
 
 INTENT, RESULT = 'public_question_work_v1', 'public_question_result_v1'
@@ -173,9 +174,6 @@ def settle(pipeline, execution, source_result=None, *, terminal=False):
                                    (watch['id'], execution.job['id'])).fetchone()
                 if not selected and not pending and not (cycle and cycle[0] == 'collected'):
                     continue
-                if len(work) >= 8:
-                    unresolved.append(dict(watch_id=watch['id'], reason='bounded_question_count'))
-                    continue
                 try:
                     question = freeze(pipeline, db, pid, watch, pending)
                     question['collection_complete'] = complete
@@ -204,15 +202,23 @@ def dispatch(pipeline, pid):
     if project.get('status') != 'active':
         return
     with closing(pipeline.store._connect()) as db:
-        project_guard(db, pid, '')
+        try:
+            project_guard(db, pid, '')
+            unrestricted = True
+        except HttpError:
+            unrestricted = False
         jobs = [dict(r) for r in db.execute('SELECT j.* FROM studio_jobs j JOIN studio_job_checkpoints c ON c.job_id=j.id '
             "WHERE j.project_id=? AND c.stage=? AND j.status IN ('done','failed') ORDER BY j.created_at", (pid, PROTOCOL))]
-    refresh(pipeline, pid)
+    if unrestricted:
+        refresh(pipeline, pid)
     for job in jobs:
         execution = JobExecution(pipeline.store, job)
         state = execution.read_checkpoint(INTENT)
         if state is None or state['phase'] == 'pending':
-            settle(pipeline, execution, terminal=True)
+            try:
+                settle(pipeline, execution, terminal=True)
+            except HttpError:
+                continue  # A held round cannot suppress another independent outbox.
 
 
 def rebuild(pipeline, pid, request):

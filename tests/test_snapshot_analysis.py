@@ -29,6 +29,27 @@ def test_snapshot_uses_saved_originals_without_events_and_is_immutable(host):
         db.execute('UPDATE studio_insight_versions SET record=? WHERE id=?', ('{}', saved['id']))
 
 
+def test_explicit_successor_keeps_other_material_and_old_manifest(host):
+    research, unit, ingest = host
+    ingest(unit, [trial()])
+    second = trial(url='https://clinicaltrials.gov/study/NCT00000002')
+    second['extra'].update(source_identity='clinical:NCT00000002', nct_id='NCT00000002')
+    ingest(unit | {'id': 'second'}, [second])
+    saved = material_snapshot.capture(research.execution)
+    assert len(saved['materials']) == 2
+    old_id = saved['materials'][0]['evidence_version_id']
+    research.store.evidence.dependencies.withdraw(research.project_id, old_id, 'Synthetic withdrawal', actor='test')
+    successor = material_snapshot.derive_permitted(research.execution, saved['id'])
+    assert successor['parent_snapshot_id'] == saved['id']
+    assert len(successor['materials']) == 1
+    assert successor['materials'][0] == saved['materials'][1]
+    assert material_snapshot.derive_permitted(research.execution, saved['id']) == successor
+    assert len(material_snapshot.read(research.store, research.project_id, successor['id'])['materials']) == 1
+    assert material_snapshot.capture(research.execution) == saved
+    with pytest.raises(ValueError, match='withdrawn'):
+        material_snapshot.read(research.store, research.project_id, saved['id'])
+
+
 def test_changed_source_keeps_fixed_snapshot_but_revocation_blocks_read(host):
     research, unit, ingest = host
     ingest(unit, [trial()])

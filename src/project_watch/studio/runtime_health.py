@@ -33,6 +33,14 @@ def stage_phase(stage):
 
 def job_phase(db, job):
     """Job-bound business phase; transport labels cannot erase it."""
+    from project_watch.studio.execution import JobExecution
+
+    # Same connection, read-only; the large coordinator state can be chunked.
+    state = JobExecution(None, {'id': job['id']}).read_checkpoint('update_run_state_v1', db=db)
+    if state and state.get('status') == 'running':
+        current = {'events': 'read', 'analysis': 'judge', 'reports': 'revise'}.get(state.get('active_stage'))
+        if current:
+            return current
     checkpoint = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? "
                             "AND stage='dsh_runtime_phase'", (job['id'],)).fetchone()
     try:
@@ -270,6 +278,13 @@ def projection(db, job, *, worker='running', at=None):
             coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='commercial_coverage'", (job['id'],)).fetchone()
             if coverage and json.loads(coverage[0]).get('partial'):
                 state, label = 'partial', '部分来源已更新，其余暂不可用'
+            from project_watch.studio.execution import JobExecution
+            execution = JobExecution(None, {'id': job['id']})
+            publication = execution.read_checkpoint('snapshot_analysis_publication_v1', db=db)
+            update = execution.read_checkpoint('update_run_state_v1', db=db)
+            if (publication and publication.get('status') == 'partial') or (
+                    update and update.get('phases', {}).get('analysis', {}).get('status') == 'partial'):
+                state, label = 'partial', '材料已保存，部分分析未完成'
     return {'state': state, 'label': label, 'blocking_jobs': blocking_jobs, 'continuation_wait': continuation_wait,
             'phase': job_phase(db, job), 'progress_at': job['progress_at'],
             'heartbeat_at': job['heartbeat_at'], 'progress_age_seconds': seconds_since(job['progress_at'], at),

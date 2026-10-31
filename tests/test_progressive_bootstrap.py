@@ -196,6 +196,30 @@ def test_oversize_candidate_is_reported_not_silently_published_with_empty_summar
     assert event['category'] == 'competitor' and event['summary'] == 'Synthetic abstract'
 
 
+def test_shared_review_reserve_tracks_each_material_boundary(setup, monkeypatch):
+    """Rejected materials consume calls without changing the publication input."""
+    from test_monitor_completion_journey import bind_cost, cost_window
+
+    from project_watch.studio import research_work_budget
+
+    pipeline, execution = setup
+    cost_window(pipeline, execution.job['project_id'])
+    bind_cost(pipeline, execution.job['id'], 'bootstrap')
+    research_work_budget.enable(pipeline.store, 'journey-cost', authorization='synthetic shared work')
+    calls, roles = install_provider(setup, monkeypatch, failure='oversize', bounded=True)
+    original = progressive_bootstrap._review_calls
+    # An existing profile can need admission even when two successive material
+    # candidates are rejected. Keep that outstanding work stable across them.
+    monkeypatch.setattr(progressive_bootstrap, '_review_calls', lambda research: max(4, original(research)))
+    result = run(setup)
+    assert len(roles) == 3
+    assert result['records'] == 1
+    assert execution.read_checkpoint(progressive_bootstrap.CLOSEOUT) is None
+    before = len(calls)
+    assert run(setup) == result
+    assert len(calls) == before  # replay does not acquire another request allowance
+
+
 @pytest.mark.parametrize('failure', ['unknown', 'budget', 'lease'])
 def test_default_dispatch_protections(setup, monkeypatch, failure):
     calls, _ = install_provider(setup, monkeypatch, failure=failure)

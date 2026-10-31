@@ -12,8 +12,9 @@ from project_watch.studio.monitoring_contracts import ObjectInput
 from project_watch.studio.pipeline import StudioWorker
 
 
-def install(tmp_path, monkeypatch, *, monitor=True, two=False, native=False, source_count=1):
-    pipeline, execution, seen = collection_install(tmp_path, monkeypatch, mode='scope_missing', native=native, source_count=source_count)
+def install(tmp_path, monkeypatch, *, monitor=True, two=False, native=False, source_count=1, user_entry=False):
+    pipeline, execution, seen = collection_install(tmp_path, monkeypatch, mode='scope_missing', native=native,
+                                                  source_count=source_count, user_entry=user_entry)
     if monitor:
         pipeline.store.touch(execution.job['project_id'], 'last_external_at')
     monkeypatch.setenv('PROJECT_WATCH_DSH_MONITOR', '1' if monitor else '0')
@@ -72,6 +73,13 @@ def install(tmp_path, monkeypatch, *, monitor=True, two=False, native=False, sou
 
 
 def source(pipeline, execution):
+    # These tests cover the retained pre-upgrade outbox protocol. Freeze its
+    # material owner before the new entry coordinator can claim fresh work.
+    from project_watch.studio import progressive_bootstrap
+
+    if execution.read_checkpoint('material_pipeline_v1') is None:
+        entry = 'monitor' if pipeline.store.get_project(execution.job['project_id']).get('last_external_at') else 'bootstrap'
+        progressive_bootstrap.freeze(execution, entry, materials=True)
     pipeline.run(execution.job)
     return execution.read_checkpoint(event_insight_work.ROUND)
 
@@ -86,7 +94,7 @@ def next_insight(pipeline, execution):
 @pytest.mark.parametrize('monitor', [False, True])
 def test_actual_pipeline_freezes_fresh_material_entry_before_recovery_checkpoint(tmp_path, monkeypatch, monitor):
     pipeline, execution, seen = install(tmp_path, monkeypatch, monitor=monitor)
-    source(pipeline, execution)
+    pipeline.run(execution.job)
     owner = execution.read_checkpoint('material_pipeline_v1')
     assert owner['owner'] == 'materials' and owner['entry'] == ('monitor' if monitor else 'bootstrap')
     assert execution.read_checkpoint('recovery_inputs') and seen['materials']
@@ -263,7 +271,7 @@ def test_publication_crash_keeps_event_and_recovers_unique_outbox_without_paid_r
     assert child.read_checkpoint(event_insight_work.RESULT)['status'] == 'complete'
 
 
-def test_small_shared_cap_retains_unreviewed_draft_without_budget_hold(tmp_path, monkeypatch):
+def test_small_historical_cap_does_not_stop_complete_review(tmp_path, monkeypatch):
     from project_watch.studio import progressive_bootstrap
     pipeline, execution, seen = install(tmp_path, monkeypatch)
     progressive_bootstrap.freeze(execution, 'monitor', materials=True)
@@ -274,15 +282,67 @@ def test_small_shared_cap_retains_unreviewed_draft_without_budget_hold(tmp_path,
     child = next_insight(pipeline, execution)
     pipeline.run(child.job)
     result = child.read_checkpoint(event_insight_work.RESULT)
-    assert result['status'] == 'pending' and result['model_used'] <= 5
-    assert result['objects'][0]['reason'] == 'semantic_review_budget'
+    assert result['status'] == 'complete' and result['model_used'] > 5
     scoped = event_insight.RoleExecution(child, handoff['objects'][0]['fingerprint'])
     assert scoped.read_checkpoint('object_insight_draft')
-    assert not child.read_checkpoint('dsh_hold') and not seen['reviews']
+    assert not child.read_checkpoint('dsh_hold') and seen['reviews']
     assert pipeline.store.list_events(project_id=execution.job['project_id'])
     before = len(seen['insight'])
     pipeline.run(child.job)
     assert len(seen['insight']) == before
+
+
+def test_shared_generation_can_correct_after_complete_independent_review(tmp_path, monkeypatch):
+    from test_monitor_completion_journey import bind_cost, cost_window
+
+    from project_watch.studio import research_work_budget
+
+    pipeline, execution, seen = install(tmp_path, monkeypatch, native=True)
+    cost_window(pipeline, execution.job['project_id'])
+    bind_cost(pipeline, execution.job['id'], 'monitor')
+    research_work_budget.enable(pipeline.store, 'journey-cost', authorization='synthetic shared work')
+    seen['wide_draft'] = True
+    original = pipeline.http_factory(None).transport
+    state = {'drafts': 0, 'rejected': 0}
+
+    def send(method, url, headers, raw, timeout):
+        response = original(method, url, headers, raw, timeout)
+        if not raw or 'model.example.invalid' not in url:
+            return response
+        body, data = json.loads(raw), response.json()
+        message = data['choices'][0]['message']
+        if 'pw_judge' in {t['function']['name'] for t in body.get('tools', [])}:
+            for call in message.get('tool_calls', []):
+                if call['function']['name'] == 'pw_judge':
+                    state['drafts'] += 1
+                    if state['drafts'] == 1:
+                        args = json.loads(call['function']['arguments'])
+                        draft = json.loads(args['analysis_json'])
+                        draft['headline'] = 'Unsupported synthetic headline'
+                        args['analysis_json'] = json.dumps(draft)
+                        call['function']['arguments'] = json.dumps(args)
+        elif not body.get('tools'):
+            payload = json.loads(body['messages'][-1]['content'])
+            if 'target_object' in payload and state['drafts'] == 1 and payload.get('phase') == 'fields':
+                review = json.loads(message['content'])
+                review['checks'][0].update(status='insufficient', reason='Synthetic correction required')
+                message['content'] = json.dumps(review)
+                state['rejected'] += 1
+        return Response(200, {}, json.dumps(data).encode())
+
+    pipeline.http_factory = lambda _: Http(send)
+    source(pipeline, execution)
+    child = next_insight(pipeline, execution)
+    pipeline.run(child.job)
+    assert state['rejected'] >= 2
+    assert state['drafts'] == 2
+    result = child.read_checkpoint(event_insight_work.RESULT)
+    assert result['status'] == 'complete', result
+    saved = insight.load(pipeline.store, execution.job['project_id'])
+    assert saved['status'] == 'current' and saved['review']['passed']
+    count = child.budget_used('model')
+    pipeline.run(child.job)
+    assert child.budget_used('model') == count
 
 
 def test_insight_unknown_remains_project_hold_and_never_retries(tmp_path, monkeypatch):
@@ -304,7 +364,7 @@ def test_insight_unknown_remains_project_hold_and_never_retries(tmp_path, monkey
     assert child.read_checkpoint('dsh_hold') and pipeline.store.list_events(project_id=execution.job['project_id'])
 
 
-def test_two_object_rebuilds_share_latest_round_predecessor_and_cannot_respend_balance(tmp_path, monkeypatch):
+def test_two_object_rebuilds_share_predecessor_and_account_beyond_old_balance(tmp_path, monkeypatch):
     from project_watch.studio import progressive_bootstrap
     pipeline, execution, _seen = install(tmp_path, monkeypatch, two=True)
     pid = execution.job['project_id']
@@ -332,8 +392,8 @@ def test_two_object_rebuilds_share_latest_round_predecessor_and_cannot_respend_b
         predecessor = current.job['id']
     with closing(pipeline.store._connect()) as db:
         paid = db.execute("SELECT count(*) FROM studio_job_calls WHERE kind='model'").fetchone()[0]
-    assert paid == current.budget_used('model') <= 12
-    assert outcomes[-1]['status'] == 'pending'
+    assert paid == current.budget_used('model') > 12
+    assert all(outcome['status'] == 'complete' for outcome in outcomes)
 
 
 @pytest.mark.parametrize('change', ['event', 'model'])

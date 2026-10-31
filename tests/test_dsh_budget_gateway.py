@@ -1,4 +1,4 @@
-"""The optional live-model gate must reject over-budget requests before egress."""
+"""The model gateway validates protocol and records usage without application quotas."""
 
 import json
 import threading
@@ -89,19 +89,17 @@ def test_probe_children_do_not_inherit_model_credentials(monkeypatch) -> None:
     assert "must-not-leak" not in child.values()
 
 
-def test_gate_rejects_size_token_call_and_cost_limits_before_egress() -> None:
+def test_gate_keeps_protocol_bounds_but_allows_calls_beyond_historical_cost_and_count() -> None:
     gate = _gate()
     with pytest.raises(GateRejected, match="request size"):
         gate.admit(_body(content="x" * 3_000))
     with pytest.raises(GateRejected, match="output tokens"):
         gate.admit(_body(max_tokens=201))
-    with pytest.raises(GateRejected, match="cost ceiling"):
-        _gate(max_cost_cny=Decimal("0.00001")).admit(_body())
+    _gate(max_cost_cny=Decimal("0.00001")).admit(_body())
     gate.admit(_body())
     gate.admit(_body())
-    with pytest.raises(GateRejected, match="request count"):
-        gate.admit(_body())
-    assert gate.receipt()["requests_admitted"] == 2
+    gate.admit(_body())
+    assert gate.receipt()["requests_admitted"] == 3
 
 
 def test_gate_receipt_contains_usage_not_prompt_or_credentials() -> None:
@@ -160,10 +158,9 @@ def test_proxy_keeps_provider_key_upstream_and_rejects_before_egress() -> None:
         assert forwarded.get_header("Authorization") == "Bearer provider-secret-test"
         assert forwarded.get_header("Content-type") == "application/json"
 
-        with pytest.raises(urllib.error.HTTPError) as denied:
-            client.open(request, timeout=5)
-        assert denied.value.code == 429
-        assert len(opener.requests) == 1
+        with client.open(request, timeout=5) as response:
+            assert response.status == 200
+        assert len(opener.requests) == 2
         receipt = json.dumps(gate.receipt())
         assert "provider-secret-test" not in receipt
         assert "loopback-only-test" not in receipt
@@ -185,11 +182,10 @@ def test_anthropic_stream_usage_merges_start_delta_and_cached_input():
     assert receipt["observed_prompt_tokens"] == 18
     assert receipt["observed_completion_tokens"] == 25
     assert receipt["requests_with_usage"] == 1
-    assert receipt["budget_mode"] == "request_quota"
+    assert receipt["budget_mode"] == "usage_only"
     assert receipt["observed_usage_estimate_cny"] is None
     gate.admit(_body())
-    with pytest.raises(GateRejected, match="request count"):
-        gate.admit(_body())
+    gate.admit(_body())
 
 
 def test_partial_monetary_policy_is_rejected():

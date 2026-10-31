@@ -110,6 +110,8 @@ def old_round(journey, *, monitor=False):
     pipeline, execution, state = journey
     if monitor:
         pipeline.store.touch(execution.job['project_id'], 'last_external_at')
+    # A persisted pre-upgrade material owner retains its original outbox path.
+    progressive_bootstrap.freeze(execution, 'monitor' if monitor else 'bootstrap', materials=True)
     pipeline.run(execution.job)
     pending = execution.read_checkpoint(progressive_bootstrap.CLOSEOUT)['pending_task_ids']
     assert len(pending) == 2 and len(state['model']) == 3

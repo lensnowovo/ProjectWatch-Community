@@ -24,7 +24,7 @@ class GateRejected(ValueError):
 @dataclass(frozen=True)
 class BudgetPolicy:
     model: str
-    max_requests: int
+    max_requests: int | None
     max_request_bytes: int
     max_output_tokens_per_request: int
     max_cost_cny: Decimal | None
@@ -41,7 +41,6 @@ class BudgetPolicy:
             or any(
                 value <= 0
                 for value in (
-                    self.max_requests,
                     self.max_request_bytes,
                     self.max_output_tokens_per_request,
                     *(value for value in prices if value is not None),
@@ -101,13 +100,6 @@ class BudgetGate:
             / Decimal(1_000_000)
         )
         with self._lock:
-            if self._requests >= self.policy.max_requests:
-                raise GateRejected("model request count reached the configured limit")
-            if (
-                self.policy.max_cost_cny is not None
-                and self._reserved_cny + estimate > self.policy.max_cost_cny
-            ):
-                raise GateRejected("model cost ceiling would be exceeded")
             self._requests += 1
             self._reserved_cny += estimate
 
@@ -175,11 +167,12 @@ class BudgetGate:
         with self._lock:
             return {
                 "model": self.policy.model,
-                "max_requests": self.policy.max_requests,
+                "max_requests": None,
+                "historical_max_requests": self.policy.max_requests,
                 "max_output_tokens_per_request": self.policy.max_output_tokens_per_request,
                 "requests_admitted": self._requests,
                 "requests_with_usage": self._responses_with_usage,
-                "budget_mode": "request_quota"
+                "budget_mode": "usage_only"
                 if self.policy.max_cost_cny is None
                 else "estimated_cny",
                 "estimated_reserved_cny": None
@@ -203,7 +196,7 @@ class BudgetGate:
                 "stop_reasons": list(self._stop_reasons),
                 "response_block_types": sorted(self._response_block_types),
                 "billing_note": (
-                    "Request/token caps only; subscription usage and charges must be checked with provider."
+                    "Usage accounting only; subscription usage and charges must be checked with provider."
                     if self.policy.max_cost_cny is None
                     else "Conservative local estimate; check provider invoice for actual charge."
                 ),

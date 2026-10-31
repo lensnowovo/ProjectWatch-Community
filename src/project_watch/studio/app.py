@@ -108,6 +108,12 @@ class RefreshRequest(BaseModel):
     kind: Literal["internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight"] = "external"
 
 
+class SavedAnalysisRequest(BaseModel):
+    snapshot_id: str = Field(min_length=1, max_length=64)
+    request_id: str = Field(min_length=1, max_length=128)
+    parent_attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class TopicRequest(BaseModel):
     watch_id: str = Field(min_length=1, max_length=64)
     expected_version: str = Field(min_length=1, max_length=64)
@@ -923,7 +929,17 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                                           'message': '当前安装未包含深度分析生成器；已有记录仍可查看'})
             if not settings_store.load().model.ready:
                 raise HTTPException(409, '请先在设置中连接 AI 模型')
-            from project_watch.studio import insight
+            from project_watch.studio import insight, snapshot_work
+
+            saved = snapshot_work.view(pipeline, project_id)
+            if saved:
+                if not saved['can_analyze']:
+                    raise HTTPException(409, '当前材料暂不能重新分析，请查看任务状态；已有结果保留')
+                try:
+                    return snapshot_work.enqueue(pipeline, project_id, saved['snapshot_id'], uuid.uuid4().hex,
+                                                 parent_attempt_id=saved['parent_attempt_id'])
+                except (ValueError, HttpError) as exc:
+                    raise HTTPException(409, '材料或任务状态已变化，请刷新后查看；已有结果保留') from exc
 
             if insight.held(store, project_id):
                 raise HTTPException(409, '该项目有结果不明的模型请求等待确认恢复；请先处理原任务')
@@ -937,6 +953,20 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                 raise HTTPException(409, '暂无获准分析的来源')
             return store.enqueue(project_id, 'details', input_version='manual:' + uuid.uuid4().hex)
         return store.enqueue(project_id, body.kind)
+
+    @app.post("/api/studio/projects/{project_id}/saved-analysis")
+    def saved_analysis(project_id: str, body: SavedAnalysisRequest):
+        project_or_404(project_id)
+        if not settings_store.load().model.ready:
+            raise HTTPException(409, '请先在设置中连接模型')
+        from project_watch.studio import snapshot_work
+
+        try:
+            return snapshot_work.enqueue(pipeline, project_id, body.snapshot_id, body.request_id,
+                                         parent_attempt_id=body.parent_attempt_id)
+        except (ValueError, KeyError, HttpError) as exc:
+            return JSONResponse(status_code=409, content={'code': getattr(exc, 'code', 'saved_analysis_blocked'),
+                'detail': '当前材料或前序任务状态不允许创建分析；已有结果保留。', 'dispatch': 'not_started'})
 
     @app.get("/api/studio/tasks")
     def task_board(project_id: str | None = None):
@@ -1033,7 +1063,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     @app.get('/api/studio/projects/{project_id}/insight')
     def insight_view(project_id: str):
         """Stored deep analysis (AI judgments with numbered sources), its history and the latest job state."""
-        from project_watch.studio import insight
+        from project_watch.studio import insight, snapshot_work
 
         project_or_404(project_id)
         with closing(store._connect()) as db:
@@ -1042,6 +1072,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         from project_watch.studio.agent_results import insight_history, insight_projection
 
         return {"record": insight_projection(store, project_id, insight.load(store, project_id)), "history": insight_history(store, project_id, insight.history(store, project_id)),
+                "saved_analysis": snapshot_work.view(pipeline, project_id),
                 "job": dict(job) if job else None, "model_ready": settings_store.load().model.ready,
                 "generation_available": pipeline.insight_generator is not None,
                 "labels": insight.VERDICTS, "sources": {**insight.SOURCE_LABEL, 'E':'公开来源（Agent）'}}

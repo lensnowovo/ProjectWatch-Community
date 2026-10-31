@@ -51,6 +51,8 @@ export function ResearchMore({page, loading, more}: {page?: ResearchSourcePage; 
 
 const strings = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string').join('、') : '';
 const text = (value: unknown) => typeof value === 'string' ? value : '';
+const groupLabel = (item: ResearchSource, remaining = false) => item.family?.basis === 'listed_versions' ? '其他公开版本'
+  : item.family?.basis === 'document' ? '相关文献' : remaining ? '同族' : '同族其他文件';
 
 /** Source IDs must never be sent to event read/feedback endpoints. */
 export function ResearchSourceList({items}: {items: ResearchSource[]}) {
@@ -97,10 +99,10 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
     <div key={key}>
       {renderItem(group[0])}
       {group[0].family && group[0].family.document_count > group.length && <p className="muted small">
-        同族已显示 {group.length} / {group[0].family.document_count} 份，继续显示可查看其余文件
+        {groupLabel(group[0], true)}已显示 {group.length} / {group[0].family.document_count} 份，继续显示可查看其余文件
       </p>}
       {group.length > 1 && <details className="item-reading-detail"><summary className="muted small">
-        同族其他文件 · {group.length - 1} 份
+        {groupLabel(group[0])} · {group.length - 1} 份
       </summary>{group.slice(1).map(renderItem)}</details>}
     </div>)}</div>;
 }

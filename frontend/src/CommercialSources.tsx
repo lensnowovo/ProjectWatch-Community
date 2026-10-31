@@ -6,7 +6,7 @@ import { useToast } from "./motion";
 
 const LABELS: Record<string, string> = { xiniu: "烯牛数据", pharmcube: "医药魔方", wind: "万得 Wind" };
 const STATES: Record<string, string> = { ok: "已更新", partial: "部分结果", error: "暂不可用",
-  held: "结果未确认", started: "更新中", not_collected: "尚未查询", limited: "今日查询已达上限" };
+  held: "结果未确认", started: "更新中", not_collected: "尚未查询", limited: "历史查询未执行" };
 
 export default function CommercialSources({ projectId, revision, peers = false, onChanged }: {
   projectId: string; revision: string; peers?: boolean; onChanged: () => void;
@@ -77,7 +77,6 @@ export default function CommercialSources({ projectId, revision, peers = false, 
       {different && <p className="muted small">日期、金额按来源列示。</p>}
       {sources.some(s => s.provider === "wind" && s.last_checked) && <p className="muted small">数据来源于万得 Wind 金融数据服务。</p>}
     </details>}
-    {data.daily_queries.remaining === 0 && <p className="muted small">今日查询已达上限，明天恢复。</p>}
     <ErrorNote error={actionError} />
   </section>;
 }

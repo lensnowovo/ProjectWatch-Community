@@ -300,11 +300,8 @@ class ExternalAnalysisStore:
             gate = BudgetGate(limits.policy(json.loads(grant['recipient_json'])['model']))
             gate.admit(body)
             reserved = Decimal(gate.receipt()['estimated_reserved_cny'] or '0')
-            prior = db.execute('SELECT reserved_cny FROM external_analysis_dispatches WHERE authorization_id=?',
-                               (grant['id'],)).fetchall()
-            total = sum((Decimal(r[0]) for r in prior), Decimal(0))+reserved
-            if len(prior) >= limits.max_requests or (limits.max_cost_cny is not None and total > Decimal(limits.max_cost_cny)):
-                raise ReadingDenied('external analysis budget exhausted')
+
+
             db.execute('INSERT INTO external_analysis_dispatches VALUES(?,?,?,?,?,?)',
                        (job_id, grant['id'], len(body), json.loads(body)['max_tokens'], str(reserved), time.time()))
             db.execute("UPDATE external_analysis_jobs SET state='dispatched',updated_at=? WHERE id=?", (time.time(), job_id))
@@ -413,17 +410,13 @@ class ExternalAnalysisWorker:
         grants = [g for g in self.store.list_authorizations(project_id)
                   if g['config_id'] == config_id and g['rule_version'] in {RULE_VERSION, ARTICLE_RULE_VERSION}]
         active = [g for g in grants if g['status'] == 'active']
-        usable = [g for g in active if g['requests_used'] < g['limits']['max_requests']
-                  and (g['limits']['max_cost_cny'] is None
-                       or Decimal(g['reserved_cny']) < Decimal(g['limits']['max_cost_cny']))]
         reason = ('model_missing' if config_id is None or not hasattr(model, 'analyze_external') else
                   'consent_required' if not grants or all(g['status'] == 'revoked' for g in grants) else
                   'paused' if not active else
-                  'budget_reached' if not usable else
-                  'model_limit' if model.disclosure().get('remaining_runs', 0) <= 0 else 'ready')
+                  'ready')
         if reason == 'ready':
             valid = False
-            for grant in usable:
+            for grant in active:
                 scope = grant['scope']
                 try:
                     with closing(self.store.repo._connect()) as db:
@@ -438,7 +431,7 @@ class ExternalAnalysisWorker:
             if not valid:
                 reason = 'scope_changed'
             elif not any(p.enabled and p.id in g['scope']['plan_scopes']
-                         for g in usable for p in self.store.repo.list_monitoring_plans(project_id)):
+                         for g in active for p in self.store.repo.list_monitoring_plans(project_id)):
                 reason = 'news_paused'
         with closing(self.store.repo._connect()) as db:
             counts = dict(db.execute('''SELECT state,count(*) FROM external_analysis_jobs j WHERE project_id=?
@@ -450,16 +443,13 @@ class ExternalAnalysisWorker:
         self.store.recover()
         model = self.settings.get()
         if (self._stop.is_set() or model is None or not hasattr(model, 'analyze_external')
-                or not hasattr(model, 'authorization_id') or model.disclosure().get('remaining_runs', 0) <= 0):
+                or not hasattr(model, 'authorization_id')):
             return None
         config_id = model.authorization_id()
         grants = self.store.list_authorizations()
         for grant in grants:
-            limits = grant['limits']
             if (grant['status'] != 'active' or grant['config_id'] != config_id
-                    or grant['rule_version'] not in {RULE_VERSION, ARTICLE_RULE_VERSION}
-                    or grant['requests_used'] >= limits['max_requests']
-                    or (limits['max_cost_cny'] is not None and Decimal(grant['reserved_cny']) >= Decimal(limits['max_cost_cny']))):
+                    or grant['rule_version'] not in {RULE_VERSION, ARTICLE_RULE_VERSION}):
                 continue
             # Explicit retries retain the approved packet and have priority over
             # ranking. A disappearing homepage item must not strand a job.

@@ -71,33 +71,27 @@ def test_descendants_unique_accounting_restart_cache_and_next_root(tmp_path):
     assert usage(pipeline.store) == 3
     rebuilt = JobExecution(StudioStore(pipeline.store.db_path), tail.job)
     assert rebuilt.call('model', 'tail', lambda: pytest.fail('cache must not send')).status == 200
-    with pytest.raises(HttpError, match='acceptance_budget_exhausted'):
-        call(rebuilt, 'overflow')
+    call(rebuilt, 'overflow')
     finish(pipeline, tail)
     next_job = pipeline.store.enqueue(root.job['project_id'], 'external', automatic=True)
     batch.bind_root(pipeline.store, 'synthetic-batch', next_job['id'], 'next')
     next_run = JobExecution(pipeline.store, pipeline.store.claim())
-    with pytest.raises(HttpError, match='acceptance_budget_exhausted'):
-        call(next_run, 'new-cycle')
-    assert usage(pipeline.store) == 3
+    call(next_run, 'new-cycle')
+    assert usage(pipeline.store) == 5
     # A genuinely separate interpreter reads the same persistent admission.
     script = '''import sys
 sys.path.insert(0, sys.argv[2])
 from project_watch.studio.store import StudioStore
 from project_watch.studio import acceptance_batch as b
 from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import HttpError
+from project_watch.studio.http import Response
 s=StudioStore(sys.argv[1]); d=s._connect()
-assert b.usage(d,'synthetic-batch','model')==3
+assert b.usage(d,'synthetic-batch','model')==5
 j=dict(d.execute("SELECT * FROM studio_jobs WHERE status='running'").fetchone()); d.close()
-def never():
-    raise AssertionError('fresh process cannot reset admission')
-try:
-    JobExecution(s,j).call('model','fresh-process',never)
-except HttpError as e:
-    assert str(e)=='acceptance_budget_exhausted'
-else:
-    raise AssertionError('missing admission gate')
+JobExecution(s,j).call('model','fresh-process',lambda: Response(200,{},b'{}'))
+d=s._connect()
+assert b.usage(d,'synthetic-batch','model')==6
+d.close()
 '''
     result = subprocess.run([sys.executable, '-I', '-B', '-c', script, str(pipeline.store.db_path),
                              str(Path(batch.__file__).resolve().parents[2])], capture_output=True, text=True)
@@ -127,11 +121,11 @@ def test_last_allowance_is_reserved_before_transport_across_connections(tmp_path
             return str(exc)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(worker, [root.job, other]))
-    assert sorted(results) == ['acceptance_budget_exhausted', 'sent']
-    assert len(entered) == usage(pipeline.store) == 1
+    assert sorted(results) == ['sent', 'sent']
+    assert len(entered) == usage(pipeline.store) == 2
 
 
-@pytest.mark.parametrize('boundary', ['expired', 'closed', 'identity', 'unbound', 'lower'])
+@pytest.mark.parametrize('boundary', ['expired', 'closed', 'identity', 'unbound'])
 def test_refusal_before_started_and_cached_reply_still_local(tmp_path, boundary):
     pipeline, execution = setup(tmp_path)
     call(execution, 'cached')
@@ -165,8 +159,8 @@ def test_unknown_counts_and_never_retries_without_consent(tmp_path):
     rebuilt = JobExecution(StudioStore(pipeline.store.db_path), execution.job)
     with pytest.raises(HttpError, match='request_outcome_unknown'):
         rebuilt.call('model', 'lost', lambda: pytest.fail('old unknown'))
-    with pytest.raises(HttpError, match='acceptance_budget_exhausted'):
-        rebuilt.call('model', 'different', lambda: pytest.fail('new key cannot reset cap'))
+    with pytest.raises(HttpError, match='request_outcome_unknown'):
+        rebuilt.call('model', 'different', lambda: pytest.fail('new key cannot bypass unknown'))
     assert usage(pipeline.store) == 1
     with closing(pipeline.store._connect()) as db:
         assert db.execute("SELECT status FROM studio_job_calls").fetchone()[0] == 'unknown'
@@ -255,8 +249,8 @@ def test_terminal_recovery_new_job_inherits_without_history_reset(tmp_path, monk
         child = next(m for m in members if m['parent_job_id'])
         assert child['parent_job_id'] == fixture.execution.job['id']
         job = dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (child['job_id'],)).fetchone())
-    with pytest.raises(HttpError, match='acceptance_budget_exhausted'):
-        call(JobExecution(fixture.store, job), 'extra')
+    call(JobExecution(fixture.store, job), 'extra')
+    assert usage(fixture.store) == 4
 
 
 def test_two_journeys_static_allocations_and_cross_project_parent_rejected(tmp_path):
@@ -276,12 +270,11 @@ def test_two_journeys_static_allocations_and_cross_project_parent_rejected(tmp_p
         batch.bind_root(p.store, 'synthetic-batch', job['id'], 'one')
         run = JobExecution(p.store, p.store.claim())
         call(run, 'one')
-        with pytest.raises(HttpError, match='acceptance_budget_exhausted'):
-            call(run, 'steal-other-allocation')
+        call(run, 'beyond-historical-allocation')
         finish(p, run)
     with pytest.raises(HttpError, match='acceptance_unbound_successor'):
         p.store.enqueue(jobs[1]['project_id'], 'scope', parent_job_id=jobs[0]['id'])
-    assert usage(p.store) == 2
+    assert usage(p.store) == 4
 
 
 def test_closeout_sees_shared_remainder_and_inflight_reply_survives_close(tmp_path):
@@ -290,14 +283,14 @@ def test_closeout_sees_shared_remainder_and_inflight_reply_survives_close(tmp_pa
     call(root, 'one')
     p.store.enqueue(root.job['project_id'], 'scope', parent_job_id=root.job['id'])
     child = JobExecution(p.store, p.store.claim(), budgets={'model': 2})
-    assert request_budget(root)['model']['remaining'] == 9
-    assert request_budget(child)['model']['remaining'] == 2
+    assert request_budget(root)['model']['remaining'] is None
+    assert request_budget(child)['model']['remaining'] is None
     def transport():
         assert usage(p.store) == 2  # started has already consumed the shared slot
         batch.close(p.store, 'synthetic-batch')
         return Response(200, {}, b'{}')
     child.call('model', 'inflight', transport)
-    assert request_budget(child)['model']['remaining'] == 0
+    assert request_budget(child)['model']['remaining'] is None
     child.call('model', 'inflight', lambda: pytest.fail('settled cache'))
     with closing(p.store._connect()) as db:
         assert db.execute("SELECT count(*) FROM studio_job_calls WHERE status='completed'").fetchone()[0] == 2

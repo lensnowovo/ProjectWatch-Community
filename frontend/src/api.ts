@@ -272,7 +272,8 @@ export interface InsightAnalysis {
 export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] }
 export interface InsightView {
   generation_available?: boolean;
-  record: { id?: string; status?: string; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
+  saved_analysis?: {snapshot_id: string; materials: number; created_at: string; can_analyze: boolean; parent_attempt_id: string | null; status: string} | null;
+  record: { id?: string; status?: string; section_versions?: Record<string, {version_id: string; generated_at: string; status: string}>; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
   history: { generated_at: string; headline: string; position: string; maturity: string; consensus: string; industry: string }[];
   job: { id: string; status: Job["status"]; error: string | null; created_at: string } | null;
   model_ready: boolean;
@@ -630,7 +631,7 @@ export interface SettingsView {
 export interface CommercialView {
   investment_status: "watching" | "invested";
   private: boolean;
-  daily_queries: { used: number; limit: number; remaining: number };
+  daily_queries: { used: number; limit: number | null; remaining: number | null; historical_limit?: number };
   different_conventions: boolean;
   notice: string;
   records: { kind: "funding" | "news"; company: string; provider: string; title: string; date: string;
@@ -940,6 +941,8 @@ export const api = {
   addLink: (id: string, url: string) => request<{ source_id: string; parser_status: string; analysis_status: string }>("POST", `/api/studio/projects/${id}/links`, { url }),
   retryFile: (id: string, sourceId: string) => request("POST", `/api/studio/projects/${id}/files/${sourceId}/retry`),
   insight: (id: string) => request<InsightView>("GET", `/api/studio/projects/${id}/insight`),
+  savedAnalysis: (id: string, body: {snapshot_id: string; request_id: string; parent_attempt_id?: string | null}) =>
+    request<Job>("POST", `/api/studio/projects/${id}/saved-analysis`, body),
   eventContext: (projectId: string, eventId: string) => request<EventContext>("GET", `/api/studio/projects/${projectId}/events/${encodeURIComponent(eventId)}/context`),
   monitoringPlan: (id: string) => request<MonitoringPlanView>("GET", `/api/studio/projects/${id}/monitoring-plan`),
   topicResearch: (id: string, watchId: string) => request<TopicResearchView>('GET',
@@ -1014,7 +1017,7 @@ export const api = {
 };
 export type ResearchCategory = 'paper' | 'patent' | 'trial';
 export interface ResearchSource {
-  family?: {key: string; document_count: number; document_ids: string[]};
+  family?: {key: string; basis?: 'family_id' | 'listed_versions' | 'document'; document_count: number; document_ids: string[]};
   id: string; project_id: string; category: ResearchCategory;
   title: string; url: string; source: string; snippet: string;
   published_at: string | null; collected_at: string;

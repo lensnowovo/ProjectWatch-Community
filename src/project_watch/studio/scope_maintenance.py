@@ -53,16 +53,20 @@ def intent(research, records):
 
 
 def dispatch(pipeline, pid, execution=None):
-    """Durable outbox first; a due periodic pass has a distinct four-call cap."""
+    """Durable outbox first; a due periodic pass has its own journal."""
     with closing(pipeline.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         if execution:
             execution._guard(db)
-        project_guard(db, pid, execution.job['id'] if execution else '')
+            project_guard(db, pid, execution.job['id'])
         query = 'SELECT j.id,c.data FROM studio_job_checkpoints c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? AND c.stage=?'
         rows = db.execute(query + (" AND j.id=?" if execution else " AND j.status IN ('done','failed')"),
                           (pid, INTENT, execution.job['id']) if execution else (pid, INTENT)).fetchall()
         for row in rows:
+            try:
+                project_guard(db, pid, row['id'])
+            except HttpError:
+                continue
             state = json.loads(row['data'])
             if state['phase'] != 'pending':
                 continue
@@ -79,6 +83,7 @@ def dispatch(pipeline, pid, execution=None):
                 return job
         if execution:
             return None
+        project_guard(db, pid, '')  # Periodic work has no inherited admission.
         last = db.execute('SELECT value FROM studio_state WHERE key=?', ('scope-last-admitted:' + pid,)).fetchone()
         if not last:
             if watches(db, pid):
@@ -155,7 +160,7 @@ class ScopeRole(PublicBootstrap):
         return self.state['finished']
 
     def pw_status(self, args):
-        return dict(fingerprint=self.work['fingerprint'], remaining=max(0, self.execution.budgets['model'] - self.execution.budget_used('model')))
+        return dict(fingerprint=self.work['fingerprint'], remaining=None)
 
     def pw_scope(self, args):
         changes = json.loads(text_arg(args, 'changes_json', 16000))
@@ -289,8 +294,6 @@ class ScopeGateway(dsh_runtime.Gateway):
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 4096))
             attempts = role.execution.read_checkpoint('scope_attempts') or []
             replay = self.received(body)
-            if not replay and (len(attempts) >= 4 or role.execution.budget_used('model') >= role.execution.budgets['model']):
-                role.defer('scope_generation_budget_or_turn_limit')
             if role.state['finished']:
                 return {'choices': [{'message': {'role': 'assistant', 'content': '范围维护阶段已保存。'}, 'finish_reason': 'stop'}]}
             self.advertised_tools.update(TOOLS)

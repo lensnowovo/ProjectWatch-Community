@@ -21,10 +21,10 @@ URL = 'https://public.example.invalid/overview'
 
 
 def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count=1,
-            company='Synthetic Host', institution='Synthetic Institute'):
+            company='Synthetic Host', institution='Synthetic Institute', user_entry=False, omit_source_id=False):
     if native and not os.environ.get('PW_DSH_TEST_RUNTIME'):
         pytest.skip('requires explicitly verified native DSH runtime')
-    pipeline, execution = fixtures.setup.__wrapped__(tmp_path)
+    pipeline, execution = fixtures.build(tmp_path, user_entry=user_entry)
     if company != 'Synthetic Host':
         from project_watch.studio.execution import JobExecution
 
@@ -75,14 +75,24 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
                 raise HttpError('connection_failed')
             if 'tools' not in body:
                 review = json.loads(body['messages'][-1]['content'])
-                message = {'role': 'assistant', 'content': json.dumps(synthetic_review(review))}
+                if 'materials' in review and 'snapshot_id' in review:
+                    ref, material = next(iter(review['materials'].items()))
+                    text = material['title']
+                    point = {'text': text, 'refs': [ref]}
+                    ring = dict(verdict='unclear', confidence='low', summary=text, **{'for': [point], 'against': []})
+                    result = dict(position=ring, operations=ring, chain=ring,
+                        technology=dict(maturity='unclear', consensus='unclear', summary=text, academic=[point], industry=[], risks=[]),
+                        industry=dict(verdict='unclear', summary=text, drivers=[point], headwinds=[]))
+                else:
+                    result = synthetic_review(review)
+                message = {'role': 'assistant', 'content': json.dumps(result)}
                 finish = 'stop'
             else:
                 tools = {tool['function']['name'] for tool in body['tools']}
                 if 'pw_collect' in tools:
                     assert tools == set(bootstrap_collection.TOOLS)
-                    assert not pipeline.store.list_events(project_id=execution.job['project_id'])
-                    assert pipeline.monitoring_plan.items(execution.job['project_id']) == []
+                    assert pipeline.store.list_events(project_id=execution.job['project_id']) == seen.get('baseline_events', [])
+                    assert pipeline.monitoring_plan.items(execution.job['project_id']) == seen.get('baseline_watches', [])
                     prior = [m for m in body['messages'] if m['role'] == 'tool']
                     if mode == 'professional' and len(prior) < 2:
                         page = next(s for s in json.loads(active['task'])['sources'] if s['url'] == URL)
@@ -91,8 +101,10 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
                             query=institution if not prior else 'US123456A1',
                             source_id=page['id'], quote=professional_body, subject=company,
                             relationship='same_entity' if not prior else 'unverified', reason='Public disclosure supplies a query')
+                        if omit_source_id:
+                            del args['source_id']
                     elif mode == 'turn_limit':
-                        name, args = 'pw_status', {}
+                        name, args = ('pw_status', {}) if len(prior) < 6 else ('pw_finish', {'reason': 'fixed scope complete'})
                     elif mode == 'late_scope' and not prior:
                         page = next(s for s in json.loads(active['task'])['sources'] if s['url'] == URL)
                         name, args = 'pw_read', dict(source_id=page['id'], view='page', offset=20500)
@@ -144,7 +156,7 @@ def install(tmp_path, monkeypatch, *, mode='success', native=False, source_count
         seen['pages'].append(url)
         visible = discovered_sources(pipeline.store, execution.job['project_id'])
         seen['visible'].append(visible)
-        assert visible['total'] >= 1 and not seen['materials']
+        assert visible['total'] >= 1 and len(seen['materials']) == seen.get('baseline_material_count', 0)
         if mode == 'page_unknown':
             raise HttpError('connection_failed')
         if mode == 'read_failed' or not url.startswith(URL):
@@ -254,17 +266,17 @@ def test_scope_missing_real_zero_and_failure_remain_distinct(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize('mode', ['read_failed', 'page_budget'])
-def test_known_read_failure_or_preflight_budget_keeps_summary_without_page_replay(tmp_path, monkeypatch, mode):
+def test_known_read_failure_keeps_summary_but_historical_quota_allows_body(tmp_path, monkeypatch, mode):
     pipeline, execution, seen = install(tmp_path, monkeypatch, mode=mode)
     if mode == 'page_budget':
         execution.budgets['page'] = 0
     result = run(pipeline, execution)
     assert result['status'] == 'partial'
-    assert seen['materials'][0]['source_type'] == 'search_summary'
-    assert len(seen['pages']) == (0 if mode == 'page_budget' else 1)
+    assert seen['materials'][0]['source_type'] == ('public_page' if mode == 'page_budget' else 'search_summary')
+    assert len(seen['pages']) == 1
     state = execution.read_checkpoint(bootstrap_collection.STAGE)
     if mode == 'page_budget':
-        assert any(p['reason'] == 'page_budget_reserved' for p in state['pending'])
+        assert not state['pending']
     assert not execution.read_checkpoint('dsh_hold')
     before = len(seen['models'])
     run(pipeline, execution)
@@ -282,14 +294,14 @@ def test_collection_unknown_stops_without_retry_or_extraction(tmp_path, monkeypa
     assert len(seen['models']) == (1 if mode == 'model_unknown' else 0)
 
 
-def test_four_turn_collection_bound_leaves_material_publication_budget(tmp_path, monkeypatch):
+def test_collection_can_finish_beyond_old_four_turn_quota(tmp_path, monkeypatch):
     pipeline, execution, seen = install(tmp_path, monkeypatch, mode='turn_limit')
-    execution.budgets['model'] = 13  # Seven collection/publication calls plus six reserved analysis calls.
+    execution.budgets['model'] = 1  # Historical count must not stop the scoped journey.
     result = run(pipeline, execution)
-    assert result['records'] == 1 and execution.budget_used('model') == 6
+    assert result['records'] == 1 and execution.budget_used('model') > 6
     collection = execution.read_checkpoint(bootstrap_collection.STAGE)
-    assert collection['finished']['reason'] == 'bounded_stop'
-    assert len(execution.read_checkpoint('bootstrap_collection_attempts_v1')) == 4
+    assert collection['finished']['reason'] == 'role_finished'
+    assert len(execution.read_checkpoint('bootstrap_collection_attempts_v1')) == 7
     assert len(seen['materials']) == 1
 
 
@@ -366,18 +378,34 @@ def test_fourth_page_selection_crash_resumes_existing_action_at_page_limit(tmp_p
     assert len(actions) == 4 and all(a['status'] == 'complete' for a in actions.values())
 
 
-def test_deferred_body_material_transfers_exact_source_without_old_round_or_recollection(tmp_path, monkeypatch):
+@pytest.mark.parametrize('legacy_cache_index', [False, True])
+def test_deferred_body_material_transfers_exact_source_without_old_round_or_recollection(tmp_path, monkeypatch, legacy_cache_index):
     from test_event_insight import install as analysis_install
 
-    from project_watch.studio import bootstrap_continuation
+    from project_watch.studio import bootstrap_continuation, progressive_bootstrap
     from project_watch.studio.execution import JobExecution
 
     pipeline, execution, seen = analysis_install(tmp_path, monkeypatch, monitor=False, source_count=2)
-    execution.budgets['model'] = 6  # Three material/publication calls, three analysis calls.
-    result = run(pipeline, execution)
+    # Build a historical undispatched-material receipt explicitly; current
+    # execution must no longer create it merely because a count is exhausted.
+    original_pending = progressive_bootstrap._pending
+    def prior_pending(research):
+        pending = original_pending(research)
+        if pending and research.state['records']:
+            progressive_bootstrap._defer(research)
+            return []
+        return pending
+    with monkeypatch.context() as prior_version:
+        prior_version.setattr(progressive_bootstrap, '_pending', prior_pending)
+        result = run(pipeline, execution)
     [task_id] = result['material_work']['pending_task_ids']
     source = execution.read_checkpoint(bootstrap_collection.SOURCES + ':' + task_id)
     assert source and result['records'] == 1
+    if legacy_cache_index:
+        # Old page metadata can carry an owner-local chunk index. The new
+        # owner has the immutable evidence body, not those old cache keys.
+        source.update(body_chunks=1, read_attempted=True)
+        execution.checkpoint(bootstrap_collection.SOURCES + ':' + task_id, source)
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
     analysis = pipeline.store.claim()
     assert analysis['kind'] == 'insight'
@@ -414,7 +442,20 @@ def test_explicit_successor_worker_consumes_unissued_pages_without_repeating_col
         if mode == 'scope_missing' else install(tmp_path, monkeypatch, mode=mode, source_count=source_count))
     if mode == 'page_budget':
         execution.budgets['page'] = 0
-    run(pipeline, execution)
+    # Reconstruct an old-version undispatched page receipt. New production
+    # execution no longer creates this deferral just because a quota is zero.
+    original_tool = bootstrap_collection.Collection.tool
+    withheld = []
+    def old_quota(role, name, args):
+        if name == 'pw_read' and args.get('view') == 'page':
+            if args['source_id'] not in withheld:
+                withheld.append(args['source_id'])
+            if len(withheld) >= source_count:
+                return role.defer({'tool': name, 'args': args}, 'page_budget_reserved')
+        return original_tool(role, name, args)
+    with monkeypatch.context() as prior_version:
+        prior_version.setattr(bootstrap_collection.Collection, 'tool', old_quota)
+        run(pipeline, execution)
     pending = execution.read_checkpoint(bootstrap_collection.STAGE)['pending']
     assert len(pending) == 1 and pending[0]['tool'] == 'pw_read'
     seen['materials'].clear()
@@ -486,17 +527,25 @@ def test_explicit_continuation_admission_cannot_bypass_project_protections(tmp_p
     execution.budgets['page'] = 0
     run(pipeline, execution)
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    pipeline.store.enqueue(execution.job['project_id'], 'external_followup', input_version=execution.job['id'])
-    current = JobExecution(pipeline.store, pipeline.store.claim())
+    successor = pipeline.store.enqueue(execution.job['project_id'], 'external_followup', input_version=execution.job['id'])
+    # Admission fences are independent of earlier synthetic downstream jobs.
+    for _ in range(10):
+        claimed = pipeline.store.claim()
+        assert claimed
+        if claimed['id'] == successor['id']:
+            break
+        pipeline.store.finish(claimed['id'], lease_token=claimed['lease_token'])
+    assert claimed['id'] == successor['id']
+    current = JobExecution(pipeline.store, claimed)
     if guard == 'hold':
-        current.checkpoint('dsh_hold', {'code': 'request_budget'})
+        current.checkpoint('dsh_hold', {'code': 'judgment_review_invalid'})
     else:
         def uncertain():
             raise HttpError('connection_failed')
         with pytest.raises(HttpError):
             current.call('page', 'synthetic-uncertain', uncertain, provider='synthetic')
     before = {k: len(v) for k, v in seen.items()}
-    with pytest.raises(HttpError, match=r'request_outcome_unknown|request_budget'):
+    with pytest.raises(HttpError, match=r'request_outcome_unknown|judgment_review_invalid'):
         bootstrap_continuation.admit(current, execution.job['id'])
     assert current.read_checkpoint(bootstrap_continuation.STAGE) is None
     assert before == {k: len(v) for k, v in seen.items()}

@@ -1,10 +1,12 @@
 """Normal runtime entry dispatches host work before DSH, using isolated stores."""
 import json
 import os
+from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+from fastapi.testclient import TestClient
 from test_collection_pages import work
 
 from project_watch.studio import collection_host, dsh_runtime
@@ -17,14 +19,30 @@ from project_watch.studio.settings import ModelConfig
 
 @pytest.fixture
 def setup(tmp_path):
-    pipeline = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    return build(tmp_path)
+
+
+def build(tmp_path, *, user_entry=False):
+    app = create_studio_app(tmp_path, start_worker=False)
+    pipeline = app.state.studio_pipeline
+    pipeline._test_app = app
     settings = pipeline.settings_store.load()
     settings.model = ModelConfig(base_url='https://model.example.invalid/v1', model='synthetic', api_key='synthetic')
     pipeline.settings_store.save(settings)
-    project = pipeline.repository.create_project('Synthetic Host')
-    pipeline.store.upsert_project(project.id, {'legal_name': 'Synthetic Host'}, consent=True)
-    pipeline.store.enqueue(project.id, 'external')
-    execution = JobExecution(pipeline.store, pipeline.store.claim())
+    if user_entry:
+        response = TestClient(app).post('/api/studio/projects', json={
+            'entity': {'legal_name': 'Synthetic Host'}, 'consent': True})
+        assert response.status_code == 201, response.text
+        with closing(pipeline.store._connect()) as db:
+            job = dict(db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind='external'",
+                                  (response.json()['id'],)).fetchone())
+        assert job['status'] == 'queued'  # The real worker must claim it.
+    else:
+        project = pipeline.repository.create_project('Synthetic Host')
+        pipeline.store.upsert_project(project.id, {'legal_name': 'Synthetic Host'}, consent=True)
+        pipeline.store.enqueue(project.id, 'external')
+        job = pipeline.store.claim()
+    execution = JobExecution(pipeline.store, job)
     pipeline._execution_state.current = execution
     return pipeline, execution
 
@@ -187,7 +205,8 @@ def test_official_dsh_full_entry_uses_automatically_collected_evidence(setup, pu
             if public_timeout and urlsplit(url).hostname == 'www.cninfo.com.cn':
                 raise HttpError('connection_failed', transport_phase='connect_or_headers', failure_kind='timeout')
             return response(url)
-        assert len(source_calls) == 3
+        assert sorted(urlsplit(value).hostname for value in source_calls) == sorted(
+            ['api.openalex.org'] * 2 + ['www.ebi.ac.uk'] * 2 + ['www.cninfo.com.cn'])
         payload = json.loads(raw)
         if 'tools' not in payload:
             from test_studio_dsh_monitor import synthetic_review
@@ -217,12 +236,14 @@ def test_official_dsh_full_entry_uses_automatically_collected_evidence(setup, pu
 
     pipeline.http_factory = lambda _: Http(send)
     result = dsh_runtime.run_bootstrap(pipeline, execution, Path(os.environ['PW_DSH_TEST_RUNTIME']))
-    assert len(source_calls) == 3 and len(model_calls) == 4
+    assert sorted(urlsplit(value).hostname for value in source_calls) == sorted(
+            ['api.openalex.org'] * 2 + ['www.ebi.ac.uk'] * 2 + ['www.cninfo.com.cn'])
+    assert len(model_calls) == 4
     assert result['status'] == result['collection']['status'] == 'partial'
     [fact] = pipeline.store.get_public_profile(execution.job['project_id'])['facts']
     assert fact['refs'][0]['evidence_version_id'] == selected['evidence_version_id']
     assert execution.usage()['model']['completed'] == 5
-    assert execution.usage()['open_data']['completed'] == (2 if public_timeout else 3)
+    assert execution.usage()['open_data']['completed'] == (4 if public_timeout else 5)
     assert execution.usage()['open_data']['unknown'] == 0
     if public_timeout:
         assert any(row['outcome'] == 'failed' and row['reason'] == 'public_read_failed'

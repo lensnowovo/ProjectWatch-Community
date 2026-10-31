@@ -270,6 +270,9 @@ class StudioStore:
             from project_watch.studio.acceptance_batch import SCHEMA as ACCEPTANCE_SCHEMA
 
             db.executescript(ACCEPTANCE_SCHEMA)
+            from project_watch.studio.research_budget import SCHEMA as RESEARCH_BUDGET_SCHEMA
+
+            db.executescript(RESEARCH_BUDGET_SCHEMA)
             from project_watch.studio.recovery import SCHEMA as RECOVERY_SCHEMA
 
             db.executescript(RECOVERY_SCHEMA)
@@ -1387,7 +1390,16 @@ class StudioStore:
                          AND grant.previous_key=json_extract(link.data,'$.previous_key')
                        WHERE link.job_id=j.id AND link.stage='recovery_origin' AND parent.project_id=j.project_id
                          AND parent.kind IN ('external','external_followup') AND parent.status='done'
-                         AND j.input_version='recovery:'||parent.id))
+                         AND j.input_version='recovery:'||parent.id)
+                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints handoff JOIN studio_jobs parent
+                       ON parent.id=json_extract(handoff.data,'$.origin_job_id')
+                       JOIN studio_job_checkpoints successor ON successor.job_id=parent.id
+                         AND successor.stage='update_handoff_successor_v1'
+                       WHERE handoff.job_id=j.id AND handoff.stage='update_handoff_v1'
+                         AND parent.project_id=j.project_id AND parent.kind IN ('external','external_followup')
+                         AND parent.status IN ('done','failed')
+                         AND json_extract(successor.data,'$.job_id')=j.id
+                         AND j.input_version='update-handoff:'||parent.id))
                 AND (j.kind!='external' OR NOT EXISTS (SELECT 1 FROM studio_jobs material
                      WHERE material.project_id=j.project_id AND material.kind='internal' AND material.status IN ('queued','running')))
                 AND (j.kind!='insight' OR NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c

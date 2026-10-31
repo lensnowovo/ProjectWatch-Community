@@ -118,14 +118,20 @@ def _patent_groups(items):
             x = parent[x]
         return x
 
-    numbers = {item['extra'].get('patent_number'): item['id'] for item in items
-               if not item['extra'].get('family_id') and item['extra'].get('patent_number')}
+    numbers = {}
     for item in items:
-        if item['id'] not in numbers.values():
+        number = item['extra'].get('patent_number')
+        if not item['extra'].get('family_id') and number:
+            numbers.setdefault(number, []).append(item['id'])
+    for ids in numbers.values():
+        for item_id in ids[1:]:
+            parent[find(item_id)] = find(ids[0])
+    for item in items:
+        if item['extra'].get('family_id') or not item['extra'].get('patent_number'):
             continue
         for other in item['extra'].get('other_versions') or []:
             if other in numbers:
-                parent[find(item['id'])] = find(numbers[other])
+                parent[find(item['id'])] = find(numbers[other][0])
     keys = {}
     for item in items:
         family = item['extra'].get('family_id')
@@ -133,7 +139,7 @@ def _patent_groups(items):
             keys[item['id']] = (family, 'family_id')
             continue
         root = find(item['id'])
-        members = sorted(n for n, i in numbers.items() if find(i) == root)
+        members = sorted(n for n, ids in numbers.items() if find(ids[0]) == root)
         keys[item['id']] = (('versions:' + members[0], 'listed_versions') if len(members) > 1
                             else ('document:' + item['id'], 'document'))
     return keys

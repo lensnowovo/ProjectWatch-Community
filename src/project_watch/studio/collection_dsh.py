@@ -32,6 +32,23 @@ def current_round(research):
 
 
 def rounds(research):
+    handoff = research.execution.read_checkpoint('update_handoff_v1') or {}
+    if handoff.get('resume_phase') == 'publication':
+        # A local publisher inherits source receipts, not ownership of the
+        # queries. Resolve the immutable original ledger rather than relabel it.
+        from project_watch.studio.execution import JobExecution
+
+        with closing(research.store._connect()) as db:
+            row = db.execute('SELECT * FROM studio_jobs WHERE id=?', (handoff['origin_job_id'],)).fetchone()
+            if not row or row['project_id'] != research.project_id or row['status'] not in ('done', 'failed'):
+                raise ValueError('publication collection owner unavailable')
+            origin = JobExecution(research.store, dict(row))
+            reader = SimpleNamespace(job=dict(row), read_checkpoint=lambda name: origin.read_checkpoint(name, db=db))
+            saved = rounds(SimpleNamespace(execution=reader, project_id=research.project_id, store=research.store))
+        signature = hashlib.sha256(json.dumps(saved, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        if signature != handoff['publication_collection_fingerprint']:
+            raise ValueError('publication collection receipts changed')
+        return saved
     base = current_round(research)
     if base is None:
         return []
@@ -44,6 +61,44 @@ def rounds(research):
             raise ValueError('collection supplement outside research round')
         reconcile(plan, saved['receipts'])
         result.append(saved)
+    return result
+
+
+def historical_queries(research, *, db=None):
+    """Resolve handoff context against its immutable original query receipts.
+
+    Returned rows remain historical work. They neither enter current coverage
+    nor dispatch a request, and a copied summary alone cannot authorize work.
+    """
+    from project_watch.studio.execution import JobExecution
+
+    if db is None:
+        with closing(research.store._connect()) as connection:
+            return historical_queries(research, db=connection)
+    entries = (research.execution.read_checkpoint('update_handoff_v1') or {}).get('professional_query_history', [])
+    origins, result = {}, []
+    for entry in entries:
+        jid = entry['origin_job_id']
+        if jid not in origins:
+            job = db.execute('SELECT * FROM studio_jobs WHERE id=?', (jid,)).fetchone()
+            if not job or job['project_id'] != research.project_id or job['status'] not in ('done', 'failed'):
+                raise ValueError('historical collection owner unavailable')
+            execution = JobExecution(research.store, dict(job))
+            reader = SimpleNamespace(job=dict(job),
+                read_checkpoint=lambda stage, execution=execution: execution.read_checkpoint(stage, db=db))
+            ledgers = rounds(SimpleNamespace(project_id=research.project_id, execution=reader, store=research.store))
+            origins[jid] = {r['unit_id']: (u, r) for ledger in ledgers for r in ledger['receipts']
+                           for u in ledger['plan']['units'] if u['id'] == r['unit_id']}
+        pair = origins[jid].get(entry['unit_id'])
+        if pair is None:
+            raise ValueError('historical collection receipt unavailable')
+        unit, receipt = pair
+        fingerprint = hashlib.sha256(json.dumps(receipt, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        if (entry['receipt_fingerprint'] != fingerprint or entry['adapter'] != unit['source']
+                or entry['query'] != unit['query'] or entry['outcome'] != receipt['outcome']
+                or entry.get('result_count') != receipt.get('result_count')):
+            raise ValueError('historical collection receipt changed')
+        result.append((entry, unit, receipt))
     return result
 
 
@@ -310,6 +365,31 @@ def catalog(research, *, offset=0, limit=20):
     return dict(sources=sources, total=len(entries), offset=offset,
                 next_offset=offset + limit if offset + limit < len(entries) else None,
                 untrusted_data=True)
+
+
+def discovery_catalog(research, limit=8):
+    """A bounded first view across publishers, not eight hits from one host."""
+    from collections import deque
+    from urllib.parse import urlsplit
+
+    groups, offset, total = {}, 0, 0
+    while True:
+        page = catalog(research, offset=offset, limit=40)
+        total = page['total']
+        for entry in page['sources']:
+            groups.setdefault(urlsplit(entry['url']).hostname or '', deque()).append(entry)
+        if page['next_offset'] is None:
+            break
+        offset = page['next_offset']
+    chosen = []
+    while groups and len(chosen) < limit:
+        for host in list(groups):
+            chosen.append(groups[host].popleft())
+            if not groups[host]:
+                del groups[host]
+            if len(chosen) == limit:
+                break
+    return dict(sources=chosen, total=total, next_offset=0 if total > len(chosen) else None)
 
 
 def source(research, sid, *, offset=None):

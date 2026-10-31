@@ -74,8 +74,12 @@ def consume(pipeline, execution, monkeypatch):
     pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
     worker = StudioWorker(pipeline)
     monkeypatch.setattr(worker, 'schedule', lambda: None)
-    assert worker.step()  # Independent insight is terminal before shared-tail scope.
-    assert worker.step()
+    # Drain actual queued work; inline analysis no longer requires a separate job.
+    for _ in range(10):
+        if not worker.step():
+            break
+    else:
+        pytest.fail('synthetic queue did not drain')
     with closing(pipeline.store._connect()) as db:
         job = dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (intent['job_id'],)).fetchone())
     assert job['status'] == 'done', job['error']
@@ -93,7 +97,7 @@ def test_real_worker_scope_without_judgment_and_completed_receipt_replay(tmp_pat
     assert not pipeline.monitoring_plan.explorations.managed(watches[0])
     assert 'judged' not in child.read_checkpoint('dsh_state')
     assert child.budget_used('model') == len(seen['models']) + len(seen['insight']) + len(seen['scope'])
-    assert child.budget_used('model') <= child.read_checkpoint(public_stage_work.INPUT)['cap']
+    assert child.budget_used('model') >= len(seen['scope'])
     count = len(seen['scope'])
     # Replay dispatch checkpoint through a fresh lease; neither mutation nor model repeats.
     with closing(pipeline.store._connect()) as db, db:
@@ -101,6 +105,20 @@ def test_real_worker_scope_without_judgment_and_completed_receipt_replay(tmp_pat
     replay = pipeline.store.claim()
     pipeline.run(replay)
     assert len(seen['scope']) == count and len(pipeline.monitoring_plan.items(execution.job['project_id'])) == 1
+
+
+@pytest.mark.parametrize('native', [False, True])
+def test_direct_scope_closeout_keeps_unrelated_legacy_unknown(tmp_path, monkeypatch, native):
+    from test_monitor_completion_journey import call_rows, old_hold
+
+    pipeline, execution, seen = install(tmp_path, monkeypatch, native=native)
+    old = old_hold(pipeline.store, execution.job['project_id'])
+    before = call_rows(pipeline.store, old)
+    child = consume(pipeline, execution, monkeypatch)
+    result = child.read_checkpoint(scope_maintenance.RESULT)
+    assert result['status'] == 'complete' and result['items'][0]['status'] == 'trial'
+    assert call_rows(pipeline.store, old) == before
+    assert seen['scope'] and child.budget_used('model') >= len(seen['scope'])
 
 
 def periodic(pipeline, pid):
@@ -142,7 +160,7 @@ def test_human_scope_changed_after_dispatch_rejects_old_write(tmp_path, monkeypa
         assert db.execute("SELECT count(*) FROM studio_plan_changes WHERE state='proposed'").fetchone()[0] == 0
 
 
-def test_human_proposal_keeps_original_scope_and_budget_stop_is_pending(tmp_path, monkeypatch):
+def test_human_proposal_keeps_original_scope_and_zero_historical_cap_allows_work(tmp_path, monkeypatch):
     pipeline, execution, seen = install(tmp_path, monkeypatch)
     consume(pipeline, execution, monkeypatch)
     pid = execution.job['project_id']
@@ -160,8 +178,8 @@ def test_human_proposal_keeps_original_scope_and_budget_stop_is_pending(tmp_path
     next_job.checkpoint('event_insight_budget_tail_v1', dict(cap=0, tail_job_id=next_job.job['id']))
     count = len(seen['scope'])
     pipeline.run(next_job.job)
-    assert next_job.read_checkpoint(scope_maintenance.RESULT)['reason'] == 'scope_generation_budget_or_turn_limit'
-    assert len(seen['scope']) == count
+    assert next_job.read_checkpoint(scope_maintenance.RESULT)['items'][0]['status'] == 'proposed'
+    assert len(seen['scope']) == count + 2
 
 
 def test_unknown_origin_blocks_scope_dispatch(tmp_path, monkeypatch):
@@ -241,7 +259,11 @@ def test_scope_commit_before_role_checkpoint_recovers_without_model_or_duplicate
     pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
     worker = StudioWorker(pipeline)
     monkeypatch.setattr(worker, 'schedule', lambda: None)
-    assert worker.step() and worker.step()
+    for _ in range(10):
+        if not worker.step():
+            break
+    else:
+        pytest.fail('synthetic queue did not drain')
     with closing(pipeline.store._connect()) as db, db:
         assert db.execute('SELECT status FROM studio_jobs WHERE id=?', (intent['job_id'],)).fetchone()[0] == 'failed'
         db.execute("UPDATE studio_jobs SET status='queued' WHERE id=?", (intent['job_id'],))

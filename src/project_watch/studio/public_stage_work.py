@@ -43,6 +43,10 @@ def enqueue(pipeline, db, pid, kind, work, *, origin=None, cap=4, input_version=
     put(db, job['id'], INPUT, payload)
     inherit(db, job['id'], [origin, predecessor])
     put(db, root, event_insight_work.BUDGET, dict(cap=cap, tail_job_id=job['id']))
+    if origin:
+        from project_watch.studio.public_research_admission import inherit_work
+
+        inherit_work(db, pid, origin, job, payload)
     return job
 
 
@@ -64,7 +68,5 @@ def prepare(pipeline, execution, manifest):
             if not row or row[0] not in ('done', 'failed'):
                 raise ValueError('public stage predecessor is not terminal')
             inherit(db, execution.job['id'], [predecessor])
-    current = execution.budgets.get('model')
-    execution.budgets.update(model=manifest['cap'] if current is None else min(current, manifest['cap']),
-                             search=0, page=0, open_data=0, site=0)
+    execution.allowed_call_kinds = frozenset({'model'})
     return manifest['work']

@@ -22,7 +22,7 @@ def test_child_has_no_model_keys_or_custom_dsh_settings(monkeypatch, tmp_path):
     assert env["PROJECT_WATCH_MODEL_PROXY_TOKEN"] == "local-only"
 
 
-def test_model_quota_and_busy_fail_before_run(monkeypatch):
+def test_model_has_no_process_quota_but_busy_still_blocks(monkeypatch):
     from project_watch.dsh_executor import DshProposalModel
     from project_watch.executors import EvidencePacket
     from project_watch.model_provider import ModelProviderConfig
@@ -39,8 +39,8 @@ def test_model_quota_and_busy_fail_before_run(monkeypatch):
         model.propose(evidence)
     model._lock.release()
     model.propose(evidence)
-    with pytest.raises(ExecutorUnavailable, match="quota"):
-        model.propose(evidence)
+    model.propose(evidence)
+    assert model.disclosure()['remaining_runs'] is None
     assert "secret" not in json.dumps(model.disclosure())
 
 
@@ -85,8 +85,8 @@ def test_company_compiler_has_bounded_separate_prompt_and_budget(monkeypatch):
     assert calls[0][1]["max_output_tokens"] == 3072
     assert "Only synthetic document content" in calls[0][1]["prompt_override"]
     assert "untrusted data" in calls[0][1]["prompt_override"]
-    with pytest.raises(ExecutorUnavailable, match="quota"):
-        model.compile_reading(packet, before_send=gate)
+    model.compile_reading(packet, before_send=gate)
+    assert len(calls) == 2
     with pytest.raises(ExecutorUnavailable, match="limit"):
         model.compile_reading({"fragments": [{"text": "x" * 9001}]}, before_send=gate)
 

@@ -47,6 +47,10 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         dsh_coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_coverage'",
                                  (job['id'],)).fetchone() if job else None
         dsh_partial = bool(dsh_coverage and json.loads(dsh_coverage[0]).get('partial'))
+        from project_watch.studio.execution import JobExecution
+
+        update = JobExecution(store, {'id': job['id']}).read_checkpoint('update_run_state_v1', db=db) if job else None
+        update_partial = bool(update and update.get('status') != 'complete')
     rows = [row for row in report.values() if isinstance(row, dict)]
     failures = sum(len(row.get('errors') or []) for row in rows)
     checked = sum(row.get('checked', 0) for row in rows if type(row.get('checked', 0)) is int)
@@ -60,7 +64,7 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         state = 'partial'
     elif job and job['status'] in ('queued', 'running', 'failed'):
         state = job['status']
-    elif pending or failures or dsh_partial or collection_partial:
+    elif pending or failures or dsh_partial or collection_partial or update_partial:
         state = 'partial'
     elif not completed_at or not checked:
         state = 'unobserved'

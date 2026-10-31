@@ -477,7 +477,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
     <div className="tab-frame landscape competition-view">
       <VerdictBand eyebrow={<>竞争对手{positionLabel && <span className={`rj-verdict small-verdict ${["leading", "ahead"].includes(position!.verdict) ? "up" : ["behind", "lagging"].includes(position!.verdict) ? "down" : ""}`}>{positionLabel}</span>}</>}
         meta={<button className="link small" disabled={saving || !detail.model_ready || !detail.project.activated || detail.jobs.some((j) => j.kind === "competition" && (j.status === "queued" || j.status === "running"))}
-          title="新一轮最多24次搜索、21次公开页面读取、6次公开临床登记查询；每家公司最多3页，可能使用服务额度" onClick={research}>更新竞对资料 ↻</button>}
+          title="按当前竞对范围更新公开资料，调用记录与费用照常保留" onClick={research}>更新竞对资料 ↻</button>}
         title={position?.summary || "同一需求下的对手、所处阶段与最近动作"}
         figures={<>
           <Figure label="跟踪的对手" value={peers.size} unit="家" note={leadViews.length ? `另有 ${leadViews.length} 家待确认线索` : "含已确认与资料整理"} />

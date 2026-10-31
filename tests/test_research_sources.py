@@ -166,3 +166,21 @@ def test_body_refresh_changes_revision_without_promoting_donor_to_own_text(owner
     row = next(i for i in latest['items'] if i['id'] == ref['item_id'])
     assert row['basis'] == 'donor_text' and row['read_scope'] == 'summary'
     assert first['revision'] != latest['revision']
+
+
+def test_one_sided_patent_versions_and_duplicate_publication_survive_pagination(owner):
+    pipe, client, pid, _ = owner
+    for n, number, versions in [(1, 'US123456A1', ['US123456B2']), (2, 'US123456B2', []), (3, 'US123456A1', [])]:
+        source = trial(url=f'https://example.org/patent/{n}')
+        source['extra'] = dict(patent_number=number, other_versions=versions, legal_status='unknown')
+        pipe.store.add_items(pid, 'patent', [source])
+    page = client.get(route(pid, 'patent') + '&limit=1').json()
+    items = list(page['items'])
+    while page['next_offset'] is not None:
+        page = client.get(route(pid, 'patent') + f"&limit=1&offset={page['next_offset']}&revision={page['revision']}").json()
+        items += page['items']
+    assert page['total'] == 3 and page['family_count'] == 1
+    assert len({i['id'] for i in items}) == 3
+    assert all(i['family']['key'] == 'versions:US123456A1' and i['family']['basis'] == 'listed_versions'
+               and i['family']['document_count'] == 3 for i in items)
+    assert all(i['extra']['legal_status'] == 'unknown' for i in items)

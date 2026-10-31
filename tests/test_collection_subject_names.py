@@ -90,6 +90,42 @@ def sent_queries(calls):
     return [unquote_plus(url) for url in calls if urlsplit(url).hostname in ('www.ebi.ac.uk', 'api.openalex.org')]
 
 
+def test_confirmed_annotation_is_only_normalized_in_index_query(entry):
+    pipeline, pid, calls, _held, start = entry
+    original = 'Synthetic Host Biologics, Inc.（合成公司，境外注册主体）'
+    confirm(pipeline, pid, [original])
+    execution = start()
+    scope = execution.read_checkpoint(collection_host.SCOPE)
+    assert original in scope['subject_names']
+    assert scope['public_plan']['index_name_evidence'][0] == dict(
+        query='Synthetic Host Biologics, Inc.', confirmed_name=original, transform='terminal_annotation')
+    sent = ' '.join(sent_queries(calls))
+    assert 'Synthetic Host Biologics, Inc.' in sent and '境外注册主体' not in sent
+
+
+def test_continuation_adds_new_index_queries_preserving_original_manifest(entry):
+    pipeline, pid, calls, held, start = entry
+    original = 'Synthetic Host Biologics, Inc.（合成公司，境外注册主体）'
+    confirm(pipeline, pid, [original])
+    # Construct an actual old-policy frozen manifest, then restore the new code.
+    from unittest.mock import patch
+    with patch.object(collection_host, 'index_names', lambda names: [dict(query=n, confirmed_name=n, transform='identity')
+                                                                  for n in collection_host.latin_first(names)]):
+        execution = start()
+    frozen = execution.read_checkpoint(STAGE)
+    old_calls = list(calls)
+    execution.checkpoint('acceptance_read_continued_v1', {'authorization': 'synthetic'})
+    collection_host.prepare(held['research'])
+    assert execution.read_checkpoint(STAGE) == frozen
+    extra = execution.read_checkpoint('collection_supplements_v1')
+    assert len(extra) == 3
+    assert all(e['name_evidence']['confirmed_name'] == original for e in extra)
+    assert len(calls) == len(old_calls) + 3
+    assert all('境外注册主体' not in q for q in sent_queries(calls[len(old_calls):]))
+    collection_host.prepare(held['research'])
+    assert len(calls) == len(old_calls) + 3  # no repeated corrected query either
+
+
 def test_confirmed_english_name_reaches_affiliation_and_applicant_indexes(entry):
     pipeline, pid, calls, _held, start = entry
     confirm(pipeline, pid, ['Synthetic Host Biologics', 'SynHost'])
@@ -106,6 +142,27 @@ def test_confirmed_english_name_reaches_affiliation_and_applicant_indexes(entry)
     assert 'Wrong Subject Biologics' not in sent and 'Other Subject Labs' not in sent
     # Company news searches are unchanged by this fix.
     assert 'Synthetic Host Biologics' not in by_source['search']
+
+
+@pytest.mark.parametrize('adapter', ['openalex_affiliation', 'europepmc_affiliation', 'europepmc_patent'])
+def test_first_actual_dispatch_uses_english_name_with_one_request_left(entry, monkeypatch, adapter):
+    from project_watch.studio.collection_sources import CollectionSources
+
+    pipeline, pid, calls, _held, _start = entry
+    confirm(pipeline, pid, ['Synthetic Host Biologics'])
+    original = CollectionSources.capabilities
+    monkeypatch.setattr(CollectionSources, 'capabilities', lambda self: {
+        name: 'available' if name == adapter else 'not_integrated' for name in original(self)})
+    pipeline.store.enqueue(pid, 'external')
+    ex = JobExecution(pipeline.store, pipeline.store.claim(), budgets={'open_data': 1})
+    pipeline._execution_state.current = ex
+    dsh_runtime.run_bootstrap(pipeline, ex, None)
+    assert len(calls) == 1
+    assert 'Synthetic Host Biologics' in unquote_plus(calls[0])
+    manifest = ex.read_checkpoint(STAGE)
+    units = [u for u in manifest['plan']['units'] if u['source'] == adapter]
+    assert [u['query'] for u in units] == ['Synthetic Host Biologics', LEGAL]
+    assert ex.usage()['open_data']['completed'] == 1
 
 
 def test_internal_alias_and_not_yet_valid_name_are_never_sent_but_former_name_is(entry):

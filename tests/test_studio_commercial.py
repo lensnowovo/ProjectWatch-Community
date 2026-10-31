@@ -301,7 +301,7 @@ def test_vendor_legal_intro_can_locate_subject_without_guessing_a_brand():
     assert len(result['records']) == 1 and result['rejected'] == 1
 
 
-def test_daily_intent_limit_is_global_and_cached_reads_remain_free(tmp_path):
+def test_historical_daily_limit_does_not_block_and_cache_still_replays(tmp_path):
     pipeline, pid, service = fixture(tmp_path)
     cfg = CommercialConfig(['xiniu'], {'xiniu': KEY}, daily_limit=3)
     class Client:
@@ -311,9 +311,10 @@ def test_daily_intent_limit_is_global_and_cached_reads_remain_free(tmp_path):
         config = CommercialConfig(['xiniu'], {'xiniu': KEY + str(index)}, daily_limit=3)
         service.collect(pipeline.store.get_project(pid), config, client_factory=lambda *args: Client())
     result = service.collect(pipeline.store.get_project(pid), cfg,
-        client_factory=lambda *args: pytest.fail('global cap must prevent any provider request'))
-    assert result['xiniu']['status'] == 'limited'
-    assert service.view(pid, cfg)['daily_queries']['remaining'] == 0
+        client_factory=lambda *args: Client())
+    assert result['xiniu']['status'] == 'ok' and not result['xiniu']['cached']
+    usage = service.view(pid, cfg)['daily_queries']
+    assert usage == {'used': 4, 'limit': None, 'remaining': None, 'historical_limit': 3}
     cached = service.collect(pipeline.store.get_project(pid), CommercialConfig(['xiniu'], {'xiniu': KEY + '0'}, 3),
         client_factory=lambda *args: pytest.fail('cached read is free'))
     assert cached['xiniu']['cached']

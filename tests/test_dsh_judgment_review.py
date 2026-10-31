@@ -48,13 +48,23 @@ def test_actual_gateway_reviews_before_save_without_generation_history(loop):
     def send(method, url, headers, raw, timeout):
         body = json.loads(raw)
         assert 'tools' not in body and len(body['messages']) == 2
-        assert body['messages'][0]['content'] in (review.SYSTEM, review.CONSISTENCY_SYSTEM)
+        assert body['messages'][0]['content'] in (review.SYSTEM + review.SPAN_GUIDANCE, review.CONSISTENCY_SYSTEM)
         assert not insight.load(loop.store, loop.project_id)
         payload = json.loads(body['messages'][1]['content'])
         assert payload['fields']
-        assert payload['evidence'] == loop.frozen()['numbered']
+        originals = loop.frozen()['numbered']
+        assert set(payload['evidence']) == set(originals)
+        for ref, original in originals.items():
+            assert payload['evidence'][ref] == {k: v for k, v in original.items() if k != 'text'}
         calls.append(payload)
-        return response(synthetic_review(payload))
+        value = synthetic_review(payload)
+        for check in value.get('checks', []):
+            for witness in check['evidence']:
+                ident = next(key for key, span in payload['evidence_spans'].items()
+                             if span['ref'] == witness['ref'] and witness['quote'] in span['quote'])
+                witness.pop('quote')
+                witness['quote_id'] = ident
+        return response(value)
     attach(loop, send)
     result = submit(loop, data)
     assert result['saved'] and result['evidence_review']['passed']
@@ -72,6 +82,68 @@ def test_actual_gateway_reviews_before_save_without_generation_history(loop):
 def test_unavailable_reviewer_cannot_save(loop):
     assert submit(loop, draft(loop))['error'] == 'judgment_review_unavailable'
     assert not loop.state.get('judged') and not insight.load(loop.store, loop.project_id)
+
+
+def test_review_preserves_originals_and_counterevidence_but_excludes_derived_summary():
+    ctx = {'numbered': {
+        'N1': {'context': 'The test is planned.', 'title': 'Plan',
+               'text': 'The test succeeded.', 'read_scope': 'partial'},
+        'N2': {'context': 'No result is available.', 'title': 'Status',
+               'text': 'Uncited summary', 'read_scope': 'full'},
+    }}
+    frozen = deepcopy(ctx)
+    payload = review.review_input({'headline': 'The test succeeded.'}, ctx)
+    assert ctx == frozen
+    assert set(payload['evidence']) == {'N1', 'N2'}
+    for ref, original in frozen['numbered'].items():
+        assert payload['evidence'][ref] == {k: v for k, v in original.items() if k != 'text'}
+    with pytest.raises(ValueError, match='review_evidence_invalid'):
+        review.validate_review({'checks': [{'field': 'headline', 'status': 'supported',
+            'reason': 'Synthetic', 'evidence': [{'ref': 'N1', 'quote': 'The test succeeded.'}]}]}, payload)
+
+
+@pytest.mark.parametrize('status', ['not_factual', 'supported', 'insufficient', 'contradicted'])
+@pytest.mark.parametrize('quote', ['', '   '])
+def test_empty_known_witness_only_represents_nonfactual_absence(status, quote):
+    payload = {'fields': {'gap': 'Unknown'}, 'evidence': {'N1': {'context': 'Synthetic source'}}}
+    value = {'checks': [{'field': 'gap', 'status': status, 'reason': 'Synthetic',
+                         'evidence': [{'ref': 'N1', 'quote': quote}]}]}
+    before = deepcopy(value)
+    if status == 'not_factual':
+        assert review.validate_review(value, payload) == []
+    else:
+        with pytest.raises(ValueError, match='review_evidence_invalid'):
+            review.validate_review(value, payload)
+    assert value == before
+
+
+@pytest.mark.parametrize('ref,quote', [('invented', ''), ('N1', None), ('N1', 'fabricated quote')])
+def test_nonfactual_witness_still_rejects_invented_or_malformed_evidence(ref, quote):
+    payload = {'fields': {'gap': 'Unknown'}, 'evidence': {'N1': {'context': 'Synthetic source'}}}
+    value = {'checks': [{'field': 'gap', 'status': 'not_factual', 'reason': 'Synthetic',
+                         'evidence': [{'ref': ref, 'quote': quote}]}]}
+    with pytest.raises(ValueError, match='review_evidence_invalid'):
+        review.validate_review(value, payload)
+
+
+def test_nonfactual_placeholder_gateway_keeps_raw_receipt_and_does_not_repeat(loop):
+    data = draft(loop)
+    calls = []
+    def send(_method, _url, _headers, raw, _timeout):
+        payload = json.loads(json.loads(raw)['messages'][1]['content'])
+        checked = synthetic_review(payload)
+        if payload['phase'] == 'fields':
+            # The fixture marks only the explicit uncertainty/status field.
+            for row in checked['checks']:
+                if payload['fields'][row['field']] == 'unclear':
+                    row.update(status='not_factual', evidence=[{'ref': next(iter(payload['evidence'])), 'quote': ''}])
+        calls.append(checked)
+        return response(checked)
+    attach(loop, send)
+    assert submit(loop, data)['saved']
+    assert any(w['quote'] == '' for c in calls for row in c.get('checks', []) for w in row['evidence'])
+    count = len(calls)
+    assert submit(loop, data)['saved'] and len(calls) == count
 
 
 def test_rejection_is_cached_then_corrected_draft_is_reviewed_before_save(loop):
@@ -96,7 +168,7 @@ def test_rejection_is_cached_then_corrected_draft_is_reviewed_before_save(loop):
     assert len(calls) > 2  # Corrected draft runs every batch plus cross-section review.
 
 
-def test_two_draft_limit_does_not_publish_or_dispatch_third(loop):
+def test_third_draft_is_reviewed_and_rejection_replays_without_redispatch(loop):
     data = draft(loop)
     calls = []
     def reviewer(payload):
@@ -110,10 +182,42 @@ def test_two_draft_limit_does_not_publish_or_dispatch_third(loop):
         with pytest.raises(ToolValidationError):
             submit(loop, data)
     data['headline'] = '候选判断丙'
-    assert submit(loop, data)['error'] == 'judgment_review_limit'
-    assert len(calls) == 2 and not insight.load(loop.store, loop.project_id)
-    with pytest.raises(HttpError, match='judgment_review_limit'):
+    with pytest.raises(ToolValidationError):
         submit(loop, data)
+    assert len(calls) == 3 and not insight.load(loop.store, loop.project_id)
+    with pytest.raises(ToolValidationError):
+        submit(loop, data)
+    assert len(calls) == 3
+
+
+def test_complete_feedback_collects_later_fields_before_one_revision(loop):
+    data = draft(loop)
+    loop.complete_review_feedback = True
+    calls = []
+    rejected = True
+
+    def reviewer(payload):
+        calls.append(payload)
+        result = synthetic_review(payload)
+        if rejected and payload['phase'] == 'fields':
+            result['checks'][0].update(status='insufficient', reason='Synthetic unsupported field')
+        return result
+
+    loop.judgment_reviewer = reviewer
+    with pytest.raises(ToolValidationError) as error:
+        submit(loop, data)
+    fields = [p for p in calls if p['phase'] == 'fields']
+    assert len(fields) > 1 and calls[-1]['phase'] == 'consistency'
+    assert len(error.value.issues) == len(fields)
+    assert not insight.load(loop.store, loop.project_id)
+    count = len(calls)
+    with pytest.raises(ToolValidationError):
+        submit(loop, data)
+    assert len(calls) == count  # Rejection receipts are cached, not redispatched.
+    rejected = False
+    data['headline'] = '量产仍在计划中'
+    assert submit(loop, data)['saved']
+    assert len(calls) == count * 2
 
 
 @pytest.mark.parametrize('change', ['missing', 'duplicate', 'unknown_field', 'reference', 'quote', 'empty_quote', 'no_evidence', 'status'])
@@ -165,10 +269,10 @@ def test_review_uses_existing_request_guards(loop, failure):
     except HttpError:
         pass
     assert not insight.load(loop.store, loop.project_id)
-    assert len(calls) == (0 if failure == 'budget' else 1)
+    assert len(calls) == 1
     with pytest.raises(HttpError):
         submit(loop, data)
-    assert len(calls) == (0 if failure == 'budget' else 1)
+    assert len(calls) == 1
     if failure == 'unknown':
         assert loop.execution.usage()['model']['unknown'] == 1
 
@@ -327,8 +431,9 @@ def test_malformed_consistency_cannot_pass(value):
 def test_plan_limits_reject_instead_of_silently_dropping_fields():
     with pytest.raises(ValueError, match='field_too_large'):
         review.review_batches({'fields': {'headline': 'x' * (review.MAX_FIELD_CHARS + 1)}})
-    with pytest.raises(ValueError, match='plan_limit'):
-        review.review_batches({'fields': {str(i): 'x' for i in range(300)}})
+    fields = {str(i): 'x' for i in range(300)}
+    batches = review.review_batches({'fields': fields})
+    assert {k for b in batches if b['phase'] == 'fields' for k in b['fields']} == set(fields)
 
 
 def test_second_batch_unknown_stops_all_later_calls_and_cannot_resubmit(loop, monkeypatch):

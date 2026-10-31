@@ -137,8 +137,8 @@ class DshProposalModel:
     """Bounded local operator configuration; keys never go to the browser or DSH."""
 
     def __init__(self, config: ModelProviderConfig, key: str, *, max_runs: int = 20):
-        if not 1 <= max_runs <= 100 or not key:
-            raise ValueError("explicit bounded model quota and key are required")
+        if not key:
+            raise ValueError("model key is required")
         self.config, self._key = config, key
         self.max_runs = max_runs
         self._runs = 0
@@ -156,7 +156,7 @@ class DshProposalModel:
             "config_id": hashlib.sha256(identity.encode()).hexdigest(),
             "excerpt_limit": 1500,
             "max_output_tokens": 768,
-            "remaining_runs": max(0, self.max_runs - self._runs),
+            "remaining_runs": None,
         }
 
     def authorization_id(self) -> str:
@@ -172,8 +172,6 @@ class DshProposalModel:
         if not self._lock.acquire(blocking=False):
             raise ExecutorUnavailable("executor busy")
         try:
-            if self._runs >= self.max_runs:
-                raise ExecutorUnavailable("model process quota reached")
             self._runs += 1
             return self._run(evidence) if before_send is None else self._run(evidence, before_send=before_send)
         except ExecutorUnavailable:
@@ -201,8 +199,6 @@ class DshProposalModel:
         if not self._lock.acquire(blocking=False):
             raise ExecutorUnavailable("executor busy")
         try:
-            if self._runs >= self.max_runs:
-                raise ExecutorUnavailable("model process quota reached")
             self._runs += 1
             output = self._run(None, before_send=before_send,
                                prompt_override=prompt, max_output_tokens=READING_OUTPUT_TOKENS)
@@ -232,8 +228,6 @@ class DshProposalModel:
         if not self._lock.acquire(blocking=False):
             raise ExecutorUnavailable("executor busy")
         try:
-            if self._runs >= self.max_runs:
-                raise ExecutorUnavailable("model process quota reached")
             self._runs += 1
             output = self._run(None, before_send=before_send,
                                prompt_override=prompt, max_output_tokens=OUTPUT_TOKENS)
@@ -264,8 +258,6 @@ class DshProposalModel:
         if not self._lock.acquire(blocking=False):
             raise ExecutorUnavailable("executor busy")
         try:
-            if self._runs >= self.max_runs:
-                raise ExecutorUnavailable("model process quota reached")
             self._runs += 1
             output = self._run(None, before_send=before_send,
                                prompt_override=prompt, max_output_tokens=OUTPUT_TOKENS)
@@ -459,5 +451,5 @@ def configured_local_model() -> DshProposalModel | None:
     return DshProposalModel(
         config,
         config.resolve_key(os.environ),
-        max_runs=int(os.environ.get("PROJECT_WATCH_MODEL_MAX_RUNS", "20")),
+        max_runs=20,  # Historical compatibility argument; no process quota.
     )

@@ -1,4 +1,4 @@
-"""Frozen event-to-object work on the existing insight queue and round budget."""
+"""Frozen event-to-object work on the existing insight queue with cumulative accounting."""
 import json
 from contextlib import closing
 from datetime import UTC, datetime
@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from project_watch.studio import insight_versions
 from project_watch.studio.dsh_bootstrap import digest
 from project_watch.studio.execution import JobExecution
+from project_watch.studio.http import HttpError
 from project_watch.studio.material_ownership import project_guard
 from project_watch.studio.store import now
 
@@ -23,6 +24,13 @@ def _put(db, job_id, stage, value):
 
 def begin(execution, *, cap=16, shared=False):
     """Persist intent before publication so a failed writer cannot lose analysis."""
+    from project_watch.studio.research_budget import model_allowance
+
+    dynamic = model_allowance(execution)
+    if dynamic is not None:
+        # A continuing stage inherits an already admitted total. A larger cost
+        # account is not permission to replace that lower original boundary.
+        cap = min(cap, dynamic) if shared else dynamic
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
@@ -30,7 +38,8 @@ def begin(execution, *, cap=16, shared=False):
         saved = execution.read_checkpoint(ROUND, db=db)
         if saved is None:
             if not shared:
-                cap = min(cap, execution.budgets.get('model') if execution.budgets.get('model') is not None else cap)
+                current = execution.budgets.get('model')
+                cap = current if cap is None else cap if current is None else min(cap, current)
             before = dict(db.execute('SELECT h.event_id,h.revision_id FROM studio_event_revision_heads h '
                 'JOIN studio_events e ON e.id=h.event_id WHERE e.project_id=?', (execution.job['project_id'],)))
             # First preserve an affordable source delivery: two extraction
@@ -40,14 +49,15 @@ def begin(execution, *, cap=16, shared=False):
             # Small explicitly bounded rounds may deliver events first; the
             # analysis handoff reports any remaining budget gap. Total cap and
             # previously frozen rounds are unchanged.
-            reserve = min(6, cap // 2) if cap >= 5 else 0
-            saved = dict(cap=cap, collection_cap=max(0, cap - reserve), before=before,
+            reserve = min(6, cap // 2) if cap is not None and cap >= 5 else 0
+            saved = dict(cap=cap, collection_cap=max(0, cap - reserve) if cap is not None else None, before=before,
                          phase='collecting', origin_job_id=execution.job['id'], created_at=now())
             if (execution.read_checkpoint('collection_request_v1', db=db) or {}).get('mode') == 'topic':
                 saved['analysis_enabled'] = False
             _put(db, execution.job['id'], ROUND, saved)
     current = execution.budgets.get('model')
-    execution.budgets['model'] = saved['collection_cap'] if current is None else min(current, saved['collection_cap'])
+    maximum = saved['collection_cap']
+    execution.budgets['model'] = maximum if current is None else current if maximum is None else min(current, maximum)
     return saved
 
 
@@ -117,8 +127,7 @@ def inputs(pipeline, project_id, versions, *, db, only_object=None):
         work = grouped.get(obj['id'])
         if not work:
             continue
-        if (len(result) >= MAX_OBJECTS or len(work['event_versions']) > MAX_EVENTS
-                or len(work['numbered']) > MAX_REFS or sum(len(v['context']) for v in work['numbered'].values()) > 60000):
+        if sum(len(v['context']) for v in work['numbered'].values()) > 60000:
             unresolved.append(dict(object_id=obj['id'], reason='bounded_analysis_input_limit'))
             continue
         work.update(object=obj, object_versions={obj['id']: obj['version']},
@@ -199,14 +208,11 @@ def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
     if budget and budget['cap'] != state['cap']:
         raise ValueError('insight round cap changed')
     predecessor = budget['tail_job_id'] if budget else origin
-    used = db.execute("""SELECT count(*) FROM studio_job_calls c JOIN (
+    _historical_used = db.execute("""SELECT count(*) FROM studio_job_calls c JOIN (
         SELECT job_id,call_key FROM studio_job_calls WHERE job_id IN (?,?)
         UNION SELECT origin_job_id,call_key FROM studio_job_budget_links WHERE job_id IN (?,?)
         ) b ON b.job_id=c.job_id AND b.call_key=c.call_key WHERE c.kind='model'""",
         (origin, predecessor, origin, predecessor)).fetchone()[0]
-    if rebuild is None and used >= state['cap']:
-        state['blocked_reason'] = 'round_budget_exhausted'
-        return None
     fingerprint = digest([origin, [w['fingerprint'] for w in state['objects']], rebuild])
     version = 'event-insight:' + fingerprint
     job = pipeline.store.enqueue(project_id, 'insight', automatic=True, input_version=version, db=db, parent_job_id=origin)
@@ -230,6 +236,9 @@ def _enqueue(pipeline, db, project_id, origin, state, *, rebuild=None):
         db.execute('INSERT OR IGNORE INTO studio_job_budget_links SELECT ?,origin_job_id,call_key FROM studio_job_budget_links WHERE job_id=?',
                    (job['id'], owner))
     _put(db, root, BUDGET, dict(cap=state['cap'], tail_job_id=job['id']))
+    from project_watch.studio.public_research_admission import inherit_work
+
+    inherit_work(db, project_id, origin, job, payload)
     return job
 
 
@@ -294,6 +303,10 @@ def _route(pipeline, pid, state, db):
 
 
 def _advance(pipeline, pid, origin, state, db):
+    reader = JobExecution(pipeline.store, {'id': origin})
+    if (reader.read_checkpoint('update_run_owner_v1', db=db)
+            or reader.read_checkpoint('update_handoff_successor_v1', db=db)):
+        return None  # The leased update owns analysis; never fork a second owner.
     if state['phase'] == 'collecting':
         if not state.get('publication_complete'):
             return None  # Intent or partially written events are not publication completion.
@@ -335,10 +348,15 @@ def dispatch_pending(pipeline, project_id):
     """Reconstruct terminal publication intents without replaying collection."""
     with closing(pipeline.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
-        project_guard(db, project_id, '')
         rounds = db.execute("SELECT j.*,c.data FROM studio_job_checkpoints c JOIN studio_jobs j ON j.id=c.job_id "
             "WHERE j.project_id=? AND c.stage=? AND j.status IN ('done','failed') ORDER BY j.created_at", (project_id, ROUND)).fetchall()
         for row in rounds:
+            # Recheck each frozen round; a different held round grants no
+            # permission to this one and must not suppress independent work.
+            try:
+                project_guard(db, project_id, row['id'])
+            except HttpError:
+                continue
             state = json.loads(row['data'])
             # Upgrade the old false-settled marker without inventing input or calls.
             if state['phase'] == 'settled' and state.get('unresolved'):

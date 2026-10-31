@@ -20,6 +20,8 @@ def case(tmp_path, monkeypatch):
     with store._connect() as db:
         db.execute("UPDATE studio_jobs SET status='failed',error='request_outcome_unknown',finished_at=? WHERE id=?",
                    (now(), old['id']))
+        db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
+                   (old['id'], 'detail_inputs', '{"input_version":"synthetic","binding":"synthetic"}'))
     return TestClient(app), store, project['id'], old['id']
 
 
@@ -38,6 +40,9 @@ def count_rows(store):
 def own_kind(store, job, kind):
     with store._connect() as db:
         db.execute('UPDATE studio_jobs SET kind=? WHERE id=?', (kind, job))
+        if kind == 'business':
+            db.execute('INSERT OR IGNORE INTO studio_job_checkpoints VALUES (?,?,?)',
+                       (job, 'business_inputs', '{"input_version":"synthetic","binding":"synthetic"}'))
 
 
 @pytest.mark.parametrize('owner', ['external', 'external_followup', 'public_profile', 'insight'])

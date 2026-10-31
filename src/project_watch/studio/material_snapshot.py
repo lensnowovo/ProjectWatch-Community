@@ -116,6 +116,46 @@ def read(store, project_id, snapshot_id):
         return {**value, 'materials': originals}
 
 
+def derive_permitted(execution, snapshot_id):
+    """Explicit local successor retaining only still-permitted original versions.
+
+    No current-head replacement or recollection; the old manifest stays intact.
+    A successor is not permission to retry an unknown analysis request.
+    """
+    pid, jid = execution.job['project_id'], execution.job['id']
+    with closing(execution.store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        execution._guard(db)
+        row = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND id=? AND artifact_key LIKE ?',
+                         (pid, snapshot_id, KEY + ':%')).fetchone()
+        if not row:
+            raise KeyError('snapshot not found in project')
+        old = json.loads(row[0])
+        materials, exclusions = [], list(old['exclusions'])
+        for material in old['materials']:
+            try:
+                evidence = _permitted(db, pid, material['evidence_version_id'])
+            except ValueError:
+                exclusions.append(dict(evidence_version_id=material['evidence_version_id'], reason='not_permitted'))
+                continue
+            if digest(evidence) != material['fingerprint']:
+                raise ValueError('snapshot evidence fingerprint changed')
+            materials.append(material)
+        value = {k: v for k, v in old.items() if k not in ('id', 'fingerprint', 'created_at')}
+        value.update(materials=materials, exclusions=exclusions, parent_snapshot_id=snapshot_id,
+                     derivation='permission_recheck', derivation_job_id=jid)
+        signature = digest(value)
+        key = KEY + ':' + jid + ':permitted:' + snapshot_id
+        existing = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND artifact_key=? AND fingerprint=?',
+                              (pid, key, signature)).fetchone()
+        if existing:
+            return json.loads(existing[0])
+        value.update(id=digest([key, pid, signature]), fingerprint=signature, created_at=now())
+        db.execute('INSERT INTO studio_insight_versions VALUES (?,?,?,?,?,?)',
+                   (value['id'], pid, key, signature, json.dumps(value, ensure_ascii=False), value['created_at']))
+        return value
+
+
 def analyze_saved(execution, snapshot_id, *, attempt_key, analyze):
     """Invoke an injected analysis-only role on fixed originals, retaining drafts.
 

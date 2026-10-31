@@ -65,7 +65,7 @@ numbered_same_as/same_as/context_same_as/excerpt_same_as/suggested_quote_same_as
 补充官方佐证或明确旧事件日期不等于公司业务推进；没有新业务阶段用 unchanged。
 context.judgment.reused=true 时已有判断仍适用，直接 pw_revise，不重写 analysis_json。
 pw_judge 提交 analysis_json（JSON 字符串），引用 context 的 numbered 编号，应用下列综合判断格式。
-提交的判断会单独复核与证据的一致性。按返回的字段和证据修正；每轮最多复核两个不同草稿，复核同样计入模型预算。
+提交的判断会单独复核与证据的一致性。按返回的字段和证据修正；每份草稿独立复核，调用用量如实记录。
 pw_revise 提交 changes_json（JSON 数组）和 reason。没有必要改范围时提交 [] 并说明理由。
 允许动作 note/finish/explore/reduce/set_exit；每项必须有 watch_id、why、refs（事件编号）。
 note/finish 的 text 是有来源的回答；finish 仅用于有明确 exit_rule 且已回答的专题。
@@ -133,10 +133,13 @@ class PublicMonitor(PublicBootstrap):
                 return
         # A new job or a genuinely new source never grants retry authority.
         with closing(self.store._connect()) as db:
-            held = db.execute(f"""SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
-                WHERE j.project_id=? AND ({UNRESOLVED} OR {_RECEIVED_MODEL_FAILURE}) LIMIT 1""",
-                (self.project_id,)).fetchone()
-        if held:
+            from project_watch.studio.public_research_admission import held_jobs
+
+            independent = held_jobs(db, self.project_id, self.execution.job['id'])
+            held = db.execute(f"""SELECT c.job_id FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id
+                WHERE j.project_id=? AND ({UNRESOLVED} OR {_RECEIVED_MODEL_FAILURE})""",
+                (self.project_id,)).fetchall()
+        if any(row[0] not in independent for row in held):
             raise HttpError("request_outcome_unknown")
 
     def hold(self, code):

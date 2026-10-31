@@ -202,6 +202,41 @@ def test_matching_affiliation_prevents_product_expansion_without_asserting_owner
     assert not loop.store.list_events(project_id=loop.project_id)
 
 
+@pytest.mark.parametrize('empty', [True, False])
+def test_product_fallback_uses_original_settled_receipt_after_handoff(tmp_path, empty):
+    from copy import copy
+
+    from project_watch.studio.update_handoff import digest
+
+    loop, args, calls = setup(tmp_path, empty=empty, applicant='Unrelated Institute')
+    loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
+    original = loop.execution
+    saved = collection_dsh.rounds(loop)[-1]
+    unit, receipt = saved['plan']['units'][0], saved['receipts'][0]
+    entry = dict(origin_job_id=original.job['id'], unit_id=unit['id'], adapter=unit['source'],
+                 query=unit['query'], outcome=receipt['outcome'], result_count=receipt['result_count'],
+                 reason=receipt.get('reason', ''), receipt_fingerprint=digest(receipt))
+    assert loop.store.finish(original.job['id'], lease_token=original.job['lease_token'])
+    checkpoints = {'update_handoff_v1': {'professional_query_history': [entry]},
+                   'collection_source_imports_v1': [r for group in collection_dsh._refs(loop).values() for r in group]}
+    # A successor's empty ledger must not require the old affiliation query again.
+    successor = copy(loop)
+    successor.execution = SimpleNamespace(job={'id': 'synthetic-successor'},
+        read_checkpoint=lambda stage: checkpoints.get(stage),
+        checkpoint=lambda stage, value: checkpoints.__setitem__(stage, value))
+    role = SimpleNamespace(parent=successor, execution=successor.execution)
+    before = list(calls)
+    retrieval_queries.require_product_fallback(role,
+        args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product'))
+    assert calls == before
+    assert checkpoints['collection_product_dimension_v2']['query'] == 'SYN-101'
+    # Context is not evidence: a tampered summary cannot unlock a new query.
+    entry['receipt_fingerprint'] = 'tampered'
+    with pytest.raises(ValueError, match='historical collection'):
+        retrieval_queries.require_product_fallback(role,
+            args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product'))
+
+
 def test_patent_time_fields_positions_and_nested_unrelated_records():
     html = patent_html().replace('</dl>', '''
         <table itemprop="backwardReferences"><tr><td><time itemprop="publicationDate" datetime="2030-01-01">2030</time>
@@ -329,6 +364,43 @@ def test_listed_versions_are_validated_numbers_with_provenance():
         google_patents.metadata(tampered)
 
 
+def test_unsent_invalid_product_does_not_consume_dimension(tmp_path):
+    from project_watch.studio import bootstrap_collection
+
+    loop, args, calls = setup(tmp_path, empty=True)
+    role = bootstrap_collection.Collection(loop)
+    role.retrieval_contract = 'evidence-query-v2'
+    role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
+    before, actions = len(calls), dict(role.data['actions'])
+    with pytest.raises(ValueError, match='reason'):
+        role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-101',
+                                           relationship='product', reason=''))
+    assert len(calls) == before and role.data['actions'] == actions
+    assert role.execution.read_checkpoint('collection_product_dimension_v2') is None
+    result = role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202', relationship='product'))
+    assert result['collection']['outcome'] == 'success'
+    claim = role.execution.read_checkpoint('collection_product_dimension_v2')
+    assert claim['query'] == 'SYN-202'
+    with pytest.raises(ValueError):
+        role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202',
+                                           relationship='product', reason=''))
+    assert role.execution.read_checkpoint('collection_product_dimension_v2') == claim
+
+
+def test_duplicate_publications_keep_one_sided_version_link_regardless_of_order():
+    from itertools import permutations
+
+    from project_watch.studio.research_sources import _patent_groups
+
+    rows = [dict(id='a', extra=dict(patent_number='US123456A1', other_versions=['US123456B2'])),
+            dict(id='b', extra=dict(patent_number='US123456B2', other_versions=[])),
+            dict(id='c', extra=dict(patent_number='US123456A1', other_versions=[]))]
+    for order in permutations(rows):
+        grouped = _patent_groups(order)
+        assert set(grouped) == {'a', 'b', 'c'}
+        assert set(grouped.values()) == {('versions:US123456A1', 'listed_versions')}
+
+
 def test_application_and_grant_group_only_through_their_own_listed_versions(tmp_path):
     """No family ID on the page: link A1/B2 by listed versions, never by title or applicant."""
     loop, args, calls = setup(tmp_path)
@@ -399,3 +471,24 @@ def test_validation_refusal_is_forgotten_but_a_journaled_request_is_not(tmp_path
     finally:
         loop.tool = original
     assert [a['status'] for a in role.data['actions'].values()] == ['started']  # conservative, as before
+
+
+def test_existing_receipt_change_without_row_growth_keeps_started_action(tmp_path):
+    from project_watch.studio import bootstrap_collection
+
+    loop, args, _calls = setup(tmp_path)
+    role = bootstrap_collection.Collection(loop)
+    loop.execution.call('open_data', 'existing', lambda: Response(200, {}, b'{}'), provider='synthetic')
+    before = role._journal_rows()
+
+    def changed_then_failed(name, tool_args):
+        with closing(loop.store._connect()) as db, db:
+            db.execute("UPDATE studio_job_calls SET response_status=503 WHERE job_id=?", (loop.execution.job['id'],))
+        raise ValueError('post-dispatch processing failed')
+
+    loop.tool = changed_then_failed
+    with pytest.raises(ValueError, match='post-dispatch'):
+        role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
+    after = role._journal_rows()
+    assert len(after) == len(before) and after != before
+    assert [a['status'] for a in role.data['actions'].values()] == ['started']

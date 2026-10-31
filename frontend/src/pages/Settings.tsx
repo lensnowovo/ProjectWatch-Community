@@ -382,12 +382,6 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
                 onChange={(e) => set("commercial", { ...form.commercial, model_use: e.target.checked })} />
               <span>交给 AI 深度分析<small className="muted">开启后，本公司与同行的融资记录会作为依据发送给模型服务，用于判断竞争位置与资本情况。请确认与数据服务商的协议允许这样使用。</small></span>
             </label>
-            <label className="field"><span>每天新查询上限（所有项目合计）</span>
-              <select value={form.commercial.daily_limit} onChange={(e) => set("commercial", { ...form.commercial, daily_limit: Number(e.target.value) })}>
-                {[3, 6, 12, 24, 60].map((n) => <option key={n} value={n}>{n} 次</option>)}
-              </select>
-              <small className="muted">缓存读取不计入；失败与结果未确认的请求也计入。不是金额预算，账单以服务商为准。</small>
-            </label>
             <p className="muted small">保存后到项目「公司动态」点击更新，可查看各家结果；连接测试不批量查询商业来源。</p>
           </Section>
 
@@ -684,7 +678,7 @@ function overview(data: SettingsView, tests: Tests | null): Row[] {
       state: data.registry.provider !== "none" || commercialReady.length ? "已启用" : "未使用",
       tone: data.registry.provider !== "none" || commercialReady.length ? "ok" : "off",
       detail: [data.registry.provider === "tianyancha" ? "天眼查" : "", ...commercialReady].filter(Boolean).join("、")
-        + (commercialReady.length ? ` · 每天最多 ${data.commercial?.daily_limit} 次新查询` : "") || "—" },
+        || "—" },
     { id: "notify", label: "推送",
       state: data.notify?.ready ? "已配置" : "未推送", tone: data.notify?.ready ? "ok" : "off",
       detail: data.notify?.ready ? [NOTIFY_LABEL[data.notify.kind],

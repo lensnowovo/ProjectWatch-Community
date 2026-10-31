@@ -116,6 +116,25 @@ def test_fresh_topic_worker_material_then_independent_question_without_judge_or_
     assert result['model_used'] <= result['cap'] and not seen['insight']
 
 
+def test_question_closeout_preserves_legacy_unknown_and_shared_budget(tmp_path, monkeypatch):
+    from test_monitor_completion_journey import call_rows, old_hold
+
+    pipeline, execution, _watch, seen = install(tmp_path, monkeypatch)
+    old = old_hold(pipeline.store, execution.job['project_id'])
+    before = call_rows(pipeline.store, old)
+    work = source(pipeline, execution)
+    worker = StudioWorker(pipeline)
+    monkeypatch.setattr(worker, 'schedule', lambda: None)
+    assert worker.step()
+    with closing(pipeline.store._connect()) as db:
+        child = dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (work['job_id'],)).fetchone())
+    assert child['status'] == 'done', child['error']
+    result = JobExecution(pipeline.store, child).read_checkpoint(question_work.RESULT)
+    assert result['status'] == 'complete' and result['model_used'] <= result['cap']
+    assert result['questions'][0]['knowledge_state'] == 'unresolved'
+    assert call_rows(pipeline.store, old) == before and seen['question_reviews']
+
+
 def test_answered_exit_closes_only_automatic_question_and_replay_is_local(tmp_path, monkeypatch):
     pipeline, execution, watch, seen = install(tmp_path, monkeypatch, answered=True)
     source(pipeline, execution)
@@ -164,7 +183,7 @@ def test_review_commit_respects_human_takeover_and_new_input(tmp_path, monkeypat
     assert pipeline.monitoring_plan.explorations.view(pid)[watch['id']]['reason'] != 'answered'
 
 
-def test_shared_small_budget_preserves_draft_without_answer_or_hold(tmp_path, monkeypatch):
+def test_small_historical_budget_allows_question_review_and_answer(tmp_path, monkeypatch):
     from project_watch.studio import event_insight_work, progressive_bootstrap
     from project_watch.studio.event_insight import RoleExecution
     pipeline, execution, watch, seen = install(tmp_path, monkeypatch)
@@ -178,10 +197,9 @@ def test_shared_small_budget_preserves_draft_without_answer_or_hold(tmp_path, mo
     pipeline.run(child)
     current = JobExecution(pipeline.store, child)
     result = current.read_checkpoint(question_work.RESULT)
-    assert result['status'] == 'pending' and result['model_used'] <= 5
-    assert result['questions'][0]['reason'] == 'semantic_review_budget'
+    assert result['status'] == 'complete' and result['model_used'] > 5
     assert RoleExecution(current, work['questions'][0]['fingerprint']).read_checkpoint('question_draft')
-    assert not current.read_checkpoint('dsh_hold') and not seen['question_reviews']
+    assert not current.read_checkpoint('dsh_hold') and seen['question_reviews']
     assert pipeline.monitoring_plan.explorations.view(execution.job['project_id'])[watch['id']]['no_gain'] == 0
 
 
@@ -383,15 +401,14 @@ def test_question_pre_dispatch_guards_do_not_send_or_close(tmp_path, monkeypatch
 
 
 def test_incomplete_body_collection_never_counts_no_gain_or_answers(tmp_path, monkeypatch):
-    from project_watch.studio import collection_host
+    from types import SimpleNamespace
 
     pipeline, execution, watch, seen = install(tmp_path, monkeypatch)
     pid = execution.job['project_id']
-    original = collection_host.limit_budgets
-    def limit(current, mode):
-        original(current, mode)
-        current.budgets['page'] = 0
-    monkeypatch.setattr(collection_host, 'limit_budgets', limit)
+    def unavailable(url):
+        seen['pages'].append(url)
+        return {'status': 'unavailable', 'text': '', 'error_code': 'http_failure'}
+    monkeypatch.setattr(pipeline, 'reader', lambda: SimpleNamespace(read=unavailable))
     pipeline.run(execution.job)
     work = execution.read_checkpoint(question_work.INTENT)
     assert not work['collection_complete']
@@ -400,4 +417,4 @@ def test_incomplete_body_collection_never_counts_no_gain_or_answers(tmp_path, mo
     pipeline.run(child)
     assert pipeline.monitoring_plan.explorations.view(pid)[watch['id']]['no_gain'] == 0
     assert pipeline.monitoring_plan.explorations.view(pid)[watch['id']]['reason'] != 'answered'
-    assert not seen['pages'] and not seen['question_reviews']
+    assert len(seen['pages']) == 1 and not seen['question_reviews']

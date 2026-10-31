@@ -38,6 +38,10 @@ def freeze(execution, entry, *, materials=False):
         stages = {r[0] for r in db.execute('SELECT stage FROM studio_job_checkpoints WHERE job_id=?',
                                          (execution.job['id'],))}
         allowed = {'collection_request_v1', 'external_first_ready', 'external_followup_input'}
+        from project_watch.studio.public_research_admission import STAGE as INDEPENDENT
+
+        if execution.read_checkpoint(INDEPENDENT, db=db):
+            allowed.update((INDEPENDENT, 'independent_public_collection_v1'))
         if execution.job.get('kind') == 'external_followup':
             from project_watch.studio import collection_round, public_stage_work
 
@@ -206,6 +210,10 @@ def run(research, model, http, runtime_root, directory):
     from project_watch.studio.material_handoff import adopt
 
     adopt(research)
+    local_limits = research.execution.read_checkpoint('material_local_limits_v1')
+    if local_limits is None and research.execution.read_checkpoint('material_mapping_v2') is None:
+        local_limits = {'isolate_received_output_limit': True}
+        research.execution.checkpoint('material_local_limits_v1', local_limits)
     research.tools = ('pw_status', 'pw_finish')
     def extract(source, material):
         source = {**source, 'project': {'legal_name': research.project['legal_name']}}
@@ -219,16 +227,17 @@ def run(research, model, http, runtime_root, directory):
         pending = _pending(research)
         if not pending:
             break
-        if any((research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id']) or {}).get('code')
+        if not local_limits and any((research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id']) or {}).get('code')
                == 'material_output_limit' for t in pending):
             _defer(research, reason='material_output_limit')
             break
         eligible = [t for t in pending if not research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id'])]
         if not eligible:
-            _defer(research, reason='material_context_limit')
+            output_limited = any((research.execution.read_checkpoint(evidence_tasks.DEFERRED + t['id']) or {}).get('code')
+                                 == 'material_output_limit' for t in pending)
+            _defer(research, reason='material_output_limit' if output_limited else 'material_context_limit')
             break
         task = eligible[0]
-        remaining = _remaining(research)
         cached = research.execution.read_checkpoint('extract_result:' + task['id']) is not None
         from project_watch.studio.research_records import proposal
 
@@ -237,14 +246,24 @@ def run(research, model, http, runtime_root, directory):
         # existing admission plan and at least one review for its first candidate.
         # A saved proposal needs no transport and remains locally consumable.
         extraction_cost = 0 if structured is not None else 2
+        from project_watch.studio.research_work_budget import plan_work
+
+        plan_work(research.execution, phase='extract',
+                  counts={'model': (0 if cached else extraction_cost) + max(1, _review_calls(research))},
+                  basis={'task_id': task['id'], 'evidence_version_id': task['evidence_version_id'],
+                         'publication_binding': _publication_binding(research)})
+        remaining = _remaining(research)
         if not cached and remaining is not None and remaining < extraction_cost + max(1, _review_calls(research)):
             if remaining == 0 and not research.state['records'] and not research.execution.budget_used('model'):
                 raise HttpError('request_budget')
             _defer(research)
             break
-        evidence_tasks.run_pending(research.execution, extract, limit=1, policy=evidence_tasks.TYPED_POLICY)
+        evidence_tasks.run_pending(research.execution, extract, limit=1, policy=evidence_tasks.TYPED_POLICY,
+                                   task_id=task['id'])
         _map_records(research)
         if (research.execution.read_checkpoint(evidence_tasks.DEFERRED + task['id']) or {}).get('code') == 'material_output_limit':
+            if local_limits:
+                continue  # Received truncation is local to this immutable material.
             _defer(research, reason='material_output_limit')
             break
         remaining = _remaining(research)
@@ -254,6 +273,14 @@ def run(research, model, http, runtime_root, directory):
             if str(exc) != 'review_plan_limit':
                 raise
             needed = None  # Keep the whole candidate when the bounded plan is full.
+        if needed is not None:
+            plan_work(research.execution, phase='review', counts={'model': needed},
+                      # Rejected materials still consume requests. A distinct
+                      # material boundary needs a fresh finite forecast even
+                      # when it leaves the publication input unchanged.
+                      basis={'publication_binding': _publication_binding(research),
+                             'after_task': task['id']})
+            remaining = _remaining(research)
         if needed is None or (remaining is not None and needed > remaining):
             _defer(research, candidate_task=task['id'])
             break
@@ -262,6 +289,11 @@ def run(research, model, http, runtime_root, directory):
             and not research.state['records']):
         return _finish_deferred(research)
     binding = _publication_binding(research)
+    from project_watch.studio.research_work_budget import plan_work
+
+    plan_work(research.execution, phase='review', counts={'model': _review_calls(research)},
+              basis={'publication_binding': binding})
+    remaining = _remaining(research)
     # If HTTP settled before the review checkpoint was saved, admission must
     # still replay that exact journalled request at a fully consumed budget.
     publishing = research.execution.read_checkpoint('material_publication_v1') == binding

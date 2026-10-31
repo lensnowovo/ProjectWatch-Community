@@ -1,4 +1,4 @@
-"""Reserve bounded model turns for structured submission, never invent results."""
+"""Usage and structured closeout guidance, without application quotas."""
 import hashlib
 import json
 
@@ -7,6 +7,11 @@ from project_watch.studio.http import HttpError
 STAGE = 'dsh_closeout_v1'
 CLOSEOUT_TOOLS = frozenset({'pw_status', 'pw_context', 'pw_assess', 'pw_judge', 'pw_revise', 'pw_finish'})
 RESERVE = 8
+
+
+def active_hold(value):
+    """Keep historical quota receipts intact without enforcing retired quotas."""
+    return None if value == {'code': 'request_budget'} else value
 
 
 def next_submission(research):
@@ -30,19 +35,9 @@ def next_submission(research):
 
 
 def request_budget(execution):
-    """Shared admission consumption, including inherited completed requests."""
-    from project_watch.studio.acceptance_batch import remaining
-
-    batch_remaining = remaining(execution.store, execution.job)
-    requests = {}
-    for kind, limit in execution.budgets.items():
-        used = execution.budget_used(kind)
-        requests[kind] = dict(limit=limit, used=used, remaining=None if limit is None else max(0, limit - used))
-        if batch_remaining is not None and kind in batch_remaining:
-            local = requests[kind]['remaining']
-            requests[kind]['acceptance_remaining'] = batch_remaining[kind]
-            requests[kind]['remaining'] = batch_remaining[kind] if local is None else min(local, batch_remaining[kind])
-    return requests
+    """Report usage without imposing a request allowance."""
+    return {kind: dict(limit=None, used=execution.budget_used(kind), remaining=None)
+            for kind in execution.budgets}
 
 
 def budget(research):
@@ -58,8 +53,8 @@ def budget(research):
 
 
 def guard_tool(research, name):
-    if (research.execution.read_checkpoint(STAGE) or {}).get('phase') == 'closeout' and name not in CLOSEOUT_TOOLS:
-        raise ValueError('budget closeout: use saved evidence for judgment, revision and finish; report unfinished coverage')
+    """Old quota-closeout receipts do not restrict newly authorized work."""
+    return None
 
 
 def finish_saved_monitor(research):
@@ -92,17 +87,7 @@ def prepare_model(research, body):
     key = 'dsh_budget_advice:' + hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     advice = execution.read_checkpoint(key)
     if advice is None:
-        remaining = status['requests']['model']['remaining']
-        if remaining == 0:
-            research.hold('request_budget')
-            raise HttpError('request_budget')
-        closing = status['phase'] == 'closeout' or (
-            remaining is not None and remaining <= status['reserve_model_calls'])
-        status['phase'] = 'closeout' if closing else 'research'
-        if closing:
-            status['next_tool'] = next_submission(research)
-        advice = status
-        execution.checkpoint(key, advice)
+        return body
     if advice['phase'] == 'closeout':
         execution.checkpoint(STAGE, {'phase': 'closeout'})
         # Old frozen advice retains its original payload for journal replay.

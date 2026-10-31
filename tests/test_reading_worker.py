@@ -84,14 +84,14 @@ def test_pause_configuration_change_and_no_model_no_call(tmp_path):
     assert ledger.status(grant["id"])["requests_used"] == 0
 
 
-def test_budget_exhaustion_leaves_remaining_material_without_call(tmp_path):
+def test_historical_quota_does_not_leave_remaining_material_unread(tmp_path):
     repo, project, source, ledger, model, _, worker = sample(tmp_path)
     grant = authorize(project, source, ledger, model, future=True, calls=1)
     assert worker.process_one()["state"] == "succeeded"
     material(repo, project, "新增设备正在研发。", "e" * 64)
-    assert worker.process_one() is None
-    assert model.calls == 1
-    assert ledger.status(grant["id"])["requests_used"] == 1
+    assert worker.process_one()["state"] == "succeeded"
+    assert model.calls == 2
+    assert ledger.status(grant["id"])["requests_used"] == 2
 
 
 def test_bad_output_and_provider_failure_never_repeat_or_publish(tmp_path):
@@ -120,7 +120,7 @@ def test_status_is_read_only_distinguishes_pause_budget_missing_and_legacy_rule(
     assert worker.status(project.id)["reason"] == "paused"
     ledger.set_status(grant["id"], "active", actor="synthetic")
     worker.process_one()
-    assert worker.status(project.id)["reason"] == "budget_reached"
+    assert worker.status(project.id)["reason"] == "ready"
     assert worker.status(project.id)["counts"] == {"succeeded": 1}
     settings.model = None
     assert worker.status(project.id)["reason"] == "model_missing"

@@ -22,6 +22,17 @@ def setup(tmp_path):
     return store, pid, job
 
 
+def test_saved_section_partial_is_not_reported_as_complete(tmp_path):
+    store, _, job = setup(tmp_path)
+    JobExecution(store, job).checkpoint_chunked('snapshot_analysis_publication_v1',
+        dict(status='partial', sections={'operations': {'status': 'rejected'}}))
+    assert store.finish(job['id'], lease_token=job['lease_token'])
+    with closing(store._connect()) as db:
+        result = projection(db, row(store, job))
+    assert result['state'] == 'partial'
+    assert result['label'] == '材料已保存，部分分析未完成'
+
+
 def row(store, job):
     with closing(store._connect()) as db:
         return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (job['id'],)).fetchone())

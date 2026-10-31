@@ -3,7 +3,6 @@ import hmac
 import json
 import time
 from contextlib import closing
-from decimal import Decimal
 from uuid import uuid4
 
 from project_watch.external_analysis import digest
@@ -44,12 +43,6 @@ def _view(store, db, project_id, job_id, config_id, *, check_budget=True):
     packet = json.loads(row['packet_json'])
     store._scope(grant, packet, db)
     limits = json.loads(grant['limits_json'])
-    charges = db.execute('SELECT reserved_cny FROM external_analysis_dispatches WHERE authorization_id=?',
-                         (grant['id'],)).fetchall()
-    if check_budget and (len(charges) >= limits['max_requests'] or (
-            limits['max_cost_cny'] is not None
-            and sum((Decimal(r[0]) for r in charges), Decimal(0)) >= Decimal(limits['max_cost_cny']))):
-        raise ReadingDenied('retry budget exhausted')
     value = dict(project_id=project_id, job_id=job_id, authorization_id=grant['id'],
                  config_id=config_id, packet_digest=row['input_digest'],
                  recipient=json.loads(grant['recipient_json']), limits=limits,

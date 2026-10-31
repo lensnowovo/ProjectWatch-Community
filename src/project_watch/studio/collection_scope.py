@@ -42,6 +42,9 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
 
     def add(source, category, queries, *, target=None, historical=False, schedule_due=True,
             query_version='1', priority=1, evidence_reason=''):
+        ordered = (public_plan.get('name_order_policy') == 'confirmed-names-v1'
+                   and source in ('openalex_affiliation', 'europepmc_affiliation', 'europepmc_patent', 'patent_search'))
+        ranks = {q: i for i, q in enumerate(dict.fromkeys(queries)) if isinstance(q, str)}
         decision = decisions.get(source, {})
         if decision:
             if decision.get('capability') not in ('not_applicable', 'disabled'):
@@ -63,6 +66,7 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
                 if decision:
                     capability = decision['capability']
                 candidates.append(dict(source=source, category=category, target_id='scope:' + row['id'],
+                    **({'query_rank': ranks.get(row['query'], len(ranks))} if ordered else {}),
                     query_version='scope-v1', query=row['query'], capability=capability,
                     reason=decision.get('reason') or row['reason'],
                     applicability_evidence_ids=decision.get('evidence_ids') or [row['ref']['evidence_version_id']],
@@ -84,6 +88,7 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
             reason = 'Source capability: ' + capability
         for query in scoped or ['']:
             candidates.append(dict(source=source, category=category, target_id=target or project['id'],
+                                   **({'query_rank': ranks.get(query, len(ranks))} if ordered else {}),
                                    query_version=query_version, query=query, capability=capability,
                                    reason=reason, priority=priority, schedule_due=schedule_due,
                                    applicability_evidence_ids=decision.get('evidence_ids', []),

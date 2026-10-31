@@ -9,7 +9,12 @@ from project_watch.studio import (
     event_insight_work,
     insight_versions,
 )
-from project_watch.studio.dsh_bootstrap import PublicBootstrap, digest, text_arg
+from project_watch.studio.dsh_bootstrap import (
+    PublicBootstrap,
+    ToolValidationError,
+    digest,
+    text_arg,
+)
 from project_watch.studio.dsh_extraction import ExtractionGateway
 from project_watch.studio.dsh_monitor import PublicMonitor
 from project_watch.studio.execution import JobExecution
@@ -23,8 +28,10 @@ class RoleExecution(JobExecution):
     """Checkpoint namespace only; lease, journal and budget remain one job."""
     def __init__(self, parent, fingerprint):
         super().__init__(parent.store, parent.job, budgets=parent.budgets)
+        self.allowed_call_kinds = parent.allowed_call_kinds
         self.parent = parent
         self.prefix = 'ir:' + fingerprint[:20] + ':'
+        self._research_budget_phase = 'analyze'
 
     def _stage(self, stage):
         return stage if stage == 'dsh_hold' else self.prefix + hashlib.sha256(stage.encode()).hexdigest()[:32]
@@ -49,6 +56,11 @@ class ObjectInsight(PublicMonitor):
     def __init__(self, pipeline, execution, collectors, work, origin_job_id):
         self.work, self.origin_job_id = work, origin_job_id
         PublicBootstrap.__init__(self, pipeline, execution, collectors, None)
+        policy = execution.read_checkpoint('object_complete_review_v1')
+        if policy is None and not execution.read_checkpoint('object_insight_attempts'):
+            policy = {'feedback': 'all_batches', 'drafts': dsh_judgment_review.MAX_DRAFTS}
+            execution.checkpoint('object_complete_review_v1', policy)
+        self.complete_review_feedback = bool(policy)
         self.analysis_only = True
         self.recovery_admission = False
         self.session_id = 'insight-' + work['fingerprint'][:24]
@@ -59,12 +71,26 @@ class ObjectInsight(PublicMonitor):
             'relationships为版本化范围/裁定元数据，不能代替numbered事实引文。'
             '只用numbered编号作为事实引用；不适用于该对象的判断字段写unclear或保留缺口。'
             '先pw_context，再pw_judge提交analysis_json。使用既有独立语义复核；不调用revise。'
-            '最多4次生成请求；宿主可能因预算保存待处理。通过后pw_finish结束分析。\n'
+            '逐项完成固定输入的判断与复核。通过后pw_finish结束分析。\n'
             + pipeline.insight_generator.SYSTEM)
+        if self.complete_review_feedback:
+            self.prompt += ('\n事实支持仅使用numbered中context或title的逐字材料，text是整理摘要，'
+                '不能作为独立事实证据。不得补入材料没有说明的机构、监管地区或比较结论。'
+                '第一次复核会返回完整问题清单。修订时逐项处理所有issues，检查相关标题与摘要；'
+                '无法由固定证据支持的断言删除或明确未知，不以更换引用冒充解决。'
+                '每份草稿均独立复核全部字段与跨章节一致性。')
+        self.prompt += '读取上下文后提交判断，避免重复查询相同上下文或状态。'
         previous = insight_versions.current(self.store, self.project_id, work['object']['id'])
         self.task = json.dumps(dict(target_object=work['object'], fingerprint=work['fingerprint'],
             previous_judgment={'version': previous['id'], 'analysis': previous['analysis'],
                                'use': 'comparison_only_not_evidence'} if previous else None), ensure_ascii=False)
+        repair = execution.read_checkpoint('object_insight_repair_v1')
+        if repair:
+            if repair['fingerprint'] != work['fingerprint']:
+                raise ValueError('repair input changed')
+            self.task = json.dumps({**json.loads(self.task), 'received_rejection_repair': repair,
+                'instruction': '这是明确收到内容拒绝后的新修订工作。按全部issues修订草稿；旧草稿不是事实来源。'
+                    '先读取固定context，引用仍只用本次编号，修改后的整份草稿重新独立复核。'}, ensure_ascii=False)
         saved_task = execution.read_checkpoint('object_insight_task')
         if saved_task is None:
             execution.checkpoint_chunked('object_insight_task', self.task)
@@ -120,17 +146,54 @@ class ObjectInsight(PublicMonitor):
         _payload, batches, binding, key = dsh_judgment_review.admission_plan(self, analysis, ctx)
         self.execution.checkpoint_chunked('object_insight_draft', {'analysis': analysis, 'fingerprint': ctx['fingerprint']})
         pending = sum(self.execution.read_checkpoint(key + ':' + str(i)) is None for i in range(len(batches)))
-        remaining = max(0, self.execution.budgets['model'] - self.execution.budget_used('model'))
-        authorized = self.execution.read_checkpoint('object_review_admission')
-        if authorized != binding and self.execution.read_checkpoint(key) is None and pending > remaining:
-            self.defer('semantic_review_budget')
-            return None
+        from project_watch.studio.research_work_budget import reserve_review
+
+        reserve_review(self.execution, calls=pending, binding=binding,
+                       output_tokens=dsh_judgment_review.OUTPUT_TOKENS)
         self.execution.checkpoint('object_review_admission', binding)
-        return dsh_judgment_review.verify(self, analysis, ctx)
+        self.execution._review_work_binding = binding
+        try:
+            return dsh_judgment_review.verify(self, analysis, ctx)
+        finally:
+            from project_watch.studio.research_work_budget import release
+
+            release(self.execution, binding)
+            del self.execution._review_work_binding
 
     def save_judgment(self, analysis, ctx, review):
         record = insight_versions.save(self, analysis, ctx, review)
         self.state['insight_version_id'] = record['id']
+
+    def resume_draft(self, draft):
+        ctx = self.frozen()
+        if draft['fingerprint'] != ctx['fingerprint'] or not draft['analysis'].get('cited'):
+            raise ValueError('fixed cited draft required')
+        # Stored drafts have already resolved N1-style references. Feeding them
+        # through raw tool-input normalization again would erase those refs.
+        # Keep the exact draft and run the same independent review/publication
+        # fences, including any previously saved review-batch receipts.
+        analysis = draft['analysis']
+        try:
+            review = self.review_candidate(analysis, ctx)
+        except ToolValidationError as exc:
+            if str(exc) != 'judgment_evidence_review':
+                raise
+            # A received content rejection is a durable, incomplete analysis,
+            # not a transport failure and not permission to regenerate it.
+            # Keep the rejected draft/review; independent stored-only report
+            # projections may finish without publishing this judgment.
+            self.check_inputs()
+            self.execution.checkpoint_chunked('object_insight_rejection',
+                dict(fingerprint=ctx['fingerprint'], issues=exc.issues,
+                     review_version=dsh_judgment_review.VERSION, automatic_retry=False))
+            self.defer('judgment_evidence_review')
+            return
+        if review is None:
+            return
+        self.save_judgment(analysis, ctx, review)
+        self.state.update(judged=ctx['fingerprint'], judged_numbered=digest(ctx['numbered']),
+                          judgment_gaps=analysis['gaps'], judgment_review_version=dsh_judgment_review.VERSION)
+        self.tool('pw_finish', {'reason': '已保存草稿通过固定版本独立复核。'})
 
     def pw_judge(self, args):
         result = super().pw_judge(args)
@@ -141,7 +204,7 @@ class ObjectInsight(PublicMonitor):
 
     def pw_status(self, args):
         return dict(object_id=self.work['object']['id'], fingerprint=self.work['fingerprint'],
-                    judged=bool(self.state.get('judged')), remaining=max(0, self.execution.budgets['model'] - self.execution.budget_used('model')))
+                    judged=bool(self.state.get('judged')), remaining=None)
 
     def pw_finish(self, args):
         self.frozen()
@@ -167,12 +230,30 @@ class InsightGateway(dsh_runtime.Gateway):
             body = {k: payload[k] for k in ('model', 'messages', 'tools', 'tool_choice') if k in payload}
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 8192))
             attempts = role.execution.read_checkpoint('object_insight_attempts') or []
+            policy = role.execution.read_checkpoint('object_insight_policy_v1')
+            if policy is None and not attempts:
+                from project_watch.studio.llm import structured_options
+                from project_watch.studio.research_budget import model_limits
+
+                limits = model_limits(role.execution)
+                maximum = limits['output_tokens'] if limits else 8192
+                output = dict(max_tokens=min(self.model.max_output_tokens, maximum, max(8192, maximum // 2)))
+                options = structured_options(self.model)
+                if 'reasoning_effort' in options:
+                    output['reasoning_effort'] = options['reasoning_effort']
+                if 'thinking' in options:
+                    output['thinking'] = {'type': 'enabled' if options['thinking'] else 'disabled'}
+                # Keep context + draft possible in a small round; the independent
+                # review admission still refuses an unaffordable publication.
+                policy = dict(output=output, turns=None)
+                role.execution.checkpoint('object_insight_policy_v1', policy)
+            # Old attempts retain their exact provider body and turn limit.
+            # A new policy never converts an unresolved request into a new call.
+            if policy:
+                body.update(policy['output'])
             replay = self.received(body)
             if role.state.get('judged') and not role.state['finished']:
                 role.tool('pw_finish', {'reason': '固定输入分析已通过独立复核。'})
-            if not role.state['finished'] and not replay and (len(attempts) >= 4
-                    or role.execution.budget_used('model') >= role.execution.budgets['model']):
-                role.defer('generation_budget_or_turn_limit')
             if role.state['finished']:
                 return {'choices': [{'message': {'role': 'assistant', 'content': '分析阶段已保存。'}, 'finish_reason': 'stop'}]}
             self.advertised_tools.update(TOOLS)
@@ -189,8 +270,7 @@ def run(pipeline, execution, runtime_root):
     from project_watch.studio.public_stage_work import prepare
 
     prepare(pipeline, execution, {**manifest, 'work': None})
-    cap = execution.budgets.get('model')
-    execution.budgets.update(model=manifest['cap'] if cap is None else min(cap, manifest['cap']), search=0, page=0, open_data=0, site=0)
+    execution.allowed_call_kinds = frozenset({'model'})
     with closing(pipeline.store._connect()) as db:
         execution._guard(db)
         project_guard(db, execution.job['project_id'], execution.job['id'])
@@ -209,6 +289,12 @@ def run(pipeline, execution, runtime_root):
     outcomes = []
     for work in manifest['objects']:
         scoped = RoleExecution(execution, work['fingerprint'])
+        from project_watch.studio.research_work_budget import plan_work
+
+        # Context, draft and tool correction are finite generation work. The
+        # independent review is forecast separately from its actual field plan.
+        plan_work(scoped, phase='analyze', counts={'model': 8},
+                  basis={'object_fingerprint': work['fingerprint'], 'role': 'object_judgment'})
         settings, http, _, collectors = pipeline.tools(execution=scoped)
         role = ObjectInsight(pipeline, scoped, collectors, work, manifest['origin_job_id'])
         role.guard()
@@ -225,7 +311,7 @@ def run(pipeline, execution, runtime_root):
                 draft = scoped.read_checkpoint('object_insight_draft')
                 if draft and not role.state['finished']:
                     role.pw_context({})
-                    role.tool('pw_judge', {'analysis_json': json.dumps(draft['analysis'], ensure_ascii=False)})
+                    role.resume_draft(draft)
                 if role.state.get('judged'):
                     role.tool('pw_finish', {'reason': '已保存并复核固定版本判断。'})
                 elif not role.state['finished']:

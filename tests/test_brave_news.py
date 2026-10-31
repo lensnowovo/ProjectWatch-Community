@@ -70,12 +70,12 @@ def test_brave_adapter_has_atomic_monthly_budget_and_candidate_only_result(tmp_p
     assert len(first.items) == 1
     assert first.items[0].url == "https://example.org/news"
     assert calls == [(target, "synthetic-key")]
-    assert adapter.fetch(target).unavailable_error == "quota_exhausted"
-    assert len(calls) == 1
-    assert repo.brave_news_usage() == 1
+    assert len(adapter.fetch(target).items) == 1
+    assert len(calls) == 2
+    assert repo.brave_news_usage() == 2
 
 
-def test_brave_adapter_fails_closed_without_key_or_budget(tmp_path: Path) -> None:
+def test_brave_adapter_requires_key_but_no_monthly_quota(tmp_path: Path) -> None:
     repo = ProjectRepository(tmp_path / "watch.sqlite3")
     target = brave_news_target("Synthetic Company")
     calls = []
@@ -90,11 +90,11 @@ def test_brave_adapter_fails_closed_without_key_or_budget(tmp_path: Path) -> Non
         "synthetic-key",
         monthly_limit=0,
         reserve=repo.reserve_brave_news_request,
-        transport=lambda *_: calls.append(1),
+        transport=lambda *_: (calls.append(1) or (200, b'{"results":[]}')),
     )
-    assert adapter.fetch(target).unavailable_error == "quota_exhausted"
-    assert calls == []
-    assert repo.brave_news_usage() == 0
+    assert adapter.fetch(target).unavailable_error is None
+    assert calls == [1]
+    assert repo.brave_news_usage() == 1
 
 
 def test_brave_proxy_must_be_explicit_loopback(tmp_path: Path) -> None:
@@ -177,7 +177,7 @@ def test_paid_provider_requires_server_configuration_and_explicit_project_consen
     assert configured.post(path, json={"provider": "brave"}).json() == started.json()
 
 
-def test_brave_full_local_run_keeps_results_unverified_and_stops_at_budget(
+def test_brave_full_local_run_keeps_results_unverified_without_monthly_quota(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "watch.sqlite3"
@@ -220,15 +220,16 @@ def test_brave_full_local_run_keeps_results_unverified_and_stops_at_budget(
     signals = client.get(f"{base}/signals").json()
     assert len(signals) == 1 and signals[0]["status"] == "candidate"
     assert client.get(f"/api/projects/{project['id']}/summary").json()["confirmed_count"] == 0
-    assert client.get(f"{base}/public-search?provider=brave").json()["eligible"] is False
+    assert client.get(f"{base}/public-search?provider=brave").json()["eligible"] is True
     assert repo.brave_news_usage() == 1
 
     client.post(f"{base}/plans/{plan_id}/runs", json={"idempotency_key": "second"})
     assert app.state.monitoring_scheduler.process_one().status == "done"
     receipts = client.get(f"{base}/plans/{plan_id}/runs").json()
-    assert receipts[-1]["status"] == "rate_limited"
-    assert receipts[-1]["error_code"] == "quota_exhausted"
-    assert len(calls) == 1
+    assert receipts[-1]["status"] == "completed"
+    assert not receipts[-1]["error_code"]
+    assert len(calls) == 2
+    assert repo.brave_news_usage() == 2
 
 
 def test_brave_two_cycles_only_add_new_candidates(tmp_path: Path) -> None:

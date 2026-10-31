@@ -223,7 +223,7 @@ def test_status_is_read_only_and_distinguishes_missing_consent_pause_budget(tmp_
     assert worker.status(project.id)['reason'] == 'paused'
     store.set_status(grant['id'], 'active', actor='synthetic')
     worker.process_one()
-    assert worker.status(project.id)['reason'] == 'budget_reached'
+    assert worker.status(project.id)['reason'] == 'ready'
     settings.model = None
     assert worker.status(project.id)['reason'] == 'model_missing'
     assert len(store.read(project.id)['items']) == 1
@@ -265,13 +265,12 @@ def test_two_claimed_jobs_share_durable_request_budget(tmp_path):
     second = store.claim(store.enqueue(grant['id'], add_story(s))['id'])
     body = json.dumps({'model': 'fake', 'max_tokens': OUTPUT_TOKENS, 'stream': True, 'messages': []}).encode()
     store.reserve(first['id'], first['lease_token'], model.authorization_id(), body)
-    with pytest.raises(ReadingDenied):
-        store.reserve(second['id'], second['lease_token'], model.authorization_id(), body)
-    assert store.status(grant['id'])['requests_used'] == 1
-    assert store.get(second['id'])['state'] == 'running'
+    store.reserve(second['id'], second['lease_token'], model.authorization_id(), body)
+    assert store.status(grant['id'])['requests_used'] == 2
+    assert store.get(second['id'])['state'] == 'dispatched'
 
 
-def test_cumulative_cost_budget_blocks_second_dispatch(tmp_path):
+def test_cumulative_cost_keeps_second_dispatch_in_same_account(tmp_path):
     s = sample(tmp_path)
     _, project, _, packet, model, _, store, _, plans, selections = s
     scope = store.preview_scope(project.id, plan_ids=plans, selections=selections, include_future_news=True)
@@ -284,9 +283,8 @@ def test_cumulative_cost_budget_blocks_second_dispatch(tmp_path):
     first = store.claim(store.enqueue(grant['id'], packet)['id'])
     store.reserve(first['id'], first['lease_token'], model.authorization_id(), body)
     second = store.claim(store.enqueue(grant['id'], add_story(s))['id'])
-    with pytest.raises(ReadingDenied):
-        store.reserve(second['id'], second['lease_token'], model.authorization_id(), body)
-    assert store.status(grant['id'])['requests_used'] == 1
+    store.reserve(second['id'], second['lease_token'], model.authorization_id(), body)
+    assert store.status(grant['id'])['requests_used'] == 2
 
 
 def test_unsent_retry_is_bounded_and_never_charged(tmp_path):

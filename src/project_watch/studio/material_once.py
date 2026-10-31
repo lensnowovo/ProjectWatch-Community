@@ -114,6 +114,7 @@ class OnceExecution(JobExecution):
         caps = {k: 0 for k in JobExecution(store, job).budgets}
         caps['model'] = min(frozen['original_caps']['model'], frozen['used_model'] + 2)
         super().__init__(store, job, budgets=caps)
+        self.allowed_call_kinds = frozenset({"model"})
         self.frozen, self.token, self.deadline = frozen, token, deadline
 
     def _guard(self, db):

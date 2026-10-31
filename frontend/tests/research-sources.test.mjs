@@ -58,3 +58,12 @@ test('partially loaded family discloses remaining documents instead of claiming 
   assert.match(html,/继续显示可查看其余文件/);
   assert.doesNotMatch(html,/同族其他文件 · 0/);
 });
+
+test('listed publication versions use an explicit label and retain every source',()=>{
+  const items=['a','b','c'].map(id=>({...row(id),family:{key:'versions:US123456A1',basis:'listed_versions',document_count:4,document_ids:['a','b','c','d']}}));
+  const html=renderToStaticMarkup(React.createElement(ResearchSourceList,{items}));
+  assert.equal((html.match(/data-source-id=/g)||[]).length,3);
+  assert.match(html,/其他公开版本 · 2 份/);
+  assert.match(html,/其他公开版本已显示 3 \/ 4 份/);
+  assert.doesNotMatch(html,/同族|已授权|<details[^>]*open/);
+});

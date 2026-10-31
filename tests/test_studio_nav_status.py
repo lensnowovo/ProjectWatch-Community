@@ -1,5 +1,7 @@
 """Sidebar signals ignore routine unread traffic; all fixtures stay synthetic."""
 
+from datetime import UTC, datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from project_watch.studio.app import create_studio_app
@@ -11,7 +13,9 @@ def test_routine_unread_and_old_read_major_do_not_alert(tmp_path):
     pid = client.post("/api/studio/projects", json={"entity": {"legal_name": "合成目标"}, "consent": True}).json()["id"]
     store = app.state.studio_store
     routine = store.create_event(pid, {"title": "普通行业资讯", "category": "industry", "importance": "routine"}, [])
-    major = store.create_event(pid, {"title": "合成重大变化", "category": "company", "importance": "major"}, [])
+    # Recent-news counts use event/publication time, never acquisition time.
+    major = store.create_event(pid, {"title": "合成重大变化", "category": "company", "importance": "major",
+                                    "event_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()}, [])
     assert routine
     assert store.nav_alerts(pid) == ["有新的重大事件"]
     store.set_event_status(major, "read")

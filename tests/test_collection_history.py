@@ -162,7 +162,10 @@ def test_real_host_next_round_uses_own_success_window_and_budget_failure_keeps_i
     collection_host.admit(execution, mode='first')  # Frozen legacy host-only fixture.
     dsh_runtime.run_bootstrap(pipeline, execution, None)
     first = history.read(pipeline.store, execution.job['project_id'])
-    assert len(first) == 3  # Two paper query modes and public filings, not missing/disabled sources.
+    assert len(first) == 5  # OpenAlex (2), Europe PMC affiliation/patent (2), filings (1).
+    first_plan = execution.read_checkpoint('collection_round_v1')['plan']
+    assert {u['source'] for u in first_plan['units'] if u.get('history_key') in first} == {
+        'openalex_affiliation', 'openalex_topic', 'europepmc_affiliation', 'europepmc_patent', 'cninfo'}
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
     pipeline.store.enqueue(execution.job['project_id'], 'external', automatic=True)
     second = JobExecution(pipeline.store, pipeline.store.claim())

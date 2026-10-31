@@ -18,7 +18,7 @@ class ExternalScopeInput(BaseModel):
     selections: list[Selection] = Field(default_factory=list, max_length=3)
     include_future_news: bool = Field(default=False, strict=True)
     read_articles: bool = Field(default=False, strict=True)
-    max_requests: int = Field(default=20, ge=1, le=1000, strict=True)
+    max_requests: int | None = Field(default=None, ge=1, strict=True)
     max_cost_cny: str | None = Field(default=None, max_length=40)
     input_cny_per_million: str | None = Field(default=None, max_length=40)
     output_cny_per_million: str | None = Field(default=None, max_length=40)
@@ -109,8 +109,6 @@ def attach_external_analysis(app, repository, settings, *, store, worker, team_m
         model = current_model()
         if body.consent is not True:
             raise HTTPException(422, '重试会新增一次模型请求，请先确认。')
-        if model.disclosure().get('remaining_runs', 0) <= 0:
-            raise HTTPException(409, '当前服务的调用额度已用完，请在模型设置中检查。')
         try:
             job = store.retry(project_id, job_id, model.authorization_id(), body.disclosure_digest)
             return {'id': job['id'], 'state': job['state']}

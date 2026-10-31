@@ -383,7 +383,9 @@ class PublicBootstrap:
             hold = self.execution.read_checkpoint("dsh_hold")
             if (hold or {}).get("code") == "request_outcome_unknown" and dsh_model_continuation(self.pipeline, self.execution):
                 return
-        hold = self.execution.read_checkpoint("dsh_hold")
+        from project_watch.studio.dsh_closeout import active_hold
+
+        hold = active_hold(self.execution.read_checkpoint("dsh_hold"))
         if hold:
             raise HttpError(hold["code"])
         if any(row["unknown"] for row in self.execution.usage().values()):
@@ -855,10 +857,11 @@ class PublicBootstrap:
             self.store.save_triage([{"id": item["id"], "summary": summary, "relevant": True,
                 "importance": assessment.get('level'), "importance_assessment": assessment}])
             body_status = {"full": "article_body", "partial": "partial_body", "summary": "search_summary"}[source["read_scope"]]
-            body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
             if source.get('material_body_evidence_id'):
                 body = ''.join(p['text'] for p in self.store.evidence.get(
                     self.project_id, source['material_body_evidence_id'], include_internal=False)['parts'])
+            else:
+                body = self.cached_body(source) if source.get("body_chunks") and source.get("read_attempted") else source["excerpt"]
             if not source.get('collection_matches') or source.get('source_type') == 'public_page':
                 self.store.save_body(item["id"], body_status, body)
             saved = self.store.item_by_key(self.project_id, key)

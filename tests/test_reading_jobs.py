@@ -47,9 +47,8 @@ def test_duplicate_scope_and_restart_do_not_reset_budget(tmp_path):
     assert reopened.claim(job["id"]) is None
     other = enqueue(reopened, grant, source, "d" * 64)
     token = reopened.claim(other["id"])["lease_token"]
-    with pytest.raises(ReadingDenied, match="budget"):
-        dispatch(reopened, other, token)
-    assert reopened.status(grant["id"])["requests_used"] == 1
+    dispatch(reopened, other, token)
+    assert reopened.status(grant["id"])["requests_used"] == 2
     assert repo.list_observations(project.id) == []  # Ledger never writes business facts.
 
 
@@ -153,12 +152,12 @@ def test_cost_reservation_and_invalid_body_do_not_egress(tmp_path):
     )
     job = enqueue(ledger, grant, source)
     token = ledger.claim(job["id"])["lease_token"]
-    with pytest.raises(ReadingDenied, match="budget"):
-        dispatch(ledger, job, token)
     callback = ledger.before_send(job["id"], token, config_id="b" * 64)
     with pytest.raises(ReadingDenied):
         callback(b"invalid json")
     assert ledger.status(grant["id"])["requests_used"] == 0
+    dispatch(ledger, job, token)
+    assert ledger.status(grant["id"])["requests_used"] == 1
 
 
 def test_revision_identity_and_no_implicit_grant(tmp_path):
@@ -224,9 +223,9 @@ def test_aggregate_estimated_cost_is_not_reset_between_jobs(tmp_path):
     first = enqueue(ledger, grant, source)
     dispatch(ledger, first, ledger.claim(first["id"])["lease_token"])
     other = enqueue(ledger, grant, source, "d" * 64)
-    with pytest.raises(ReadingDenied, match="budget"):
-        dispatch(ledger, other, ledger.claim(other["id"])["lease_token"])
-    assert ledger.status(grant["id"])["requests_used"] == 1
+    dispatch(ledger, other, ledger.claim(other["id"])["lease_token"])
+    assert ledger.status(grant["id"])["requests_used"] == 2
+    assert float(ledger.status(grant['id'])['reserved_cny']) > 0.0007
 
 
 def test_backup_restores_authorization_reservations_and_retains_existing_facts(tmp_path):

@@ -24,16 +24,27 @@ SCHEMA = (
 )
 
 
-def project_guard(db, project_id, current_job):
-    uncertain = db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-        f"WHERE j.project_id=? AND ({UNRESOLVED}) AND (c.status='unknown' OR c.job_id!=?) LIMIT 1",
-        (project_id, current_job)).fetchone()
-    if uncertain:
+def project_guard(db, project_id, current_job, *, content_handoff=None):
+    from project_watch.studio.dsh_closeout import active_hold
+    from project_watch.studio.public_research_admission import held_jobs
+
+    independent = held_jobs(db, project_id, current_job)
+    uncertain = db.execute("SELECT c.job_id FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
+        f"WHERE j.project_id=? AND ({UNRESOLVED}) AND (c.status='unknown' OR c.job_id!=?)",
+        (project_id, current_job))
+    if any(row[0] not in independent for row in uncertain):
         raise HttpError('request_outcome_unknown')
-    holds = db.execute("SELECT c.data FROM studio_job_checkpoints c JOIN studio_jobs j ON j.id=c.job_id "
+    if content_handoff is None:
+        row = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                         (current_job, 'update_content_review_handoff_v1')).fetchone()
+        content_handoff = json.loads(row[0]) if row else {}
+    holds = db.execute("SELECT c.job_id,c.data,j.status FROM studio_job_checkpoints c JOIN studio_jobs j ON j.id=c.job_id "
                        "WHERE j.project_id=? AND c.stage='dsh_hold'", (project_id,))
     for row in holds:
-        hold = json.loads(row[0])
+        hold = active_hold(json.loads(row['data']))
+        if (hold in ({'code': 'judgment_review_limit'}, {'code': 'judgment_review_invalid'}) and row['status'] == 'failed'
+                and content_handoff.get(row['job_id']) == hashlib.sha256(row['data'].encode()).hexdigest()):
+            continue  # Explicit settled-content handoff; old hold is immutable.
         if hold:
             raise HttpError(hold['code'])
 
@@ -113,6 +124,7 @@ class MaterialExecution(JobExecution):
     """Same job, lease and budgets, plus durable material-to-call provenance."""
     def __init__(self, parent, task):
         super().__init__(parent.store, parent.job, budgets=parent.budgets)
+        self.allowed_call_kinds = parent.allowed_call_kinds
         self.parent, self.task = parent, task
 
     def _guard(self, db):

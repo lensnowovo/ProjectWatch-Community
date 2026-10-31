@@ -98,7 +98,7 @@ def test_two_independent_requests_recover_sequentially_without_unlocking_other(c
     assert p.store.claim() is None
 
 
-@pytest.mark.parametrize('change',['payload','provider','kind','budget','lease','binding','no_consent','stale_version','missing_inputs'])
+@pytest.mark.parametrize('change',['payload','provider','kind','lease','binding','no_consent','stale_version','missing_inputs'])
 def test_exact_dispatch_and_approval_fences(case,change):
     web,p,pid,jobs=case
     job=jobs[0]
@@ -124,7 +124,7 @@ def test_exact_dispatch_and_approval_fences(case,change):
             with pytest.raises(ValueError,match='监控依据已变化'):
                 p.run(claimed)
         else:
-            execution=JobExecution(p.store,claimed,budgets={'model':2} if change=='budget' else None)
+            execution=JobExecution(p.store,claimed)
             if change=='lease':
                 with p.store._connect() as db:
                     db.execute("UPDATE studio_jobs SET lease_token='different' WHERE id=?",(job['id'],))
@@ -132,6 +132,26 @@ def test_exact_dispatch_and_approval_fences(case,change):
                 execution.call('search' if change=='kind' else 'model','different' if change=='payload' else 'pending',
                     lambda:pytest.fail('fenced dispatch'),provider='different' if change=='provider' else 'synthetic')
     assert pending(p,pid)==before
+
+
+def test_authorized_recovery_ignores_historical_call_quota(case):
+    web,p,pid,jobs=case
+    job=jobs[0]
+    before=pending(p,pid)
+    _,accepted,_=authorize(web,endpoint(pid,job))
+    assert accepted.status_code==202
+    claimed=p.store.claim()
+    execution=JobExecution(p.store,claimed,budgets={'model':0})
+    sent=[]
+    response=execution.call('model','pending',
+        lambda:(sent.append(1),Response(200,{},b'{}'))[1],provider='synthetic')
+    assert response.status==200 and sent==[1]
+    assert execution.call('model','pending',lambda:pytest.fail('duplicate dispatch'),provider='synthetic').status==200
+    with p.store._connect() as db:
+        original=db.execute('SELECT status FROM studio_job_calls WHERE job_id=? AND call_key=?',
+                            (job['id'],hashed('model:pending'))).fetchone()
+        assert original[0]=='unknown'
+    assert len(pending(p,pid))==len(before)-1
 
 
 def test_new_failure_cannot_reuse_consent_and_new_payload_cannot_bypass(case):

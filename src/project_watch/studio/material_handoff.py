@@ -36,9 +36,29 @@ def _limit(execution, caps):
 
 def restore_limits(execution, db):
     """Also used inside final journal admission, after cache lookup, before started."""
-    saved = execution.read_checkpoint(STAGE, db=db)
-    caps = saved['caps'] if saved else execution.read_checkpoint(CAPS, db=db)
+    # Role executors namespace their analysis checkpoints, but admission limits
+    # belong to the leased job and must not disappear behind that namespace.
+    reader = JobExecution(execution.store, execution.job)
+    saved = reader.read_checkpoint(STAGE, db=db)
+    caps = saved['caps'] if saved else reader.read_checkpoint(CAPS, db=db)
     if caps is not None:
+        caps = dict(caps)
+        owner = reader.read_checkpoint('update_run_owner_v1', db=db) or {}
+        phase = getattr(execution, '_research_budget_phase', None)
+        update = reader.read_checkpoint('update_run_state_v1', db=db) or {}
+        if (owner.get('protocol') == 2 and phase in ('analyze', 'review')
+                and update.get('active_stage') == 'analysis'):
+            state = reader.read_checkpoint('event_insight_round_v1', db=db)
+            manifest = reader.read_checkpoint('snapshot_analysis_input_v1', db=db)
+            if not state or not manifest or manifest['origin_job_id'] != execution.job['id']:
+                raise ValueError('saved analysis frozen input missing')
+            caps['model'] = state['cap']
+        elif phase == 'analyze' and owner:
+            state = reader.read_checkpoint('event_insight_round_v1', db=db)
+            manifest = reader.read_checkpoint('event_insight_input_v1', db=db)
+            if not state or not manifest or manifest['cap'] != state['cap']:
+                raise ValueError('inline analysis frozen cap missing or changed')
+            caps['model'] = state['cap']
         _limit(execution, caps)
 
 
@@ -83,6 +103,10 @@ def adopt(research):
     scope = execution.read_checkpoint('collection_scope_v1')
     owner = execution.read_checkpoint('material_pipeline_v1') or {}
     request = execution.read_checkpoint('collection_request_v1') or {}
+    if (execution.read_checkpoint('update_run_owner_v1') or {}).get('protocol') == 2:
+        # New analysis reads immutable saved materials directly. It never takes
+        # over another job's extractor or reopens its historical request keys.
+        return None
     if not scope or owner.get('owner') != 'materials' or owner.get('entry') not in ('bootstrap', 'monitor') or request.get('mode') == 'topic':
         return None
     from project_watch.studio.collection_host import guard_scope
@@ -177,7 +201,7 @@ def adopt(research):
             tasks = [dict(t) for t in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
                 "AND policy=? AND status='pending' ORDER BY rowid", (job['id'], pid, evidence_tasks.TYPED_POLICY))]
             reader = SimpleNamespace(job={'id': job['id']}, read_checkpoint=read)
-            old_refs = [ref for group in collection_dsh._refs(SimpleNamespace(execution=reader, project_id=pid)).values() for ref in group]
+            old_refs = [ref for group in collection_dsh._refs(SimpleNamespace(execution=reader, project_id=pid, store=execution.store)).values() for ref in group]
             transferred = []
             for task in tasks:
                 refs = [r for r in old_refs if r['evidence_version_id'] == task['evidence_version_id']]

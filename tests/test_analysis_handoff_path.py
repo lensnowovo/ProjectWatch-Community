@@ -159,6 +159,9 @@ def test_pending_analysis_never_disappears_or_retries_on_unchanged_ticks(tmp_pat
 
 def test_prepublication_failure_keeps_intent_until_same_job_resumes(tmp_path, monkeypatch):
     pipeline, execution, seen = install(tmp_path, monkeypatch, monitor=False)
+    from project_watch.studio import progressive_bootstrap
+
+    progressive_bootstrap.freeze(execution, 'bootstrap', materials=True)
     publication = work.publication
     def interrupted(*_args):
         raise RuntimeError('synthetic pre-publication interruption')
@@ -183,8 +186,13 @@ def test_prepublication_failure_keeps_intent_until_same_job_resumes(tmp_path, mo
 
 
 @pytest.mark.parametrize('window', ['after_intent', 'partial_events', 'after_complete'])
-def test_publication_crash_windows_resume_full_membership_once(tmp_path, monkeypatch, window):
+@pytest.mark.parametrize('inline', [False, True])
+def test_publication_crash_windows_resume_full_membership_once(tmp_path, monkeypatch, window, inline):
     pipeline, execution, seen = install(tmp_path, monkeypatch, monitor=False, source_count=2)
+    from project_watch.studio import progressive_bootstrap
+
+    if not inline:
+        progressive_bootstrap.freeze(execution, 'bootstrap', materials=True)
     pid = execution.job['project_id']
     transport = pipeline.http_factory(None).transport
     extracted = []
@@ -221,8 +229,10 @@ def test_publication_crash_windows_resume_full_membership_once(tmp_path, monkeyp
     assert count == {'after_intent': 0, 'partial_events': 1, 'after_complete': 2}[window]
     queued = work.dispatch_pending(pipeline, pid)
     state = execution.read_checkpoint(work.ROUND)
-    if window == 'after_complete':
+    if window == 'after_complete' and not inline:
         assert queued and len(state['event_versions']) == 2
+    elif window == 'after_complete':
+        assert queued is None and len(state['event_versions']) == 2
     else:
         assert queued is None and state['phase'] == 'collecting' and 'event_versions' not in state
     monkeypatch.setattr(target, name, original)
@@ -238,22 +248,39 @@ def test_publication_crash_windows_resume_full_membership_once(tmp_path, monkeyp
     pipeline.run(resumed.job)
     state = resumed.read_checkpoint(work.ROUND)
     assert state['publication_complete'] and len(state['event_versions']) == 2
-    assert unrelated not in state['event_versions'] and state['phase'] == 'scheduled'
-    assert len(seen['models']) == before and state['cap'] == 40
-    child = next_insight(pipeline, resumed)
-    manifest = child.read_checkpoint(work.INPUT)
-    assert set(manifest['objects'][0]['event_versions']) == set(state['event_versions'])
-    for ref in manifest['objects'][0]['numbered'].values():
-        located = ref['located_ref']
-        evidence = pipeline.evidence.get(pid, located['evidence_version_id'], include_internal=False)
-        assert evidence['parts'][located['part_index']]['text'][located['start']:located['end']] == located['quote']
-    pipeline.run(child.job)
-    assert child.read_checkpoint(work.RESULT)['status'] == 'complete'
-    assert child.budget_used('model') <= state['cap']
+    assert unrelated not in state['event_versions'] and state['phase'] == ('settled' if inline else 'scheduled')
+    assert state['cap'] == (None if inline else 40)
+    assert len(extracted) == 2  # Restoring publication never repeats extraction.
+    if inline:
+        # New owners analyzed the saved sources before this publication crash.
+        # Restoring events must not regenerate or re-review those sections.
+        from project_watch.studio import material_snapshot, snapshot_work, update_run
+        assert len(seen['models']) == before
+        assert resumed.read_checkpoint(update_run.OWNER)['protocol'] == 2
+        published = resumed.read_checkpoint(snapshot_work.PUBLICATION)
+        assert published['status'] == 'completed' and len(published['published']) == 5
+        snapshot = material_snapshot.read(pipeline.store, pid, published['snapshot_id'])
+        assert snapshot['materials']
+        assert list(resumed.read_checkpoint(update_run.STATE)['phases']) == ['sources', 'analysis', 'events', 'reports']
+        assert not resumed.read_checkpoint(work.INPUT)
+        assert not resumed.read_checkpoint(work.RESULT)
+    else:
+        assert len(seen['models']) == before
+    child = resumed if inline else next_insight(pipeline, resumed)
+    if not inline:
+        manifest = child.read_checkpoint(work.INPUT)
+        assert set(manifest['objects'][0]['event_versions']) == set(state['event_versions'])
+        for ref in manifest['objects'][0]['numbered'].values():
+            located = ref['located_ref']
+            evidence = pipeline.evidence.get(pid, located['evidence_version_id'], include_internal=False)
+            assert evidence['parts'][located['part_index']]['text'][located['start']:located['end']] == located['quote']
+        pipeline.run(child.job)
+        assert child.read_checkpoint(work.RESULT)['status'] == 'complete'
+        assert child.budget_used('model') <= state['cap']
     finish(pipeline, child)
     assert work.dispatch_pending(pipeline, pid) is None
     with closing(pipeline.store._connect()) as db:
-        assert db.execute("SELECT count(*) FROM studio_jobs WHERE kind='insight'").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM studio_jobs WHERE kind='insight'").fetchone()[0] == (0 if inline else 1)
 
 
 def test_followup_preserves_lower_explicit_limits_and_original_root_cap(tmp_path, monkeypatch):

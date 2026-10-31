@@ -135,7 +135,8 @@ def gateway(tmp_path, monkeypatch):
     pipeline, execution = fixtures.setup.__wrapped__(tmp_path)
     role = SimpleNamespace(lock=threading.RLock(), store=pipeline.store, execution=execution,
         guard=lambda: None, guard_input=lambda: None, state={'finished': None},
-        attempt_stage=collection.Collection.attempt_stage, reserve=lambda: 0)
+        attempt_stage=collection.Collection.attempt_stage, reserve=lambda: 0,
+        limits=dict(turns=collection.MAX_TURNS, actions=collection.MAX_ACTIONS, pages=collection.MAX_PAGES))
     role.defer = lambda op, reason: execution.checkpoint('test_deferred', {'reason': reason})
     role.finish = lambda reason: role.state.update(finished={'reason': reason})
     g = collection.CollectionGateway(role, pipeline.settings_store.load().model, None)
@@ -216,7 +217,8 @@ def test_native_same_job_resumes_history_and_reads_saved_index(tmp_path, monkeyp
         project_id=execution.job['project_id'], session_id='collect-' + execution.job['id'],
         task=json.dumps({'sources': []}), prompt=collection.PROMPT, tools=collection.TOOLS,
         guard=lambda: None, guard_input=lambda: None, hold=lambda code: None,
-        state={'finished': None}, attempt_stage=collection.Collection.attempt_stage, reserve=lambda: 0)
+        state={'finished': None}, attempt_stage=collection.Collection.attempt_stage, reserve=lambda: 0,
+        limits=dict(turns=collection.MAX_TURNS, actions=collection.MAX_ACTIONS, pages=collection.MAX_PAGES))
     results = json.loads(body()['messages'][-1]['content'])
     seen, snapshots = [], []
     def tool(name, args):

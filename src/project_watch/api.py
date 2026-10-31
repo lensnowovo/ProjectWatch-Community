@@ -913,8 +913,7 @@ def create_app(
     from project_watch.monitor_activation_api import attach_monitor_activation
     attach_source_fallback(app, repository, source_router)
     attach_monitor_activation(app, repository, team_mode=team_auth is not None,
-                              brave_available=lambda: bool(brave_api_key) and
-                              brave_monthly_limit > repository.brave_news_usage())
+                              brave_available=lambda: bool(brave_api_key))
     if team_auth is not None:
         app.state.login_limiter = LoginAttemptLimiter()
     static_root = Path(__file__).parent / "static"
@@ -2091,7 +2090,7 @@ def create_app(
         require_project(request, project_id, 'read')
         query = public_query(category, term, provider)
         query['eligible'] = provider in {'gdelt', 'bing'} or (
-            bool(brave_api_key) and brave_monthly_limit > repository.brave_news_usage())
+            bool(brave_api_key))
         return query
 
     @app.post('/api/projects/{project_id}/monitoring/focus', status_code=202,
@@ -2104,8 +2103,7 @@ def create_app(
         require_project(request, project_id, 'manage')
         if body.consent_version != CONSENT_VERSION:
             raise HTTPException(status_code=409, detail='请重新查看公开查询范围后确认。')
-        if body.provider == 'brave' and (not brave_api_key or
-                brave_monthly_limit <= repository.brave_news_usage()):
+        if body.provider == 'brave' and (not brave_api_key):
             raise HTTPException(status_code=409, detail='请先配置 Brave News 密钥及可用额度。')
         plan = ExternalFocusStore(repository).create(
             project_id, category=body.category, term=body.term, provider=body.provider)
@@ -2142,7 +2140,7 @@ def create_app(
             eligible=target is not None
             and (
                 provider == "gdelt"
-                or (bool(brave_api_key) and brave_monthly_limit > repository.brave_news_usage())
+                or (bool(brave_api_key))
             ),
             monthly_limit=brave_monthly_limit if provider == "brave" else None,
             monthly_used=repository.brave_news_usage() if provider == "brave" else None,
@@ -2161,7 +2159,7 @@ def create_app(
         if project is None:
             raise HTTPException(status_code=404, detail="project not found")
         if body.provider == "brave":
-            if not brave_api_key or brave_monthly_limit <= repository.brave_news_usage():
+            if not brave_api_key:
                 raise HTTPException(
                     status_code=409, detail="Brave News key or monthly budget unavailable"
                 )

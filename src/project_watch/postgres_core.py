@@ -2071,15 +2071,13 @@ class PostgresCoreRepository:
         """An atomic global monthly ceiling, including unsuccessful outbound calls."""
         if isinstance(monthly_limit, bool) or not 0 <= monthly_limit <= 100_000:
             raise ValueError("invalid Brave monthly limit")
-        if monthly_limit == 0:
-            return False
         month = datetime.now(UTC).strftime("%Y-%m")
         with self._pool.connection() as connection:
             row = connection.execute(
                 """INSERT INTO brave_news_budget (month_utc, used) VALUES (%s, 1)
                    ON CONFLICT (month_utc) DO UPDATE SET used = brave_news_budget.used + 1
-                   WHERE brave_news_budget.used < %s RETURNING used""",
-                (month, monthly_limit),
+                   RETURNING used""",
+                (month,),
             ).fetchone()
             return row is not None
 

@@ -105,11 +105,20 @@ def test_native_truncation_stops_batch_and_keeps_original_material(setup, tmp_pa
 
 
 @pytest.mark.parametrize('first', [True, False])
-def test_pipeline_partial_and_replay_no_calls(setup, monkeypatch, first):
+@pytest.mark.parametrize('isolated', [True, False])
+def test_pipeline_partial_and_replay_no_calls(setup, monkeypatch, first, isolated):
     from test_progressive_bootstrap import install_provider, run
 
     install_provider(setup, monkeypatch, all_valid=True, bounded=True)
     pipeline, execution = setup
+    if not isolated:
+        material_run = progressive_bootstrap.run
+        def legacy_run(research, *args, **kwargs):
+            # Freeze only after normal collection/material ownership admission.
+            if research.execution.read_checkpoint('material_local_limits_v1') is None:
+                research.execution.checkpoint('material_local_limits_v1', {})
+            return material_run(research, *args, **kwargs)
+        monkeypatch.setattr(progressive_bootstrap, 'run', legacy_run)
     original_factory = pipeline.http_factory
     calls = []
     def factory(settings):
@@ -136,7 +145,15 @@ def test_pipeline_partial_and_replay_no_calls(setup, monkeypatch, first):
             raise
     monkeypatch.setattr(dsh_extraction.dsh_runtime, 'run_dsh', turn)
     result = run(setup)
-    assert result['status'] == 'partial' and result['records'] == (0 if first else 1)
+    expected = 2 if isolated else (0 if first else 1)
+    assert result['status'] == 'partial' and result['records'] == expected
     assert execution.read_checkpoint(progressive_bootstrap.CLOSEOUT)['reason'] == 'material_output_limit'
-    assert len(pipeline.store.list_events(project_id=execution.job['project_id'])) == (0 if first else 1)
+    # Papers 1 and 3 propose the same competitor event; existing event dedup
+    # merges them, while the two independent material receipts both remain.
+    event_count = (2 if first else 1) if isolated else expected
+    assert len(pipeline.store.list_events(project_id=execution.job['project_id'])) == event_count
+    with closing(pipeline.store._connect()) as db:
+        tasks = [dict(t) for t in db.execute('SELECT status,result FROM studio_evidence_tasks ORDER BY rowid')]
+        assert sum(t['status'] == 'complete' for t in tasks) == expected
+        assert sum(json.loads(t['result']).get('code') == 'material_output_limit' for t in tasks) == 1
     assert run(setup) == result and len(calls) == 1

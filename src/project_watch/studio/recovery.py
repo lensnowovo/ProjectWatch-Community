@@ -117,20 +117,14 @@ def enqueue_external_refresh(store, project_id):
                             (project_id,)).fetchone()
         if active:
             return dict(active)
-        blockers = [row for row in project_request_holds(db, project_id)
-                    if row['job_kind'] not in INDEPENDENT_HOLD_KINDS]
-        if blockers:
-            raise RefreshBlocked(blockers)
-        return store.enqueue(project_id, 'external', db=db)
+        from project_watch.studio.independent_collection import STAGE, dependencies
 
-
-# Frozen-input extractors whose pending request is not an input to a new public
-# collection round: its unknown answer was never stored, so nothing downstream
-# reads it, and the new round sends only its own journal keys. Their holds stay
-# on their own jobs, keep blocking their own dispatch (guard_legacy_model_dispatch)
-# and still need their own explicit consent; nothing is retried or relabelled.
-# Holds in external/DSH or any other work still refuse the refresh.
-INDEPENDENT_HOLD_KINDS = frozenset(('business', 'details'))
+        independent = dependencies(db, project_id)
+        job = store.enqueue(project_id, 'external', db=db)
+        if independent:
+            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
+                       (job['id'], STAGE, json.dumps(dict(project_id=project_id, job_id=job['id'], holds=independent))))
+        return job
 
 
 def pending_reason(rows):

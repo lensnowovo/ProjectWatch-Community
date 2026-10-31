@@ -1,4 +1,5 @@
 """Host-owned collection admission before the DSH research turn."""
+import re
 from datetime import date
 
 from project_watch.studio import collection_continuation, collection_history
@@ -35,11 +36,8 @@ def admit(execution, *, mode):
 
 
 def limit_budgets(execution, mode):
-    limits = ({'search': 32, 'model': 40, 'page': 24, 'open_data': 48} if mode == 'first'
-              else {'search': 16, 'model': 16, 'page': 12, 'open_data': 24})
-    for kind, maximum in limits.items():
-        old = execution.budgets.get(kind)
-        execution.budgets[kind] = maximum if old is None else min(old, maximum)
+    """Compatibility entry: collection scope no longer allocates request quotas."""
+    return None
 
 
 NAME_QUERIES = 3
@@ -50,6 +48,26 @@ def latin_first(names):
     def cjk(name):
         return any('㐀' <= ch <= '鿿' or '豈' <= ch <= '﫿' for ch in name)
     return sorted(names, key=cjk)
+
+
+def index_names(names):
+    """Search variants only: retain the confirmed original and transformation.
+
+    Strip a terminal full-width CJK annotation only after an unambiguous Latin
+    legal suffix. Never change an identity/alias or strip meaningful legal-name
+    parentheses such as Acme (UK) Limited.
+    """
+    variants = []
+    for original in names:
+        match = re.fullmatch(r'([\x20-\x7e]+(?:Inc\.?|Ltd\.?|Limited|Corporation|Corp\.?|LLC))\s*（([^（）]+)）',
+                             original.strip(), flags=re.I)
+        query = original
+        if match and re.search(r'[㐀-鿿]', match[2]):
+            query = match[1].strip()
+        variants.append(dict(query=query, confirmed_name=original,
+                             transform='terminal_annotation' if query != original else 'identity'))
+    ordered = latin_first([v['query'] for v in variants])
+    return sorted(variants, key=lambda v: ordered.index(v['query']))
 
 
 def subject_names(research):
@@ -157,7 +175,7 @@ def restore_for_continuation(research):
     return result
 
 
-def prepare(research):
+def prepare(research, *, admit_materials=True):
     execution = research.execution
     admission = execution.read_checkpoint(ADMISSION)
     if not admission or not admission['enabled']:
@@ -191,6 +209,7 @@ def prepare(research):
                                   and w['relation_type'] == relation for q in w['queries'] or []]
         names = None if topic is not None else subject_names(research)
         if names:
+            public_plan['name_order_policy'] = 'confirmed-names-v1'
             # Owner-confirmed public company names (the subject object and its
             # current public aliases), as the legacy collector already used them.
             # Without this, institution/applicant indexes only received the legal
@@ -198,8 +217,11 @@ def prepare(research):
             # OpenAlex/Europe PMC index English affiliations and applicants, so a
             # Chinese legal name there spends a request on a near-certain zero.
             # The web patent search keeps the owner's order (CN filings).
-            public_plan['affiliation_names'] = latin_first(names)[:NAME_QUERIES]
-            public_plan['patent_index_assignees'] = latin_first(names)[:NAME_QUERIES]
+            variants = index_names(names)
+            public_plan['index_name_evidence'] = variants
+            queries = list(dict.fromkeys(v['query'] for v in variants))[:NAME_QUERIES]
+            public_plan['affiliation_names'] = queries
+            public_plan['patent_index_assignees'] = queries
             public_plan['patent_assignees'] = names[:NAME_QUERIES]
         frozen = dict(project={k: research.project.get(k) for k in ('id', 'legal_name', 'name', 'website')},
                       watches=watches, public_plan=public_plan, source_queries=[] if topic else targets(research),
@@ -234,6 +256,17 @@ def prepare(research):
             **frozen.get('history_policy', dict(overlap_days=7, baseline_days=30)))
     research.pipeline.monitoring_plan.explorations.admit_collection(execution, plan)
     ledger = CollectionLedger(execution, plan)
+    from project_watch.studio.research_work_budget import plan_work
+
+    counts = dict(search=0, open_data=0, site=0)
+    for unit in plan['units']:
+        if unit['capability'] != 'available' or unit['disposition'] == 'not_due':
+            continue
+        kind = ('search' if unit['source'] in ('search', 'patent_search', 'cn_regulatory')
+                else 'site' if unit['source'] == 'site' else 'open_data')
+        counts[kind] += 1 if kind == 'search' else sources.max_pages
+    plan_work(execution, phase='collect', counts=counts,
+              basis={'collection_plan': digest(plan), 'pagination_limit': sources.max_pages})
 
     def guard():
         guard_scope(research)
@@ -244,7 +277,30 @@ def prepare(research):
     def collect(unit):
         return sites.collect(unit, guard) if unit['source'] == 'site' else sources.collect(unit)
 
-    result = run_collection(ledger, collect=collect, ingest=CollectionIngest(execution), guard=guard)
+    result = run_collection(ledger, collect=collect,
+                            ingest=CollectionIngest(execution, admit_materials=admit_materials), guard=guard)
+    if execution.read_checkpoint('acceptance_read_continued_v1'):
+        # A corrected search string is a new, evidenced query, never a rewrite
+        # of a completed zero-result query or its frozen original manifest.
+        from project_watch.studio.collection_ledger import SUPPLEMENT_PREFIX
+        from project_watch.studio.collection_plan import make_plan
+
+        mapping = {v['confirmed_name']: v['query'] for v in index_names(frozen.get('subject_names', []))
+                   if v['transform'] == 'terminal_annotation'}
+        for unit in plan['units']:
+            if (unit['source'] not in ('openalex_affiliation', 'europepmc_affiliation', 'europepmc_patent')
+                    or unit['query'] not in mapping or unit['capability'] != 'available'):
+                continue
+            extra = make_plan(round_id=plan['round_id'], project_id=plan['project_id'],
+                binding=plan['binding'], mode=plan['mode'], at=plan['created_at'], candidates=[{
+                    **unit, 'query': mapping[unit['query']], 'query_version': 'index-annotation-v1'}])
+            stage = SUPPLEMENT_PREFIX + extra['units'][0]['id'][:40]
+            entries = execution.read_checkpoint(SUPPLEMENTS) or []
+            if not any(entry['stage'] == stage for entry in entries):
+                execution.checkpoint_chunked(SUPPLEMENTS, [*entries, dict(stage=stage, plan=extra,
+                    name_evidence=dict(confirmed_name=unit['query'], query=mapping[unit['query']]))])
+            run_collection(CollectionLedger(execution, extra, stage=stage), collect=collect,
+                ingest=CollectionIngest(execution, admit_materials=admit_materials), guard=guard)
     execution.checkpoint('dsh_runtime_phase', {'phase': 'read'})
     research.task += ('\n宿主已执行本轮基础采集。先 pw_status 或 pw_context 查看 collection 与 collected_sources；'
                       '按 next_offset 分页，使用 pw_read 读取已保存证据，再决定是否补查。'

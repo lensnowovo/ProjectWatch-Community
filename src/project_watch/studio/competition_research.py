@@ -119,7 +119,7 @@ def research_inputs(service, project_id):
         context = query_contexts[0]
         queries.append(' '.join(filter(None, (' / '.join(context['uses'][:2]),
                                               ' / '.join(context['buyers'][:2]), '竞品'))))
-    queries = list(dict.fromkeys(queries))[:2]
+    queries = list(dict.fromkeys(queries))
     industry_hint, product_names = '', []
     project = service.store.get_project(project_id) if hasattr(service.store, 'get_project') else None
     plan = service.store.get_plan(project_id) if hasattr(service.store, 'get_plan') else None
@@ -155,10 +155,10 @@ def research_inputs(service, project_id):
         candidates = ([f'{short} 竞争对手'] if short else []) + ([f'{core} 厂商 竞争格局'] if core else [])
         candidates += [f'{name} 竞品' for name in product_names[:1]]
         if industry_hint or product_names:
-            queries = list(dict.fromkeys(candidates))[:3]
+            queries = list(dict.fromkeys(candidates))
     company_names, _ = current_located_names(service.objects.store, project_id, subject, name_refs,
                                             include_internal=False)
-    basis = {'subject_id': subject['id'], 'company': subject['name'], 'products': products[:6], 'fact_ids': sorted(fact_ids),
+    basis = {'subject_id': subject['id'], 'company': subject['name'], 'products': products, 'fact_ids': sorted(fact_ids),
              'overrides': [(r['scope_key'], r['decision'], r['version']) for r in overrides],
              'week': date.today().isocalendar()[:2], 'prompt_version': PROMPT_VERSION,
              'matching_version': MATCHING_VERSION, 'business_version': BUSINESS_VERSION,
@@ -190,7 +190,7 @@ def original_query_context(inputs, company, *, target):
         uses.extend(values)
         if len(queries) == 2:
             break
-    queries = list(dict.fromkeys(queries))[:2]
+    queries = list(dict.fromkeys(queries))
     if len(queries) == 1:
         # A spare slot may discover a public publisher/directory. This is a
         # search, never a guessed domain/path or a claim of official ownership.
@@ -314,7 +314,7 @@ def prioritize_original_leads(hits, context=None):
 
 
 def select_product_pairs(service, project_id, subject_id, peer_id, target_products, peer_products):
-    """Prefer eligible scoped pairs within the existing two-pair review budget.
+    """Prefer eligible scoped pairs without a review-count quota.
 
     Assess all bounded input pairs offline first; no provider calls are made by
     these gates. Not just the first target product. Saved runs remain bounded,
@@ -323,8 +323,8 @@ def select_product_pairs(service, project_id, subject_id, peer_id, target_produc
     candidates = []
     exclusions = [r for r in service.relationships.overrides(project_id, include_internal=False)
                   if r['decision'] == 'exclude' and r['peer_id'] == peer_id]
-    for left in list(dict.fromkeys(target_products))[:6]:
-        for right in list(dict.fromkeys(peer_products))[:6]:
+    for left in list(dict.fromkeys(target_products)):
+        for right in list(dict.fromkeys(peer_products)):
             scope = {'subject_id': subject_id, 'peer_id': peer_id,
                      'subject_product_id': left, 'peer_product_id': right}
             if any((not r['subject_product_id'] or r['subject_product_id'] == left)
@@ -338,7 +338,7 @@ def select_product_pairs(service, project_id, subject_id, peer_id, target_produc
                 eligible = substitute['missing'] == ['semantic_review']
             candidates.append((not eligible, len(direct['missing']), scope))
     candidates.sort(key=lambda row: row[:2])
-    return [row[2] for row in candidates[:2]]
+    return [row[2] for row in candidates]
 
 
 class CompetitionResearch(CompanyLeads):
@@ -404,14 +404,8 @@ class CompetitionResearch(CompanyLeads):
         saved = execution.read_checkpoint(stage)
         if saved is not None:
             return saved
-        # Completed replacements must replay even after the allowance was used;
-        # do not buy a new lookup when no new public page can be read.
-        if execution.usage().get('page', {}).get('requests', 0) >= execution.budgets['page']:
-            return []
         reservations = execution.read_checkpoint('original_lookup_reservations') or []
         if key not in reservations:
-            if len(reservations) >= 6:
-                return []
             execution.checkpoint('original_lookup_reservations', [*reservations, key])
         if guard:
             guard()
@@ -427,7 +421,7 @@ class CompetitionResearch(CompanyLeads):
         return matches
 
     def originals(self, project_id, hits, *, execution, context=None, report=None, collectors=None, guard=None):
-        """Read at most three distinct URLs; snippets never substitute for originals.
+        """Read distinct scoped URLs; snippets never substitute for originals.
 
         Multiple pages are more coverage, not automatically independent evidence.
         Existing propagation-family checks still apply to bilateral assessments.
@@ -436,11 +430,9 @@ class CompetitionResearch(CompanyLeads):
         seen = {hit['url'] for hit in selected}
         def priority(hit):
             return selection_priority(hit, context or {})
-        selected = selected[:3]
-        evidences, lookup_used, attempts = [], False, 0
-        while selected and attempts < 3:
+        evidences, lookup_used = [], False
+        while selected:
             hit = selected.pop(0)
-            attempts += 1
             if guard:
                 guard()
             record = {'url': hit['url'], 'title': str(hit.get('title') or '')[:500],
@@ -467,18 +459,17 @@ class CompetitionResearch(CompanyLeads):
             if not readable:
                 if report is not None:
                     report.append(record)
-                if (context and not hit.get('directory_url') and attempts < 3
+                if (context and not hit.get('directory_url')
                         and page.get('error_code') == 'insufficient_article_text'):
                     parent = page.get('resolved_url') or hit['url']
                     children = [h for h in safe_article_links(parent, page.get('links', []))
                                 if h['url'] not in seen and selection_matches(h, context)]
                     children.sort(key=priority, reverse=True)
                     if children:
-                        children = children[:3 - attempts]
                         seen.update(h['url'] for h in children)
                         selected = [{**h, 'directory_url': parent} for h in children] + selected
                         continue
-                if (collectors is not None and not lookup_used and attempts < 3
+                if (collectors is not None and not lookup_used
                         and title_query(hit.get('title'))):
                     lookup_used = True
                     donors = self._original_lookup(hit, execution, collectors, guard)
@@ -488,7 +479,7 @@ class CompetitionResearch(CompanyLeads):
                         if url not in seen:
                             seen.add(url)
                             replacements.append({**donor, 'url': url, 'discovery_url': hit['url']})
-                    selected = replacements[:3 - attempts] + selected
+                    selected = replacements + selected
                 continue
             # Retain the publisher URL actually read, not an intermediary's grade.
             resolved = page.get('resolved_url')
@@ -564,7 +555,7 @@ class CompetitionResearch(CompanyLeads):
                 'company': inputs['company'], **({'industry_hint': inputs['industry_hint']} if inputs.get('industry_hint') else {}),
                 'product_contexts': [
                     {k: c[k] for k in ('product_name', 'uses', 'buyers', 'discovery_basis')}
-                    for c in inputs['query_contexts'][:2]], 'sources': listing}, ensure_ascii=False), max_tokens=5000))
+                    for c in inputs['query_contexts']], 'sources': listing}, ensure_ascii=False), max_tokens=5000))
             def discover():
                 rejections = {}
                 peers = discover_candidates(service, pid, inputs['subject_id'], sources, data,
@@ -625,7 +616,7 @@ class CompetitionResearch(CompanyLeads):
             target_products = list(dict.fromkeys([*target.get('product_ids', []), *inputs['products']]))
             previous = self.saved(pid) or {}
             start = stage('competition_peer_offset', lambda: int(previous.get('next_peer_offset', 0)))
-            selected = (peers[start:] + peers[:start])[:6]
+            selected = peers[start:] + peers[:start]
             # When a structured source already yields typed located peers, per-peer
             # web reading (two searches and three reads each) proved nearly
             # fruitless (R33); web candidates stay snippet leads. Others keep it.

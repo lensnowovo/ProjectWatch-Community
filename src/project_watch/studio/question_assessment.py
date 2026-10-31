@@ -80,7 +80,7 @@ class QuestionRole(PublicMonitor):
 
     def pw_status(self, args):
         return dict(watch_id=self.work['watch']['id'], fingerprint=self.work['fingerprint'],
-                    remaining=max(0, self.execution.budgets['model'] - self.execution.budget_used('model')))
+                    remaining=None)
 
     def pw_assess(self, args):
         ctx, watch = self.frozen(), self.work['watch']
@@ -173,8 +173,6 @@ class QuestionGateway(dsh_runtime.Gateway):
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 4096))
             attempts = role.execution.read_checkpoint('question_attempts') or []
             replay = self.received(body)
-            if not replay and not role.state['finished'] and (len(attempts) >= 4 or role.execution.budget_used('model') >= role.execution.budgets['model']):
-                role.defer('question_generation_budget_or_turn_limit')
             if role.state['finished']:
                 return {'choices': [{'message': {'role': 'assistant', 'content': '问题评估阶段已保存。'}, 'finish_reason': 'stop'}]}
             self.advertised_tools.update(TOOLS)

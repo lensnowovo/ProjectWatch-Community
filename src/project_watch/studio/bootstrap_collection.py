@@ -27,7 +27,7 @@ PROMPT = ('你只负责公开来源采集与补读，不提取事件、不做分
     'clinical_sponsor仅用明确申办方；clinical_term用于明确干预/产品词，不能猜公司是申办方。'
     '缺少公开条件保留needs_scope；查询无结果和失败都不得解释为不存在。'
     '可用pw_search补充公开证据，但不得调用record或生成影响判断。'
-    '模型最多4次、外部动作最多8次，宿主另为材料提取和语义准入预留额度。'
+    '按已确认的监控范围完成采集，复用已有结果，不重复发送已执行的查询。'
     '完成后pw_finish(gaps)仅结束采集阶段，尚未发布任何事件或分析。')
 
 
@@ -53,6 +53,7 @@ class Collection:
             from project_watch.studio.retrieval_queries import GUIDANCE
 
             self.prompt = PROMPT + GUIDANCE
+        self.limits = dict(turns=None, actions=None, pages=MAX_PAGES)
 
     def guard(self):
         collection_host.guard_scope(self.parent)
@@ -128,7 +129,7 @@ class Collection:
         def visit(value):
             if isinstance(value, dict):
                 if value.get('evidence_version_id'):
-                    source = {k: value[k] for k in ('id', 'evidence_version_id', 'collection_matches') if k in value}
+                    source = {k: value[k] for k in ('id', 'evidence_version_id', 'collection_matches', 'excerpt', 'window_offset') if k in value}
                     if source not in saved:
                         saved.append(source)
                 for child in value.values():
@@ -147,6 +148,8 @@ class Collection:
                 raise ValueError('collection_role_tool_denied')
             if self.state['finished']:
                 return self.state['finished']
+            if name == 'pw_collect' and not args.get('source_id'):
+                args = self.locate_collect_quote(args)
             if name == 'pw_read' and str(args.get('source_id', '')).startswith('context:'):
                 self.guard_input()
                 if args.get('view', 'record') != 'record':
@@ -156,6 +159,16 @@ class Collection:
                 gaps = args.get('gaps', {})
                 if not isinstance(gaps, dict) or any(not isinstance(v, str) or len(v) > 500 for v in gaps.values()):
                     raise ValueError('invalid collection gaps')
+                if self.execution.read_checkpoint('collection_query_completion_v1') == 'named_routes':
+                    from project_watch.studio.retrieval_queries import (
+                        remaining_name_queries,
+                        remaining_patent_documents,
+                    )
+
+                    pending = remaining_name_queries(self) + remaining_patent_documents(self)
+                    if pending:
+                        return {'saved': False, 'next_tool': 'pw_collect',
+                                'remaining_name_queries': pending[:6], 'remaining_query_count': len(pending)}
                 return self.finish('role_finished', gaps)
             external = name in ('pw_search', 'pw_collect') or (name == 'pw_read' and args.get('view') == 'page')
             key = hashlib.sha256(_json([name, args]).encode()).hexdigest()[:40]
@@ -180,16 +193,11 @@ class Collection:
                 # also make this round's explicit continuation inadmissible.
                 require_product_fallback(self, args, claim=False)
             if external and key not in self.data['actions']:
-                if sum(not a.get('origin_job_id') for a in self.data['actions'].values()) >= MAX_ACTIONS:
-                    return self.defer(operation, 'collection_action_limit')
                 remaining_model = dsh_closeout.request_budget(self.execution)['model']['remaining']
                 if remaining_model is not None and remaining_model < self.reserve():
                     return self.defer(operation, 'model_budget_reserved_for_materials')
                 if name == 'pw_read':
                     page = collection_dsh.page_source(self.parent, args['source_id'])
-                    if (not page.get('read_attempted') and sum(a['operation']['tool'] == 'pw_read'
-                            and not a.get('origin_job_id') for a in self.data['actions'].values()) >= MAX_PAGES):
-                        return self.defer(operation, 'page_count_limit')
                     remaining = dsh_closeout.request_budget(self.execution)['page']['remaining']
                     if not page.get('read_attempted') and remaining is not None and remaining < 2:
                         # pw_read can use paid fetch followed by the public reader.
@@ -199,18 +207,32 @@ class Collection:
                 recorded = self._journal_rows()
             else:
                 recorded = None
+            previous_dimension = self.execution.read_checkpoint('collection_product_dimension_v2')
+            claimed_dimension = None
             try:
                 if name == 'pw_collect' and self.retrieval_contract == 'evidence-query-v2':
                     from project_watch.studio.retrieval_queries import require_product_fallback
 
                     require_product_fallback(self, args)
+                    if previous_dimension is None:
+                        claimed_dimension = self.execution.read_checkpoint('collection_product_dimension_v2')
                 result = self.parent.tool(name, args)
             except (ValueError, KeyError):
-                # A validation refusal with no new request-journal row sent
+                # A validation refusal with an unchanged request journal sent
                 # nothing: forget the action this call recorded so it neither
                 # uses a slot nor blocks continuation. Anything that reached the
                 # journal keeps its started state, as before.
                 if recorded is not None and self._journal_rows() == recorded:
+                    if claimed_dimension is not None:
+                        # Only this invocation's unsent claim may be undone.
+                        # A prior claim or any changed request receipt stays put.
+                        with closing(self.store._connect()) as db, db:
+                            db.execute('BEGIN IMMEDIATE')
+                            self.execution._guard(db)
+                            current = self.execution.read_checkpoint('collection_product_dimension_v2', db=db)
+                            if current == claimed_dimension:
+                                db.execute('DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                                           (self.execution.job['id'], 'collection_product_dimension_v2'))
                     self.data['actions'].pop(key, None)
                     self.save()
                 raise
@@ -223,10 +245,48 @@ class Collection:
                 self.save()
             return self.expose(result)
 
+    def locate_collect_quote(self, args):
+        """Recover only a unique verbatim quotation from already exposed data."""
+        quote, query = args.get('quote'), args.get('query')
+        if not isinstance(quote, str) or not quote or not isinstance(query, str) or query not in quote:
+            raise ValueError('professional query requires source_id and exact quote')
+        exposed = [*json.loads(self.task or '{"sources": []}')['sources'],
+                   *(self.execution.read_checkpoint('collection_exposed_v1') or [])]
+        matches = {}
+        for entry in exposed:
+            if not entry.get('id'):
+                continue
+            # Only text actually supplied to this role may repair a missing
+            # identifier. Fetching another source window here could expose text
+            # the model never saw and make an unrelated quote appear unique.
+            source = entry
+            try:
+                structured = json.loads(source.get('excerpt', ''))
+            except (ValueError, TypeError):
+                structured = None
+            if isinstance(structured, dict) and 'query_context' in structured and 'source_record' in structured:
+                # A query's carried provenance is not a second source stating
+                # the same fact. Do not use that echo as specialist evidence.
+                record_text = json.dumps(structured['source_record'], ensure_ascii=False, separators=(',', ':'))
+                if quote not in record_text:
+                    continue
+            if quote in source.get('excerpt', '') and self.available(source):
+                matches.setdefault(source['evidence_version_id'], source)
+        if len(matches) != 1:
+            raise ValueError('professional query quote needs an unambiguous source_id')
+        source = next(iter(matches.values()))
+        result = {**args, 'source_id': source['id']}
+        start = source.get('window_offset', 0) + source['excerpt'].index(quote)
+        self.execution.checkpoint_chunked('collection_quote_binding:' + hashlib.sha256(_json(args).encode()).hexdigest()[:32],
+            {'source_id': result['source_id'], 'evidence_version_id': next(iter(matches)),
+             'start': start, 'end': start + len(quote), 'quote_sha256': hashlib.sha256(quote.encode()).hexdigest(),
+             'basis': 'unique_exposed_exact_quote'})
+        return result
+
     def _journal_rows(self):
         with closing(self.store._connect()) as db:
-            return db.execute('SELECT count(*) FROM studio_job_calls WHERE job_id=?',
-                              (self.execution.job['id'],)).fetchone()[0]
+            return [tuple(r) for r in db.execute('SELECT * FROM studio_job_calls WHERE job_id=? ORDER BY call_key',
+                                                 (self.execution.job['id'],))]
 
     def adopt_page(self, source):
         """Choose one immutable body for this round before summary dispatch."""
@@ -303,10 +363,6 @@ class Collection:
                     self.defer({'tool': 'pw_read', 'args': args, 'evidence_version_id': source['evidence_version_id']},
                                'model_budget_reserved_for_materials')
                     continue
-                if fresh and pages >= MAX_PAGES:
-                    self.defer({'tool': 'pw_read', 'args': args, 'evidence_version_id': source['evidence_version_id']},
-                               'page_count_limit')
-                    continue
                 self.tool('pw_read', args)
                 pages += int(fresh)
             if catalog['next_offset'] is None:
@@ -330,6 +386,24 @@ class CollectionGateway(Gateway):
                 raise ValueError('unexpected collection tool exposure')
             body = {k: payload[k] for k in ('model', 'messages', 'tools', 'tool_choice') if k in payload}
             body.update(stream=False, max_tokens=min(self.model.max_output_tokens, 2000))
+            policy = self.research.execution.read_checkpoint('collection_output_policy_v1')
+            if policy is None and not self.research.execution.read_checkpoint(self.research.attempt_stage):
+                from project_watch.studio.llm import structured_options
+                from project_watch.studio.research_budget import model_limits
+
+                limits = model_limits(self.research.execution)
+                maximum = limits['output_tokens'] if limits else 8192
+                policy = dict(max_tokens=min(self.model.max_output_tokens, maximum, max(8000, maximum // 2)))
+                options = structured_options(self.model)
+                if 'reasoning_effort' in options:
+                    policy['reasoning_effort'] = options['reasoning_effort']
+                if 'thinking' in options:
+                    policy['thinking'] = {'type': 'enabled' if options['thinking'] else 'disabled'}
+                # Freeze before the first attempt. An old attempt without a
+                # journal is not proof of no send; never change its identity.
+                self.research.execution.checkpoint('collection_output_policy_v1', policy)
+            if policy:
+                body.update(policy)
             # Completed requests retain their exact historical wire identity.
             # Unknowns are fenced by guard(), never bypassed with a new body.
             replay = self.received(body)
@@ -343,11 +417,6 @@ class CollectionGateway(Gateway):
             signature = hashlib.sha256(json.dumps([body, self.model.base_url, self.model.api_key],
                                                 ensure_ascii=False).encode()).hexdigest()
             attempts = self.research.execution.read_checkpoint(self.research.attempt_stage) or []
-            remaining = dsh_closeout.request_budget(self.research.execution)['model']['remaining']
-            if not self.research.state['finished'] and not replay and (
-                    len(attempts) >= MAX_TURNS or (remaining is not None and remaining <= self.research.reserve())):
-                self.research.defer({'tool': 'collection_discovery', 'args': {}}, 'model_turn_or_publication_reserve')
-                self.research.finish('bounded_stop')
             if self.research.state['finished']:
                 return {'choices': [{'message': {'role': 'assistant', 'content': '采集阶段已保存。'}, 'finish_reason': 'stop'}]}
             self.advertised_tools.update(names)
@@ -383,7 +452,9 @@ def _post_read(role):
     role.data['phase'] = 'postread'
     role.save()
     role.state['finished'] = None
-    role.read_pages()
+    selection = role.execution.read_checkpoint('collection_read_selection_v1')
+    only = set(collection_dsh._refs(role.parent)) - set(selection['baseline']) if selection else None
+    role.read_pages(only=only)
     return _done(role, (finished or {}).get('reason', 'role_finished'), (finished or {}).get('gaps'))
 
 
@@ -415,7 +486,17 @@ def run(parent, model, http, runtime_root, directory):
         if started:
             role.defer({'tool': 'collection_discovery', 'args': {}}, 'existing_material_input_frozen')
             return _done(role, 'existing_material_input_frozen')
-    role.read_pages()
+    from project_watch.studio.research_work_budget import enabled
+
+    selection = parent.execution.read_checkpoint('collection_read_selection_v1')
+    if selection is None and enabled(parent.execution):
+        # Preserve most body reads for sources discovered by the specialist
+        # queries, rather than exhausting them on old catalog entries first.
+        entries = collection_dsh.discovery_catalog(parent, limit=min(4, max(1, role.limits['pages'] // 2)))
+        selection = dict(baseline=sorted(collection_dsh._refs(parent)),
+                         initial=[s['id'] for s in entries['sources']])
+        parent.execution.checkpoint_chunked('collection_read_selection_v1', selection)
+    role.read_pages(only=set(selection['initial']) if selection else None)
     if role.task is None:
         # Only untouched collection inputs receive the new prompt/schema. Old
         # requests, attempts, resume identities and tool caches remain unchanged.
@@ -423,8 +504,9 @@ def run(parent, model, http, runtime_root, directory):
             from project_watch.studio.retrieval_queries import CONTRACT, GUIDANCE
 
             parent.execution.checkpoint('collection_retrieval_contract_v2', CONTRACT)
+            parent.execution.checkpoint('collection_query_completion_v1', 'named_routes')
             role.retrieval_contract, role.prompt = CONTRACT, PROMPT + GUIDANCE
-        entries = collection_dsh.catalog(parent, limit=8)
+        entries = collection_dsh.discovery_catalog(parent, limit=8)
         sources = []
         for source in entries['sources']:
             page = parent.execution.read_checkpoint('dsh_source_P' + source['id'][1:])
@@ -432,12 +514,23 @@ def run(parent, model, http, runtime_root, directory):
             if not role.available(source):
                 role.defer({'tool': 'pw_read', 'args': {'source_id': source['id']}}, 'source_withdrawn')
                 continue
-            sources.append({k: source[k] for k in ('id', 'title', 'url', 'excerpt', 'read_scope', 'evidence_version_id')})
+            sources.append({**{k: source[k] for k in ('id', 'title', 'url', 'excerpt', 'read_scope', 'evidence_version_id')},
+                            'window_offset': source.get('window_offset', 0)})
+        scope = parent.execution.read_checkpoint(collection_host.SCOPE) or {}
+        handoff = parent.execution.read_checkpoint('update_handoff_v1') or {}
+        from project_watch.studio.retrieval_queries import (
+            remaining_name_queries,
+            remaining_patent_documents,
+        )
+
         role.task = _json({'sources': sources, 'collection': collection_dsh.coverage(parent),
+                          'confirmed_subject_names': scope.get('subject_names', []),
+                          'prior_professional_queries': handoff.get('professional_query_history', []),
+                          'remaining_name_queries': remaining_name_queries(role) + remaining_patent_documents(role),
                           'source_total': entries['total'], 'next_source_offset': entries['next_offset']})
         parent.execution.checkpoint_chunked('bootstrap_collection_input_v1', role.task)
     remaining = dsh_closeout.request_budget(parent.execution)['model']['remaining']
-    if remaining is not None and remaining < MAX_TURNS + role.reserve() and not parent.execution.read_checkpoint(role.attempt_stage):
+    if remaining is not None and remaining < role.reserve() and not parent.execution.read_checkpoint(role.attempt_stage):
         role.defer({'tool': 'collection_discovery', 'args': {}}, 'model_budget_reserved_for_materials')
         return _done(role, 'model_budget_reserved_for_materials')
     gateway = CollectionGateway(role, model, dsh_runtime.guarded_http(role, http))

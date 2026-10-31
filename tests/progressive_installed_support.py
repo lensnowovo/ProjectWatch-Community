@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from project_watch.studio import dsh_runtime, event_insight, insight
+from project_watch.studio import dsh_runtime, event_insight, insight, update_run
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.collection_view import discovered_sources
 from project_watch.studio.http import Http, Response
@@ -49,7 +49,16 @@ def run(home):
             if not names:
                 seen['reviews'] += 1
                 payload = json.loads(body['messages'][-1]['content'])
-                if payload.get('phase') == 'consistency':
+                if 'materials' in payload and 'snapshot_id' in payload:
+                    ref = next(iter(payload['materials']))
+                    point = dict(text=TEXT, refs=[ref])
+                    ring = dict(verdict='unclear', confidence='low', summary=TEXT, **{'for': [point], 'against': []})
+                    review = dict(position=ring, operations=ring, chain=ring,
+                        technology=dict(maturity='unclear', consensus='unclear', confidence='low', summary=TEXT,
+                                        academic=[point], industry=[], risks=[]),
+                        industry=dict(verdict='unclear', confidence='low', summary=TEXT, drivers=[point], headwinds=[]))
+                    seen['analysis'] += 1
+                elif payload.get('phase') == 'consistency':
                     review = {'consistent': True, 'reason': 'Synthetic fixture', 'conflicts': []}
                 else:
                     checks = []
@@ -107,14 +116,22 @@ def run(home):
     worker = StudioWorker(pipeline)
     worker.schedule = lambda: None
     with patch.dict('os.environ', {'PROJECT_WATCH_DSH_RUNTIME': 'synthetic-installed-runtime', 'PROJECT_WATCH_DSH_MONITOR': '1'}), patch.object(dsh_runtime, 'run_dsh', role):
-        pipeline.store.enqueue(project.id, 'external')
+        root = pipeline.store.enqueue(project.id, 'external')
         assert worker.step()
-        assert pipeline.store.list_events(project_id=project.id) and not insight.load(pipeline.store, project.id)
-        assert worker.step()
+        assert pipeline.store.list_events(project_id=project.id) and insight.load(pipeline.store, project.id)
+        assert not worker.step()  # Analysis is owned by the same leased update.
     with closing(pipeline.store._connect()) as db:
         jobs = [dict(r) for r in db.execute('SELECT kind,status,error FROM studio_jobs ORDER BY rowid')]
-    assert [(j['kind'], j['status']) for j in jobs] == [('external', 'done'), ('insight', 'done')], jobs
+    assert [(j['kind'], j['status']) for j in jobs] == [('external', 'done')], jobs
+    from project_watch.studio.execution import JobExecution
+
+    phases = JobExecution(pipeline.store, root).read_checkpoint(update_run.STATE)['phases']
+    assert list(phases) == ['sources', 'analysis', 'events', 'reports']
+    assert phases['analysis']['status'] == phases['reports']['status'] == 'complete'
     result = insight.load(pipeline.store, project.id)
-    assert result['status'] == 'current' and result['review']['passed'] and result['input']['event_versions']
+    assert result['status'] == 'current' and len(result['section_versions']) == 5
+    publication = JobExecution(pipeline.store, root).read_checkpoint('snapshot_analysis_publication_v1')
+    assert publication['status'] == 'completed'
+    assert all(s['status'] == 'approved' and s['review_receipts'] for s in publication['sections'].values())
     assert seen['body'] == seen['materials'] == 1 and seen['reviews'] >= 2
-    return {'jobs': jobs, 'counts': seen, 'immutable_insight': result['id']}
+    return {'jobs': jobs, 'counts': seen, 'immutable_sections': result['section_versions']}

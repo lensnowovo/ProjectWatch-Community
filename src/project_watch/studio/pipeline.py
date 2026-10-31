@@ -1584,8 +1584,6 @@ class Pipeline:
         from concurrent.futures import ThreadPoolExecutor
         from urllib.parse import urlsplit
 
-        if page_limit is None:
-            page_limit = BODY_FETCH_LIMIT
         execution = getattr(self._execution_state, 'current', None)
         def save(item_id, status, text, **kwargs):
             if execution:
@@ -1612,7 +1610,7 @@ class Pipeline:
                 readable.append(item)
         # Company news first; items that already carry a long search summary are least in need.
         readable.sort(key=lambda i: (i["category"] != "company", len(i.get("snippet") or "") >= SUMMARY_MIN_CHARS))
-        to_read = readable[:page_limit]
+        to_read = readable
         stage(f"阅读 {len(to_read)} 篇报道正文")
         read_ok = 0
         if to_read:
@@ -1647,17 +1645,10 @@ class Pipeline:
                     save(item["id"], "search_summary", item["snippet"])
                 else:
                     save(item["id"], status, "")
-        # Items beyond the reading budget keep their search summary when they have one.
-        for item in readable[page_limit:]:
-            if len(item.get("snippet") or "") >= SUMMARY_MIN_CHARS:
-                save(item["id"], "search_summary", item["snippet"])
-            else:
-                save(item["id"], "not_read", "")
-        # RSS wrappers discover stories; bounded title lookup finds public originals.
-        # It shares the existing paid request journal and never decodes private APIs.
+        # Resolve originals for this task's eligible stories; historical count caps are inert.
         if redirects and collectors is not None and collectors.has_search:
             read_ok += self._recover_news_links(project_id, redirects, collectors, stage,
-                                               remaining=page_limit - len(to_read), lookup_limit=lookup_limit)
+                                               remaining=None, lookup_limit=lookup_limit)
         # Redirect-only links: borrow the text of the same story from a direct link.
         if redirects:
             donors = self.store.items_with_body(project_id)
@@ -1679,7 +1670,7 @@ class Pipeline:
         return read_ok
 
     def _recover_news_links(self, project_id: str, wrappers: list[dict], collectors: Collectors,
-                            stage: Callable[[str], None], *, remaining: int,
+                            stage: Callable[[str], None], *, remaining: int | None,
                             lookup_limit: int = NEWS_LOOKUP_LIMIT) -> int:
         """Find matching reports without treating a Google landing page as evidence.
 
@@ -1690,8 +1681,6 @@ class Pipeline:
         donors = self.store.items_with_body(project_id)
         queries, count = 0, 0
         for item in wrappers:
-            if remaining <= 0 or queries >= lookup_limit:
-                break
             if (urlsplit(item["url"]).hostname or "").lower() != "news.google.com":
                 continue
             if any(d["category"] == item["category"] and ev.similarity(item["title"], d["title"]) >= TWIN_SIMILARITY
@@ -1712,7 +1701,7 @@ class Pipeline:
                     continue
                 if not any(h["url"] == hit["url"] for h in candidates):
                     candidates.append(hit)
-            for hit in candidates[:min(NEWS_LOOKUP_PAGES, remaining)]:
+            for hit in candidates:
                 key = "news-original:" + hashlib.sha256(hit["url"].encode()).hexdigest()[:32]
                 self.store.add_items(project_id, item["category"], [{**hit, "key": key,
                     "extra": {**(hit.get("extra") or {}), "discovery": "google-title-lookup",
@@ -1722,7 +1711,6 @@ class Pipeline:
                     if not any(d["id"] == donor["id"] for d in donors):
                         donors.append(donor)
                     break
-                remaining -= 1
                 if execution:
                     from project_watch.studio.public_reading import read_page
                     result = read_page(execution, self.reader(), hit["url"])
@@ -1858,7 +1846,8 @@ class Pipeline:
             if frozen['entry'] == 'bootstrap':
                 run_bootstrap(self, execution, Path(dsh_root))
                 if (os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
-                        and not execution.read_checkpoint('bootstrap_collection_resume_v1')):
+                        and not execution.read_checkpoint('bootstrap_collection_resume_v1')
+                        and not execution.read_checkpoint('update_run_owner_v1')):
                     from project_watch.studio import collection_round
 
                     collection_round.enqueue(self, execution)
@@ -2390,6 +2379,11 @@ class Pipeline:
         """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
         dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
         execution = getattr(self._execution_state, 'current', None)
+        if execution and execution.read_checkpoint('snapshot_analysis_input_v1'):
+            from project_watch.studio import snapshot_work
+
+            snapshot_work.complete(self, execution)
+            return
         if execution and execution.read_checkpoint('event_insight_input_v1'):
             from project_watch.studio import event_insight
 
@@ -2726,10 +2720,28 @@ class Pipeline:
                    'competition': {'search': 24, 'model': None, 'open_data': 6, 'page': 21},
                    'commercial': {'commercial': 9, 'search': 0, 'model': 0, 'open_data': 0, 'page': 0, 'site': 0}}
         execution = JobExecution(self.store, job, budgets=budgets.get(job['kind'])) if job.get("lease_token") else None
+        if execution:
+            execution.allowed_call_kinds = {
+                'business': frozenset({'model', 'page', 'site'}),
+                'details': frozenset({'model', 'page', 'site'}),
+                'commercial': frozenset({'commercial'}),
+            }.get(job['kind'])
         previous_execution = getattr(self._execution_state, 'current', None)
         self._execution_state.current = execution
         try:
             with self.store.write_scope(execution._guard if execution else None):
+                if execution:
+                    from project_watch.studio.acceptance_batch import prepare_continuation
+
+                    prepare_continuation(execution)
+                if execution and job['kind'] == 'external':
+                    from project_watch.studio.independent_collection import run_if_admitted
+                    from project_watch.studio.public_research_admission import admit
+
+                    admit(self, execution)
+                    if run_if_admitted(self, execution):
+                        execution.checkpoint('dispatch_completed', {'completed': True})
+                        return
                 if (execution and job['kind'] == 'insight' and job.get('input_version', '').startswith('manual:')
                         and os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'):
                     from project_watch.studio import event_insight_work
@@ -2747,6 +2759,9 @@ class Pipeline:
                         progressive_bootstrap.freeze(execution, 'monitor', materials=True)
                     elif not project.get('last_external_at'):
                         progressive_bootstrap.freeze(execution, 'bootstrap')
+                    from project_watch.studio import update_run
+
+                    update_run.freeze(execution)
                 if execution and job['kind'] != 'commercial':
                     from project_watch.studio.recovery import input_binding
 
@@ -2846,6 +2861,15 @@ class StudioWorker:
                     new_status = "blocked_failed" if not job or job[0] == "failed" else "blocked_no_current_output"
                 elif status == "queued":
                     dependency = deps.get(pid, request["artifact_key"])
+                    if request['artifact_key'].startswith('snapshot-section:'):
+                        # A frozen snapshot cannot acquire changed sources. The next
+                        # ordinary source round owns its successor; never dispatch
+                        # the legacy event-insight generator for these sections.
+                        with closing(store._connect()) as db, db:
+                            db.execute("UPDATE studio_rebuild_requests SET status='awaiting_source_update' "
+                                'WHERE project_id=? AND artifact_key=? AND generation=? AND status=?',
+                                (pid, request['artifact_key'], request['generation'], status))
+                        continue
                     if dependency and dependency['kind'] in ('insight', 'question'):
                         if not model_ready or project['status'] != 'active' or not project['activated']:
                             continue

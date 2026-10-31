@@ -41,7 +41,7 @@ def _json(value):
 
 @dataclass(frozen=True)
 class ReadingLimits:
-    max_requests: int = 20
+    max_requests: int | None = None
     max_request_bytes: int = 150_000
     max_output_tokens: int = 768
     max_cost_cny: str | None = None
@@ -49,7 +49,9 @@ class ReadingLimits:
     output_cny_per_million: str | None = None
 
     def __post_init__(self):
-        for value, ceiling in ((self.max_requests, 1000), (self.max_request_bytes, 500_000),
+        if self.max_requests is not None and (type(self.max_requests) is not int or self.max_requests < 1):
+            raise ValueError("invalid historical request count")
+        for value, ceiling in ((self.max_request_bytes, 500_000),
                                (self.max_output_tokens, 8192)):
             if type(value) is not int or not 1 <= value <= ceiling:
                 raise ValueError("invalid reading limit")
@@ -303,12 +305,8 @@ class ReadingJobs:
                 except GateRejected as exc:
                     raise ReadingDenied("reading request or budget rejected") from exc
                 reserved = Decimal(gate.receipt()["estimated_reserved_cny"] or "0")
-                previous = db.execute("SELECT reserved_cny FROM reading_dispatches WHERE authorization_id=?",
-                                      (grant["id"],)).fetchall()
-                total = sum((Decimal(r[0]) for r in previous), Decimal(0)) + reserved
-                if (len(previous) >= limits.max_requests or
-                        (limits.max_cost_cny is not None and total > Decimal(limits.max_cost_cny))):
-                    raise ReadingDenied("reading budget exhausted")
+
+
                 db.execute("INSERT INTO reading_dispatches VALUES(?,?,?,?,?,?)",
                            (job_id, grant["id"], len(body), json.loads(body)["max_tokens"], str(reserved), time.time()))
                 db.execute("UPDATE reading_jobs SET state='dispatched',updated_at=? WHERE id=?",

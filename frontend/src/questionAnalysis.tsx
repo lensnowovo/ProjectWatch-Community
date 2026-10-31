@@ -48,9 +48,11 @@ function judged(view: InsightView | null, q: Question): Judged | null {
   };
 }
 
-export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
-  detail: ProjectDetail; view: InsightView | null; error: unknown; onStart?: () => void; goto: (tab: Tab) => void;
+export function QuestionAnalysis({ detail, view, error, onStart, onSaved, goto }: {
+  detail: ProjectDetail; view: InsightView | null; error: unknown; onStart?: () => void; onSaved?: () => Promise<void>; goto: (tab: Tab) => void;
 }) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const analysis = view?.record?.analysis;
   const first = QUESTIONS.find((q) => judged(view, q))?.key ?? null;
   const [params, setParams] = useSearchParams();
@@ -77,6 +79,20 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   </section>;
   return (
     <section className="qa" aria-label="按问题看判断">
+      {view?.saved_analysis && <div className="op-local">
+        <span>已收录 {view.saved_analysis.materials} 份材料
+          {['queued', 'running'].includes(view.saved_analysis.status) ? ' · 分析进行中' :
+            view.saved_analysis.status === 'partial' ? ' · 本轮分析部分完成' :
+              view.saved_analysis.status === 'failed' ? ' · 本轮分析未完成，材料已保留' : ''}</span>
+        {onSaved && <button className="btn small" disabled={saving || !view.saved_analysis.can_analyze}
+          onClick={async () => {
+            if (saving) return;
+            setSaving(true); setSaveError('');
+            try { await onSaved(); } catch { setSaveError('暂未创建分析，请刷新任务状态后再试。已有结果保留。'); }
+            finally { setSaving(false); }
+          }}>{saving ? '正在提交…' : '用已保存材料重新分析'}</button>}
+        {saveError && <span role="alert">{saveError}</span>}
+      </div>}
       {(running || analysisState === "failed" || analysisState === "needs_confirmation") && <div className="op-local" role="status">
         <WorkIndicator state={analysisState} label={`综合判断 · ${analysisJob?.runtime?.label || WORK_LABEL[analysisState] || "状态待同步"}`} />
         {analysis && <span className="muted small">当前显示上次结果</span>}
@@ -91,7 +107,10 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
             <span className="rj-tile-head"><span className="rj-tile-label"><span className="qa-no">0{i + 1}</span>{x.label}</span>
               <span className={`rj-verdict ${v ? verdictTone(x.scale, v.verdict) : ""}`}>{v ? labelsFor(x)[v.verdict] ?? v.verdict : "—"}</span></span>
             <span className="rj-tile-summary">{v ? v.summary : error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : analysis ? "下次 AI 交叉分析时生成" : "还没有 AI 交叉分析"}</span>
-            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : "暂无结果"}</span>
+            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : "暂无结果"}
+              {view?.record?.section_versions?.[x.key] && <small> · {view.record.section_versions[x.key].generated_at?.slice(0, 10)}
+                {view.record.section_versions[x.key].status !== 'current' ? ' · 待更新' : ''}</small>}
+            </span>
             <i className="rj-tile-glow" aria-hidden="true" />
           </button>;
         })}

@@ -27,7 +27,7 @@ export function appendAnalysisRecovery(root,state,{request,onChanged}){
 export function openAnalysisRetry({projectId,item,request,onChanged}){
   const dialog=el('dialog','profile-editor reading-consent'),form=el('form'),body=el('div','profile-edit-body');
   const title=el('h2','','重新解读这条消息');title.id='analysis-retry-title';dialog.setAttribute('aria-labelledby',title.id);
-  body.append(el('p','',item.title),el('p','reading-note',failureCopy(item.code)),el('p','reading-note','沿用这条消息及原先选定的背景，不添加其他资料。新增请求可能产生费用，原记录与已用额度仍保留。'));
+  body.append(el('p','',item.title),el('p','reading-note',failureCopy(item.code)),el('p','reading-note','沿用这条消息及原先选定的背景，不添加其他资料。新增请求可能产生费用，原记录与费用记录仍保留。'));
   const tokenLabel=el('label','profile-input'),token=el('input');token.type='password';token.autocomplete='off';tokenLabel.append(el('span','','本机管理口令'),token);body.append(tokenLabel);
   const preview=el('div','analysis-disclosure'),confirmLabel=el('label','consent-check'),confirm=el('input');confirm.type='checkbox';confirmLabel.append(confirm,el('span','','同意按上述范围新增一次请求'));confirmLabel.hidden=true;body.append(preview,confirmLabel);
   const error=el('p','error-inline');error.role='alert';const footer=el('div','dialog-actions'),next=el('button','primary-button','核对发送内容'),close=el('button','text-button','取消');close.type='button';next.type='submit';close.onclick=()=>dialog.close();footer.append(next,close);
@@ -42,7 +42,7 @@ export function openAnalysisRetry({projectId,item,request,onChanged}){
       const options={method:'POST',headers:{'Content-Type':'application/json','X-Settings-Token':token.value}};
       if(!viewed){
         const value=await request(route+'/retry-preview',options);if(!dialog.isConnected)return;viewed=value;
-        preview.replaceChildren(el('p','consent-recipient',`${value.recipient.model} · ${value.recipient.base_url}`),el('p','reading-note',`最多新增 1 次，计入原有 ${value.limits.max_requests} 次额度。`));
+        preview.replaceChildren(el('p','consent-recipient',`${value.recipient.model} · ${value.recipient.base_url}`),el('p','reading-note',`本次明确重发一次，原请求和费用记录保留。`));
         const refs=el('details','reading-more');refs.append(el('summary','','本次发送的消息与背景'));
         for(const ref of value.references)refs.append(el('p','reading-note',ref.kind==='internal'?`项目背景 · ${ref.locator}`:'公开消息'),el('blockquote','',ref.text));
         preview.append(refs);confirmLabel.hidden=false;next.textContent='确认并重试';

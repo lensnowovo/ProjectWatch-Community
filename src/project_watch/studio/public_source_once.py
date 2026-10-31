@@ -129,7 +129,9 @@ def _scope(db, job_id, allowed_calls=()):
             (pid,),
         )
     ]
-    if any(stage == "dsh_hold" and json.loads(data) for _, stage, data in holds):
+    from project_watch.studio.dsh_closeout import active_hold
+
+    if any(stage == "dsh_hold" and active_hold(json.loads(data)) for _, stage, data in holds):
         raise HttpError("request_outcome_unknown")
     recoveries = [
         list(r)
@@ -281,6 +283,7 @@ class _SourceExecution(JobExecution):
             ),
         )
         self.frozen, self.token, self.deadline = frozen, token, deadline
+        self.allowed_call_kinds = frozenset({"open_data"})
         self.runtime_guard = runtime_guard
 
     def _progress(self, db):

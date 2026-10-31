@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS studio_acceptance_releases (
  batch_id TEXT PRIMARY KEY REFERENCES studio_acceptance_batches(id),
  job_fence INTEGER NOT NULL, released_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS studio_acceptance_continuations (
+ batch_id TEXT PRIMARY KEY REFERENCES studio_acceptance_batches(id),
+ job_id TEXT NOT NULL, authorization TEXT NOT NULL, snapshot TEXT NOT NULL,
+ admitted_at TEXT NOT NULL
+);
 '''
 
 
@@ -53,7 +58,7 @@ def limits(value):
     return dict(value)
 
 
-def create(store, batch_id, *, deadline, caps, journeys, plan_sha256):
+def create(store, batch_id, *, deadline, caps, journeys, plan_sha256, cost_policy=None):
     """Local explicit opt-in only; no credentials, internal documents or network."""
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', batch_id):
         raise ValueError('invalid acceptance id')
@@ -63,6 +68,10 @@ def create(store, batch_id, *, deadline, caps, journeys, plan_sha256):
     if ends.tzinfo is None or ends <= datetime.now(UTC):
         raise ValueError('acceptance deadline must be in the future')
     caps = limits(caps)
+    if cost_policy is not None:
+        from project_watch.studio.research_budget import validate
+
+        cost_policy = validate(cost_policy)
     if not 1 <= len(journeys) <= 2 or len({j['project_id'] for j in journeys}) != len(journeys):
         raise ValueError('acceptance requires one or two distinct journeys')
     allocation = []
@@ -77,8 +86,11 @@ def create(store, batch_id, *, deadline, caps, journeys, plan_sha256):
     with closing(store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         # No upsert: repeating admission must never reset its clock or balance.
+        spec = dict(caps=caps, journeys=allocation, plan_sha256=plan_sha256)
+        if cost_policy is not None:
+            spec['cost_policy'] = cost_policy
         db.execute('INSERT INTO studio_acceptance_batches VALUES (?,?,?,?)',
-                   (batch_id, encode(dict(caps=caps, journeys=allocation, plan_sha256=plan_sha256)),
+                   (batch_id, encode(spec),
                     ends.astimezone(UTC).isoformat(), 'open'))
         for journey in allocation:
             frozen = public_input(db, journey['project_id'])
@@ -92,9 +104,11 @@ def _project(db, pid):
 
 
 def _active(db, row):
+    from project_watch.studio import research_window
+
     if row['state'] != 'open':
         raise HttpError('acceptance_closed')
-    if datetime.fromisoformat(row['deadline']) <= datetime.now(UTC):
+    if datetime.fromisoformat(research_window.deadline(db, row)) <= datetime.now(UTC):
         raise HttpError('acceptance_expired')
     if digest(public_input(db, row['project_id'])) != row['input_digest']:
         raise HttpError('acceptance_input_changed')
@@ -111,6 +125,9 @@ def bind_root(store, batch_id, job_id, slot):
         _active(db, row)
         if db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (job_id,)).fetchone():
             raise HttpError('acceptance_root_already_started')
+        if (json.loads(row['specification']).get('cost_policy') is not None and db.execute(
+                'SELECT 1 FROM studio_job_budget_links WHERE job_id=? LIMIT 1', (job_id,)).fetchone()):
+            raise HttpError('research_history_unpriced')
         db.execute('INSERT INTO studio_acceptance_jobs VALUES (?,?,NULL,?)', (job_id, job['project_id'], slot))
 
 
@@ -164,19 +181,93 @@ def guard_send(db, job, kind):
     if _ordinary_after_release(db, row, job['id']):
         return
     _active(db, row)
+    from project_watch.studio.research_window import guard_job
+
+    guard_job(db, row, job)
     if (job['kind'] not in JOBS or kind not in KINDS or not db.execute(
             'SELECT 1 FROM studio_acceptance_jobs WHERE job_id=? AND project_id=?',
             (job['id'], job['project_id'])).fetchone()):
         raise HttpError('acceptance_unbound_job')
-    allocation, specification = json.loads(row['allocation']), json.loads(row['specification'])
-    if (usage(db, row['batch_id'], kind) >= specification['caps'][kind]
-            or usage(db, row['batch_id'], kind, project_id=job['project_id']) >= allocation['caps'][kind]):
-        raise HttpError('acceptance_budget_exhausted')
 
 
 def close(store, batch_id):
     with closing(store._connect()) as db, db:
         db.execute("UPDATE studio_acceptance_batches SET state='closed' WHERE id=?", (batch_id,))
+
+
+def continue_read_failure(store, batch_id, job_id, *, authorization):
+    """Explicit one-time continuation of an overbroad pre-model read fence.
+
+    Same batch/job/account/deadline. No release, new root, request replay permit
+    or cost reset. The original terminal job and checkpoints are archived before
+    it can be claimed again. This is deliberately not an automatic retry API.
+    """
+    from project_watch.studio.execution import JobExecution
+
+    if not isinstance(authorization, str) or not 1 <= len(authorization) <= 200:
+        raise ValueError('explicit continuation authorization required')
+    with closing(store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        job = db.execute('SELECT * FROM studio_jobs WHERE id=?', (job_id,)).fetchone()
+        row = _project(db, job['project_id']) if job else None
+        if (not row or row['batch_id'] != batch_id or row['state'] != 'closed'
+                or job['status'] != 'failed' or job['error'] != 'research_window_failed'
+                or job['kind'] != 'external'
+                or not db.execute('SELECT 1 FROM studio_acceptance_jobs WHERE job_id=?', (job_id,)).fetchone()):
+            raise HttpError('acceptance_continuation_ineligible')
+        _active(db, {**dict(row), 'state': 'open'})
+        if db.execute('SELECT 1 FROM studio_acceptance_continuations WHERE batch_id=?', (batch_id,)).fetchone():
+            raise HttpError('acceptance_continuation_consumed')
+        if db.execute('SELECT 1 FROM studio_acceptance_releases WHERE batch_id=?', (batch_id,)).fetchone():
+            raise HttpError('acceptance_continuation_released')
+        members = [r[0] for r in db.execute('SELECT j.job_id FROM studio_acceptance_jobs j '
+            'JOIN studio_acceptance_projects p ON p.project_id=j.project_id WHERE p.batch_id=?', (batch_id,))]
+        calls = [dict(r) for r in db.execute('SELECT c.* FROM studio_job_calls c '
+            'JOIN studio_acceptance_jobs j ON j.job_id=c.job_id JOIN studio_acceptance_projects p '
+            'ON p.project_id=j.project_id WHERE p.batch_id=? ORDER BY c.job_id,c.call_key', (batch_id,))]
+        if (any(c['kind'] == 'model' or c['status'] not in ('completed', 'failed_read', 'not_sent') for c in calls)
+                or not any(c['status'] == 'completed' and (c['response_status'] or 0) >= 400 for c in calls)
+                or db.execute("SELECT 1 FROM studio_jobs WHERE status='running' LIMIT 1").fetchone()):
+            raise HttpError('acceptance_continuation_ambiguous')
+        project = db.execute('SELECT status FROM studio_projects WHERE project_id=?', (job['project_id'],)).fetchone()
+        if project[0] != 'active':
+            raise HttpError('project_paused')
+        costs = [dict(r) for r in db.execute('SELECT * FROM studio_research_costs WHERE batch_id=? ORDER BY job_id,call_key', (batch_id,))]
+        if len(costs) != len(calls) or any(c['settled'] == -1 for c in costs):
+            raise HttpError('research_history_unpriced')
+        checkpoints = [dict(r) for r in db.execute('SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? ORDER BY stage', (job_id,))]
+        hold = JobExecution(store, dict(job)).read_checkpoint('dsh_hold', db=db)
+        if hold != {'code': 'research_window_failed'}:
+            raise HttpError('acceptance_continuation_hold_changed')
+        for call in calls:
+            body = call.pop('response_body')
+            call['response_sha256'] = hashlib.sha256(body).hexdigest() if body is not None else None
+        snapshot = dict(job=dict(job), members=members, calls=calls, costs=costs,
+                        checkpoints=checkpoints, specification=row['specification'], deadline=row['deadline'],
+                        usage={k: usage(db, batch_id, k) for k in KINDS})
+        db.execute('INSERT INTO studio_acceptance_continuations VALUES (?,?,?,?,?)',
+                   (batch_id, job_id, authorization, encode(snapshot), datetime.now(UTC).isoformat()))
+        db.execute("UPDATE studio_acceptance_batches SET state='open' WHERE id=?", (batch_id,))
+        db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,lease_until=NULL,lease_token='' WHERE id=?", (job_id,))
+
+
+def prepare_continuation(execution):
+    """Lease-bound state transition; archived checkpoints and call rows stay intact."""
+    with closing(execution.store._connect()) as db:
+        permit = db.execute('SELECT * FROM studio_acceptance_continuations WHERE job_id=?', (execution.job['id'],)).fetchone()
+    if not permit or execution.read_checkpoint('acceptance_read_continued_v1'):
+        return
+    snapshot = json.loads(permit['snapshot'])
+    # Only locally refused actions are made eligible again. The unchanged
+    # request journal replays received failures and forbids unknown requests.
+    state = execution.read_checkpoint('bootstrap_collection_v1')
+    if state:
+        state['actions'] = {k: v for k, v in state['actions'].items() if v.get('outcome') != 'research_window_failed'}
+        execution.checkpoint_chunked('bootstrap_collection_v1', state)
+    execution.checkpoint('dsh_hold', {})
+    execution.checkpoint('acceptance_read_continued_v1', dict(batch_id=permit['batch_id'],
+        authorization=permit['authorization'], snapshot_sha256=digest(snapshot), deadline=snapshot['deadline'],
+        carried_usage=snapshot['usage']))
 
 
 def _ordinary_after_release(db, row, job_id):
@@ -209,6 +300,7 @@ def release(store, batch_id):
     """Explicit, irreversible end; retain every member, receipt and original cap."""
     from project_watch.studio.material_ownership import project_guard
     from project_watch.studio.recovery import project_request_holds, unknown_queries
+    from project_watch.studio.research_window import deadline as effective_deadline
 
     with closing(store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
@@ -217,7 +309,7 @@ def release(store, batch_id):
             raise HttpError('acceptance_missing')
         if db.execute('SELECT 1 FROM studio_acceptance_releases WHERE batch_id=?', (batch_id,)).fetchone():
             return  # No new fence, clock or allowance on repeated release.
-        if batch['state'] == 'open' and datetime.fromisoformat(batch['deadline']) > datetime.now(UTC):
+        if batch['state'] == 'open' and datetime.fromisoformat(effective_deadline(db, {**dict(batch), 'batch_id': batch_id})) > datetime.now(UTC):
             raise HttpError('acceptance_not_ended')
         for row in db.execute('SELECT project_id FROM studio_acceptance_projects WHERE batch_id=?', (batch_id,)):
             pid = row[0]
@@ -234,23 +326,5 @@ def release(store, batch_id):
 
 
 def remaining(store, job):
-    """Advisory closeout view only; guard_send remains the atomic authority."""
-    with closing(store._connect()) as db:
-        db.execute('BEGIN')
-        row = _project(db, job['project_id'])
-        if row is None:
-            return None
-        if _ordinary_after_release(db, row, job['id']):
-            return None
-        try:
-            _active(db, row)
-        except HttpError:
-            return dict.fromkeys(KINDS, 0)
-        if job['kind'] not in JOBS or not db.execute(
-                'SELECT 1 FROM studio_acceptance_jobs WHERE job_id=? AND project_id=?',
-                (job['id'], job['project_id'])).fetchone():
-            return dict.fromkeys(KINDS, 0)
-        allocation, spec = json.loads(row['allocation']), json.loads(row['specification'])
-        return {kind: max(0, min(spec['caps'][kind] - usage(db, row['batch_id'], kind),
-                    allocation['caps'][kind] - usage(db, row['batch_id'], kind, project_id=job['project_id'])))
-                for kind in KINDS}
+    """No application count quota; authorization is checked separately on send."""
+    return dict.fromkeys(KINDS, None)

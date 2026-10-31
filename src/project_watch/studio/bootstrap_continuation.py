@@ -75,7 +75,7 @@ def admit(execution, origin_job_id):
             if action['status'] != 'complete' or reader.read_checkpoint(RESULT + key, db=db) is None:
                 raise ValueError('completed collection action receipt required')
         reader = SimpleNamespace(job=dict(old), read_checkpoint=lambda stage: origin.read_checkpoint(stage, db=db))
-        refs = [r for values in collection_dsh._refs(SimpleNamespace(execution=reader, project_id=pid)).values() for r in values]
+        refs = [r for values in collection_dsh._refs(SimpleNamespace(execution=reader, project_id=pid, store=execution.store)).values() for r in values]
         for ref in refs:
             if not db.execute('SELECT 1 FROM studio_evidence_versions e JOIN studio_items i ON i.project_id=e.project_id '
                     "WHERE e.project_id=? AND e.id=? AND e.visibility='public' AND i.id=?",
