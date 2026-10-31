@@ -365,7 +365,9 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
             check_capacity(db)
             watch = monitor().add_watchpoint(project_id, text, spec['label'], spec['queries'], spec['criteria'], body.alert, db=db)
             if current.get('activated') and current.get('status') == 'active':
-                store.enqueue(project_id, 'external', db=db)
+                from project_watch.studio import spine
+
+                spine.request_round(store, project_id, 'manual', db=db)
             return {'id': watch['id']}
 
         result, operation_id, replayed = pipeline.direct_operations.run('add_watchpoint',

@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import closing, suppress
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -2945,10 +2945,11 @@ class StudioWorker:
         self.dispatch_rebuilds(model_ready=settings.model.ready)
         from project_watch.studio import signals as sig
 
-        # Queue the short company-first round before a missing dossier can occupy
-        # the single worker. Pending continuations suppress a second round.
+        # Queue the public round before a missing dossier can occupy the single worker.
+        from project_watch.studio import spine
+
         for project_id in sig.due_external(store, self.pipeline.monitor, settings.refresh_hours):
-            store.enqueue(project_id, "external", automatic=True)
+            spine.request_round(store, project_id, 'scheduled', automatic=True)
         if settings.model.ready:
             # Without a model the documents stay readable; analysis starts once configured.
             for project_id in store.unanalyzed_ready_projects(model_binding=self.pipeline.model_binding()):
@@ -2964,13 +2965,8 @@ class StudioWorker:
                     self.pipeline.schedule_business(project['id'])
                     self.pipeline.schedule_details(project['id'])
                     self.pipeline.schedule_competition(project['id'])
-                self.pipeline.schedule_insight(project['id'])
-                if os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1':
-                    from project_watch.studio import question_work, scope_maintenance
-
-                    with suppress(HttpError):
-                        question_work.dispatch(self.pipeline, project['id'])
-                        scope_maintenance.dispatch(self.pipeline, project['id'])
+                # Question assessment and scope revision run inside each analysis, not as separate jobs.
+                spine.schedule_document_analysis(self.pipeline, project['id'])
             # Only remember successful passes; an exception must retry normally.
             if changed:
                 self._analysis_stamp = stamp

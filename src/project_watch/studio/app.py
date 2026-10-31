@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from project_watch.local_ocr import ocr_capabilities
 from project_watch.static_files import ProductStaticFiles
 from project_watch.studio import digest as dg
-from project_watch.studio import finance, review
+from project_watch.studio import finance, review, spine
 from project_watch.studio.agent_access import attach_agent_routes
 from project_watch.studio.application import StudioApplication
 from project_watch.studio.direct_operations import OperationBlocked
@@ -30,7 +30,7 @@ from project_watch.studio.public_profile import company_trials
 from project_watch.studio.resolve import resolve_company
 from project_watch.studio.settings import SearchConfig, SettingsStore, SettingsUnavailable
 from project_watch.studio.sources import Collectors
-from project_watch.studio.store import FollowupSuperseded, StudioStore
+from project_watch.studio.store import StudioStore
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 DRAFT_TTL_SECONDS = 6 * 3600
@@ -159,6 +159,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     plan_templates.load_local(data_dir / "plan_templates")  # instance-local industry methods (e.g. converted NEI)
     pipeline = Pipeline(repository, store, settings_store)
     pipeline.monitoring_plan.migrate_framework()  # once: earlier eight sections → four rings, nine dimensions
+    # Unfinished jobs of retired kinds end as 'archived'; their requests stay in the journal, never resent.
+    from project_watch.studio.dispatch import archive_legacy
+
+    archive_legacy(store)
     # Only the composition root may import optional private implementations.
     validator = None
     try:
@@ -659,7 +663,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                                                reference=stored.display_name,
                                                content_sha256=stored.sha256, db=db)
                 repository.enqueue_intake(project.id, source.id, db=db)
-            store.enqueue(project.id, "external", db=db)
+            spine.request_round(store, project.id, 'created', db=db)
             return {'id': project.id}
 
         try:
@@ -814,7 +818,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         project = project_or_404(project_id)
         store.upsert_project(project_id, {**project, "legal_name": project.get("legal_name") or project["name"]},
                              consent=True)
-        store.enqueue(project_id, "external")
+        spine.request_round(store, project_id, 'manual')
         return store.get_project(project_id)
 
     @app.post("/api/studio/projects/{project_id}/files", status_code=202)
@@ -890,24 +894,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(409, '此项目由已有 Agent 更新。请到“连接 Agent”复制研究指令，不会调用内置 API。')
         if not project.get("activated"):
             raise HTTPException(409, "项目尚未启动监控")
-        if body.kind == 'external':
-            from project_watch.studio.recovery import RefreshBlocked, enqueue_external_refresh
-
-            try:
-                return enqueue_external_refresh(store, project_id)
-            except RefreshBlocked as exc:
-                return JSONResponse(status_code=409, content={'detail': str(exc), 'code': 'refresh_blocked',
-                    'dispatch': 'not_started', 'blocking_jobs': exc.jobs})
-        if body.kind == 'external_followup':
-            if project['status'] != 'active':
-                raise HTTPException(409, '请先恢复监控')
-            try:
-                return store.retry_external_followup(project_id)
-            except FollowupSuperseded:
-                # Stale receipts are not resumed; the owner's rerun starts a round on current inputs.
-                return store.enqueue(project_id, 'external')
-            except ValueError as exc:
-                raise HTTPException(409, str(exc)) from exc
+        if body.kind in ('external', 'external_followup'):
+            # One round: collect, then analysis and report on the collected batch.
+            # Earlier unsettled requests are accounted per request, never a reason to refuse.
+            return spine.request_round(store, project_id, 'manual')
         if body.kind == 'commercial':
             if project['status'] != 'active':
                 raise HTTPException(409, '请先恢复监控')
@@ -929,21 +919,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                                           'message': '当前安装未包含深度分析生成器；已有记录仍可查看'})
             if not settings_store.load().model.ready:
                 raise HTTPException(409, '请先在设置中连接 AI 模型')
-            from project_watch.studio import insight, snapshot_work
-
-            saved = snapshot_work.view(pipeline, project_id)
-            if saved:
-                if not saved['can_analyze']:
-                    raise HTTPException(409, '当前材料暂不能重新分析，请查看任务状态；已有结果保留')
-                try:
-                    return snapshot_work.enqueue(pipeline, project_id, saved['snapshot_id'], uuid.uuid4().hex,
-                                                 parent_attempt_id=saved['parent_attempt_id'])
-                except (ValueError, HttpError) as exc:
-                    raise HTTPException(409, '材料或任务状态已变化，请刷新后查看；已有结果保留') from exc
-
-            if insight.held(store, project_id):
-                raise HTTPException(409, '该项目有结果不明的模型请求等待确认恢复；请先处理原任务')
-            return store.enqueue(project_id, 'insight', input_version='manual:' + uuid.uuid4().hex)
+            if project['status'] != 'active':
+                raise HTTPException(409, '请先恢复监控')
+            # Analysis on a fresh snapshot of saved material; it never collects.
+            return store.enqueue(project_id, 'analyze', input_version='manual:' + uuid.uuid4().hex)
         if body.kind == "internal":
             store.reset_analyzed(project_id)
         if body.kind == 'details':
