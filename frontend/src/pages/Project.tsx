@@ -3,7 +3,7 @@ import { collectionChannelExecution, collectionExecutionLabel } from "../externa
 import { DiscoveredSources } from "../DiscoveredSources";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, ApiError, type Category, type BodyCoverage, type ProjectDetail } from "../api";
+import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
 import { CompetitionView, IndustryView, NewsView } from "../landscape";
 import { MetricsView } from "../metrics";
 import { Columns, Figure, Reference, Skeleton, TabSkeleton, VerdictBand } from "../frame";
@@ -22,7 +22,7 @@ import { TrackBoard } from "../track";
 import { TechRoutes } from "../tech";
 import { projectWork, needsAttention, isMoving } from "../workState";
 import { ProjectActivity, useVisiblePoll } from "../Operational";
-import { RecoveryDialog } from '../RecoveryDialog';
+import { RoundProgress } from '../roundView';
 import { IndustryJudgment, TechnologyJudgment } from "../judgment";
 import { insightRevision, workRevision } from "../workState";
 import { ClinicalView, PapersView, PatentsView } from "../researchPages";
@@ -188,32 +188,22 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
       </>} status={status} />
       <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />
       <ErrorNote error={error} />
-      {error instanceof ApiError && error.code === 'refresh_blocked' && <Link className="btn btn-sm" to={`/tasks?project=${project.id}`}>查看先前任务</Link>}
     </>
   );
 }
 
 export function Progress({ detail, onReload }: { detail: ProjectDetail; onReload: () => void }) {
-  const [recovering, setRecovering] = useState(false);
   const work = projectWork(detail);
   const failed = work.failures.find(j => j.status === "failed");
-  const recoveryIndex = useAsync(() => api.recoveryProject(detail.project.id),
-    [detail.project.id, detail.jobs.map(j => `${j.id}:${j.status}`).join('|')]);
-  const pendingRecovery = !!recoveryIndex.data?.items.length;
-  const activeCount = detail.jobs.filter(j => j.status === "running" || j.status === "queued").length;
-  useEffect(() => { setRecovering(false); }, [detail.project.id, failed?.id, activeCount]);
   return <div className="progress op-project-progress">
     <ProjectActivity detail={detail} />
-    {(needsAttention(work.state) || work.stop || pendingRecovery) && <div className="op-help muted small">
+    {(needsAttention(work.state) || work.stop) && <div className="op-help muted small">
       已有结果保留。
       {work.stop ? <span>{errorMessage(work.stop.error)}</span>
         : failed?.error && <span>{errorMessage(failed.error)}</span>}
-      {pendingRecovery && <span>仍有待确认请求，完整链路尚未恢复。</span>}
-      {(failed || pendingRecovery) && <button className="link" onClick={() => setRecovering(true)}>查看恢复选项 →</button>}
-      {(work.state === "needs_confirmation" || work.stop?.state === "needs_confirmation") && " 不会自动重发结果不明的请求。"}
     </div>}
-    {recovering && <RecoveryDialog key={detail.project.id} projectId={detail.project.id} job={failed}
-      onClose={() => setRecovering(false)} onQueued={onReload} />}
+    {/* Stage by stage: collected material is visible before analysis; a failed analysis can be redone from it. */}
+    <RoundProgress projectId={detail.project.id} onReload={onReload} />
     {work.state === "agent" && <Link to={`/agents?project=${detail.project.id}`}>连接 Agent →</Link>}
     {detail.brief?.origin && <span className="muted small">{detail.brief.origin.producer} · 本批由外部 Agent 写回</span>}
     {detail.detail_summary?.status === "partial" && !work.moving && <span className="muted small">

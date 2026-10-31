@@ -39,6 +39,7 @@ export const JOB_LABEL: Record<string, string> = {
   brief: "生成简报", public_profile: "补充公开档案", landscape: "整理竞争与行业",
   business: "整理产品与用途", competition: "更新竞对资料", details: "整理商业关系与政策条件",
   commercial: "更新专业来源", insight: "深度分析",
+  collect: "收录公开信息", analyze: "分析本轮信息", report: "整理本轮动态",
 };
 export const isMoving = (state: string) => state === "running" || state === "waiting_response" || state === "stopping";
 export const needsAttention = (state: string) => ["failed", "needs_confirmation", "stalled", "partial", "blocked", "offline", "recovering", "unavailable"].includes(state);

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, ApiError, type ResearchCategory, type ResearchSource, type ResearchSourcePage } from './api';
 import { useVisiblePoll } from './Operational';
 import { CATEGORY_LABEL, relTime, useAsync } from './ui';
+import './roundView.css';
 
 type Reader = typeof api.researchSources;
 
@@ -49,6 +50,8 @@ export function ResearchMore({page, loading, more}: {page?: ResearchSourcePage; 
   </button> : null;
 }
 
+/** The reviewed relation of a paper/patent to the monitored company: authorship/applicant is evidence, a search hit is not. */
+const RELATION: Record<string, string> = { subject: '公司署名/申请人', competitor: '竞品', field: '同领域', unrelated: '不相关' };
 const strings = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string').join('、') : '';
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 const groupLabel = (item: ResearchSource, remaining = false) => item.family?.basis === 'listed_versions' ? '其他公开版本'
@@ -81,7 +84,8 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
       <div className="item-body">
         <div className="item-meta"><span className={`cat cat-${item.category}`}>{CATEGORY_LABEL[item.category]}</span>
           <span className="muted">{item.source}</span>
-          {item.processing_status === 'pending' && <span className="muted">相关性待核</span>}
+          {item.processing_status === 'pending' ? <span className="muted">相关性待核</span>
+            : RELATION[text(x.research_relation)] && <span className={`research-relation relation-${text(x.research_relation)}`}>{RELATION[text(x.research_relation)]}</span>}
           <time className="muted item-date">{item.published_at ? relTime(item.published_at) : `发表日期未提供 · 收录于 ${relTime(item.collected_at)}`}</time>
         </div>
         {href ? <a className="item-title" href={href} target="_blank" rel="noreferrer noopener">{item.title}</a> : <span className="item-title">{item.title}</span>}

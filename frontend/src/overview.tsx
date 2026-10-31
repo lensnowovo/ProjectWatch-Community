@@ -3,6 +3,7 @@ import { PositionLine } from "./race";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Block, Columns, Figure, Reference, Skeleton } from "./frame";
+import { AssumptionsPanel } from "./assumptionsPanel";
 import { api, type Item, type KeyNumbers, type ProjectDetail, type PublicFact, type Ref } from "./api";
 import { periodLabel } from "./metrics";
 import { Reveal } from "./motion";
@@ -469,6 +470,7 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
         <div className="tf-meta">{record ? `${record?.origin?.producer ? `${record.origin.producer} 写回` : "AI"} 交叉分析 · 依据 ${record.total} 条 · ${relTime(record.generated_at)}` : brief ? `${brief.origin?.producer || "AI"} 整理 · ${relTime(brief.updated_at)}` : ""}</div>
       </div>
       {brief?.dependency?.status === "stale" && <p className="muted small">资料或关系已更正，此版待更新。</p>}
+      <AssumptionsPanel projectId={project.id} />
 
       {missingOCR.length > 0 && (
         <div className="overview-attention">

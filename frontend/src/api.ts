@@ -950,6 +950,14 @@ export const api = {
   startTopicResearch: (id: string, watchId: string, version: string) => request<Job>('POST',
     `/api/studio/projects/${id}/research-topic`, { watch_id: watchId, expected_version: version }),
   discoveredSources: (id: string, offset = 0) => request<DiscoveredSourcePage>('GET', `/api/studio/projects/${id}/discovered-sources?offset=${offset}`),
+  projectRound: (id: string) => request<ProjectRound>('GET', `/api/studio/projects/${id}/round`),
+  reanalyze: (id: string) => request<Job>('POST', `/api/studio/projects/${id}/reanalyze`, { accept_duplicate_cost: true }),
+  assumptions: (id: string, includeRetired = false) =>
+    request<{ items: Assumption[] }>('GET', `/api/studio/projects/${id}/assumptions${includeRetired ? '?include_retired=true' : ''}`),
+  addAssumption: (id: string, text: string) => request<Assumption>('POST', `/api/studio/projects/${id}/assumptions`, { text }),
+  patchAssumption: (id: string, assumptionId: string, change: { text?: string; status?: 'active' | 'retired' }) =>
+    request<Assumption>('PATCH', `/api/studio/projects/${id}/assumptions/${encodeURIComponent(assumptionId)}`, change),
+  warning: (id: string) => request<EarlyWarning | null>('GET', `/api/studio/projects/${id}/warning`),
   researchSources: (id: string, category: ResearchCategory, offset = 0, revision?: string) =>
     request<ResearchSourcePage>('GET', `/api/studio/projects/${id}/research-sources?${new URLSearchParams({category, offset: String(offset), ...(revision ? {revision} : {})})}`),
   collectionSources: (id: string) => request<CollectionSourceChoices>('GET', `/api/studio/projects/${id}/collection-sources`),
@@ -1036,4 +1044,30 @@ export interface DiscoveredSourcePage {
     read_scope: string; read_status: string | null; reading_basis: string | null;
     body_evidence_version_id: string | null; processing_status: 'pending' | 'organized' }[];
   total: number; pending: number; offset: number; next_offset: number | null;
+}
+
+/** The rewritten pipeline's latest round: collected → analysed → reported. */
+export interface RoundStage {
+  job_id: string; status: string; stage: string; started_at: string | null; finished_at: string | null; error: string;
+  result: null | {
+    status: 'complete' | 'partial' | 'failed' | 'waiting_for_model' | string;
+    outcomes?: Record<string, number>; patent_documents?: string[]; bodies_read?: number;
+    published?: string[]; items_reviewed?: number; follow_through?: Record<string, string>; new_events?: number;
+  };
+}
+export interface ProjectRound {
+  collect: RoundStage | null; analyze: RoundStage | null; report: RoundStage | null;
+  materials: Partial<Record<ResearchCategory, number>>; running: boolean; can_reanalyze: boolean;
+}
+export interface Assumption {
+  id: string; text: string; basis: string; status: 'active' | 'retired'; author: 'model' | 'user';
+  user_override: boolean; version: number; updated_at: string;
+}
+export interface WarningSource { id: string; title: string; url: string; source: string; published_at: string | null; category: string; importance: string }
+export interface EarlyWarning {
+  status: 'checked' | 'skipped'; reason?: string; created_at: string;
+  assumptions?: { id: string; text: string; status: 'strengthened' | 'weakened' | 'unchanged' | 'unclear';
+    signals: { item: string; why: string; source?: WarningSource }[] }[];
+  unforeseen?: { text: string; items: string[]; sources?: WarningSource[] }[];
+  explore?: { query: string; reason: string }[];
 }
