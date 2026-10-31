@@ -2,6 +2,7 @@
   "schema_version": 1,
   "composition_root": "project_watch.studio.app",
   "modules": {
+    "project_watch.studio.material_snapshot": "Core",
     "project_watch.studio.collection_view": "Core",
     "project_watch.studio.evidence_tasks": "Core",
     "project_watch.studio.event_revisions": "Core",

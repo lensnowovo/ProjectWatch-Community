@@ -1,0 +1,163 @@
+"""Immutable raw-material inputs; analysis generation has no collection capability.
+
+Snapshots reuse the immutable version store but never advance judgment heads.
+They reference original evidence, not an additional mutable facts database.
+This boundary produces drafts, not reviewed publications.
+"""
+import json
+from contextlib import closing, suppress
+
+from project_watch.studio.dsh_bootstrap import digest
+from project_watch.studio.http import HttpError
+from project_watch.studio.material_ownership import project_guard
+from project_watch.studio.store import now
+
+KEY = 'material-snapshot-v1'
+
+
+def _permitted(db, project_id, version_id):
+    row = db.execute(
+        'SELECT e.record,e.visibility,l.status AS lifecycle,n.visibility AS head_visibility,hl.status AS head_lifecycle '
+        'FROM studio_evidence_versions e '
+        'JOIN studio_evidence_heads h ON h.project_id=e.project_id AND h.source_key=e.source_key '
+        'JOIN studio_evidence_versions n ON n.id=h.evidence_version_id AND n.project_id=e.project_id '
+        'LEFT JOIN studio_evidence_lifecycle l ON l.project_id=e.project_id AND l.evidence_version_id=e.id '
+        'LEFT JOIN studio_evidence_lifecycle hl ON hl.project_id=n.project_id AND hl.evidence_version_id=n.id '
+        'WHERE e.project_id=? AND e.id=?', (project_id, version_id)).fetchone()
+    if not row or row['visibility'] != 'public' or row['head_visibility'] != 'public':
+        raise ValueError('snapshot material is outside permitted public scope')
+    if 'withdrawn' in (row['lifecycle'], row['head_lifecycle']):
+        raise ValueError('snapshot material withdrawn')
+    evidence = json.loads(row['record'])
+    # Historical snapshots must still honor later item exclusions. Match the
+    # stable source key as well as original observations, not only today's head.
+    excluded = db.execute(
+        "SELECT 1 FROM studio_items WHERE project_id=? AND (status='dismissed' OR relevant=0) "
+        "AND (key=? OR 'item:'||id=?)", (project_id, evidence['source_key'], evidence['source_key'])).fetchone()
+    if not excluded and db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_collection_observations'").fetchone():
+        excluded = db.execute(
+            "SELECT 1 FROM studio_collection_observations o JOIN studio_items i ON i.id=o.item_id "
+            "WHERE i.project_id=? AND o.evidence_version_id=? AND (i.status='dismissed' OR i.relevant=0)",
+            (project_id, version_id)).fetchone()
+    if excluded:
+        raise ValueError('snapshot material excluded')
+    return evidence
+
+
+def _guard(execution, db):
+    execution._guard(db)
+    project_guard(db, execution.job['project_id'], execution.job['id'])
+    project = db.execute('SELECT status,consent_at FROM studio_projects WHERE project_id=?',
+                         (execution.job['project_id'],)).fetchone()
+    if not project or project[0] != 'active':
+        raise HttpError('project_paused')
+    if not project[1]:
+        raise HttpError('project_consent_required')
+
+
+def capture(execution):
+    """Freeze current public originals, scope and collection receipts atomically.
+
+    Replay returns the same manifest. Newly acquired material needs a new batch;
+    it cannot silently change the input of an already-started analysis.
+    """
+    pid, jid, store = execution.job['project_id'], execution.job['id'], execution.store
+    with closing(store._connect()) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        execution._guard(db)  # Local persistence does not spend or reset provider budgets.
+        key = KEY + ':' + jid
+        previous = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND artifact_key=?',
+                              (pid, key)).fetchone()
+        if previous:
+            return json.loads(previous[0])
+        materials, exclusions = [], []
+        for row in db.execute('SELECT evidence_version_id FROM studio_evidence_heads WHERE project_id=? ORDER BY source_key', (pid,)):
+            eid = row[0]
+            try:
+                evidence = _permitted(db, pid, eid)
+            except ValueError:
+                exclusions.append(dict(evidence_version_id=eid, reason='not_permitted'))
+                continue
+            materials.append(dict(evidence_version_id=eid, fingerprint=digest(evidence),
+                source_key=evidence['source_key'], classification='candidate',
+                source_type=evidence['source_type'], read_scope=evidence['read_scope']))
+        baseline = {r[0]: r[1] for r in db.execute(
+            'SELECT artifact_key,version_id FROM studio_insight_heads WHERE project_id=? ORDER BY artifact_key', (pid,))}
+        objects = {r[0]: r[1] for r in db.execute(
+            "SELECT id,version FROM studio_monitor_objects WHERE project_id=? AND visibility='public' ORDER BY id", (pid,))}
+        ledgers = [dict(stage=r[0], fingerprint=digest(json.loads(r[1]))) for r in db.execute(
+            "SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? AND "
+            "(stage='collection_round_v1' OR stage LIKE 'collection_extra:%') ORDER BY stage", (jid,))]
+        value = dict(protocol=1, project_id=pid, batch_id=jid, materials=materials,
+                     exclusions=exclusions, baseline_analysis=baseline, object_versions=objects,
+                     collection_receipts=ledgers, visibility='public')
+        signature = digest(value)
+        value.update(id=digest([KEY, pid, jid, signature]), fingerprint=signature, created_at=now())
+        db.execute('INSERT INTO studio_insight_versions VALUES (?,?,?,?,?,?)',
+            (value['id'], pid, key, signature, json.dumps(value, ensure_ascii=False), value['created_at']))
+        return value
+
+
+def read(store, project_id, snapshot_id):
+    """Resolve every original part, rechecking disclosure; no prefix clipping."""
+    with closing(store._connect()) as db:
+        db.execute('BEGIN')
+        row = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND id=? AND artifact_key LIKE ?',
+                         (project_id, snapshot_id, KEY + ':%')).fetchone()
+        if not row:
+            raise KeyError('snapshot not found in project')
+        value = json.loads(row[0])
+        originals = []
+        for material in value['materials']:
+            evidence = _permitted(db, project_id, material['evidence_version_id'])
+            if digest(evidence) != material['fingerprint']:
+                raise ValueError('snapshot evidence fingerprint changed')
+            originals.append({**material, 'evidence': evidence})
+        return {**value, 'materials': originals}
+
+
+def analyze_saved(execution, snapshot_id, *, attempt_key, analyze):
+    """Invoke an injected analysis-only role on fixed originals, retaining drafts.
+
+    The role must use the existing journal/lease/cost ledger. This function has
+    no collector, HTTP client, scheduler or event publisher. Terminal attempts
+    are replay-only; a settled failure requires an explicit new attempt key.
+    An interrupted running attempt is never automatically redispatched.
+    """
+    if not isinstance(attempt_key, str) or not attempt_key.strip():
+        raise ValueError('analysis attempt key required')
+    stage = 'snapshot-analysis:' + digest([snapshot_id, attempt_key])[:40]
+    with closing(execution.store._connect()) as db:
+        _guard(execution, db)
+    context = read(execution.store, execution.job['project_id'], snapshot_id)
+    previous = execution.read_checkpoint(stage)
+    if previous:
+        if previous['status'] == 'draft':
+            return previous
+        raise ValueError('new analysis attempt required; previous attempt retained')
+    if not context['materials']:
+        raise ValueError('snapshot contains no permitted material')
+    receipt = dict(snapshot_id=snapshot_id, attempt_key=attempt_key, job_id=execution.job['id'],
+                   status='running', started_at=now(), publication='not_reviewed')
+    execution.checkpoint_chunked(stage, receipt)
+    try:
+        draft = analyze(context)
+        if not isinstance(draft, dict):
+            raise ValueError('analysis draft must be an object')
+        # Disclosure can change while a model is working; do not publish or
+        # return a usable draft whose evidence was withdrawn during that call.
+        read(execution.store, execution.job['project_id'], snapshot_id)
+        with closing(execution.store._connect()) as db:
+            _guard(execution, db)
+        receipt.update(status='draft', draft=draft, finished_at=now())
+        execution.checkpoint_chunked(stage, receipt)
+        return receipt
+    except Exception as exc:
+        uncertain = getattr(exc, 'code', None) == 'request_outcome_unknown'
+        with suppress(Exception):
+            uncertain = uncertain or any(v['unknown'] for v in execution.usage().values())
+        receipt.update(status='outcome_unknown' if uncertain else 'failed',
+                       error=getattr(exc, 'code', type(exc).__name__), finished_at=now())
+        with suppress(Exception):  # An expired lease cannot write a receipt.
+            execution.checkpoint_chunked(stage, receipt)
+        raise

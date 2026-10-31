@@ -216,3 +216,33 @@ def test_structured_record_contract_cannot_claim_full_document_read():
                     {'parts': [EvidencePart(locator_kind='pdf_page', locator='1', text='text')]}):
         with pytest.raises(ValueError):
             EvidenceInput(**(deepcopy(data) | changes))
+
+
+def test_failed_source_does_not_block_two_saved_candidates_or_recollect_on_reopen(host):
+    from project_watch.studio.research_sources import research_sources
+
+    research, _unit, ingest = host
+    p = plan([candidate() | {'source': 'clinical_term', 'category': 'trial', 'query': name}
+              for name in ('source-a', 'source-b', 'source-c')],
+             round_id=research.execution.job['id'], project_id=research.project_id)
+    calls = []
+    def collect(unit):
+        calls.append(unit['query'])
+        if unit['query'] == 'source-b':
+            raise HttpError('source_timeout')  # Known read-only source failure, not model unknown.
+        item = trial()
+        item['url'] += '?source=' + unit['query']
+        item['extra']['source_identity'] = 'synthetic:' + unit['query']
+        item['extra']['nct_id'] = unit['query']
+        return dict(items=[item], request_ids=['synthetic-' + unit['query']], truncated=False)
+    ledger = CollectionLedger(research.execution, p)
+    coverage = run_collection(ledger, collect=collect, ingest=ingest, guard=research.guard)
+    assert coverage['status'] == 'partial'
+    assert sorted(r['outcome'] for r in ledger.receipts) == ['failed', 'success', 'success']
+    page = research_sources(research.store, research.project_id, 'trial')
+    assert page['total'] == 2
+    assert all(item['processing_status'] == 'pending' for item in page['items'])
+    assert research.store.list_events(project_id=research.project_id) == []
+    reopened = CollectionLedger(research.execution, p)
+    assert run_collection(reopened, collect=collect, ingest=ingest, guard=research.guard) == coverage
+    assert sorted(calls) == ['source-a', 'source-b', 'source-c']
