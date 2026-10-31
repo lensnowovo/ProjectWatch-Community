@@ -47,6 +47,16 @@ def model_answer(system, user, state):
         return {'results': results}
     if '是否在讲同一事件' in system:
         return {'results': [{'pair': n + 1, 'same': False} for n in range(user.count('pair'))]}
+    if '列出这项投资成立所依赖的关键假设' in system:
+        return {'assumptions': [{'text': '核心研发管线持续推进', 'basis': '公司资料'},
+                                {'text': '专利布局覆盖核心技术', 'basis': '公司资料'}]}
+    if '对照每条投资假设' in system:
+        ids = re.findall(r'^(A[0-9a-f]{8})：', user, re.M)
+        items = re.findall(r'id=(\S+)', user)
+        return {'assumptions': [{'id': ids[0], 'status': 'strengthened', 'signals': [{'item': items[0], 'why': '署名研究'}]},
+                                {'id': ids[1], 'status': 'weakened', 'signals': [{'item': 'not-given', 'why': '编造'}]}],
+                'unforeseen': [{'text': '出现新技术路线', 'items': [items[0]]}, {'text': '无依据', 'items': []}],
+                'explore': [{'query': 'Synthetic Rival 新靶点', 'reason': '新竞品'}]}
     if '一级市场投资研究员' in system:
         state['drafts'] += 1
         if state.get('fail_draft'):
@@ -59,7 +69,9 @@ def model_answer(system, user, state):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **k: pytest.fail('network prohibited'))
-    pipeline = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    app = create_studio_app(tmp_path, start_worker=False)
+    pipeline = app.state.studio_pipeline
+    pipeline.test_app = app  # API tests drive the same state
     settings = pipeline.settings_store.load()
     settings.model = ModelConfig(base_url='https://model.example.invalid/v1', model='synthetic', api_key='synthetic')
     pipeline.settings_store.save(settings)
@@ -184,3 +196,36 @@ def test_an_old_unknown_request_does_not_stop_a_new_round(env):
     with pipeline.store._connect() as db:
         after = [tuple(r) for r in db.execute('SELECT * FROM studio_job_calls WHERE job_id=?', (legacy['id'],))]
     assert after == before  # the old request is untouched: not resent, not settled
+
+
+def test_assumptions_warning_and_exploration_feed_the_next_round(env):
+    from project_watch.studio import assumptions, collect_job
+
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    analysis = work(pipeline, 'analyze')
+    follow = analysis.read_checkpoint(analyze_job.RESULT)['follow_through']
+    assert follow['assumptions_draft'] == 'done' and follow['early_warning'] == 'done'
+    drafted = assumptions.current(pipeline.store, pid)
+    assert [a['author'] for a in drafted] == ['model', 'model']
+    warning = assumptions.latest_warning(pipeline.store, pid)
+    statuses = {a['id']: a['status'] for a in warning['assumptions']}
+    # A cited signal is kept; a signal citing an item that was never given is dropped
+    # and the claim falls back to "unclear" rather than an unsupported "weakened".
+    assert statuses[drafted[0]['id']] == 'strengthened' and statuses[drafted[1]['id']] == 'unclear'
+    assert [u['text'] for u in warning['unforeseen']] == ['出现新技术路线']
+    # The owner edits one assumption; the model never rewrites it.
+    edited = assumptions.edit(pipeline.store, pid, assumption_id=drafted[0]['id'], text='核心管线 2027 年前进入三期')
+    assert edited['user_override'] and edited['version'] == 2
+    assert assumptions.draft_if_missing(pipeline, None, pid) is None  # never redrafted once any exist
+    # The proposed exploration query is used once, by the next collection.
+    work(pipeline, 'report')
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE kind='brief' AND project_id=?", (pid,))
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    second = work(pipeline, 'collect')
+    frozen = second.read_checkpoint(collect_job.INPUT)
+    assert frozen['exploration'] == ['Synthetic Rival 新靶点']
+    assert 'Synthetic Rival 新靶点' in frozen['public_plan']['industry_queries']
+    assert assumptions.take_exploration(pipeline.store, pid, 'some-later-job') == []

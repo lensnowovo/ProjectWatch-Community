@@ -1154,6 +1154,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    from project_watch.studio import spine_api
+
+    spine_api.attach(app, store, project_or_404)
+
     @app.get("/api/studio/projects/{project_id}/discovered-sources")
     def discovered_sources(project_id: str, limit: int = 20, offset: int = 0):
         from project_watch.studio.collection_view import discovered_sources as source_page

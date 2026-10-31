@@ -71,9 +71,14 @@ def freeze(pipeline, execution, *, mode):
     for kind, field in (('technology', 'technology_queries'), ('industry', 'industry_queries'),
                         ('policy', 'policy_queries')):
         public_plan[field] = [q for w in relation if w['relation_type'] == kind for q in w['queries'] or []]
+    # Exploration quota: queries the last early-warning check proposed, used once.
+    from project_watch.studio.assumptions import take_exploration
+    exploration = take_exploration(pipeline.store, pid, execution.job['id'])
+    if exploration:
+        public_plan['industry_queries'] = list(dict.fromkeys([*public_plan['industry_queries'], *exploration]))
     due = [w['id'] for w in pipeline.monitoring_plan.due(pid, cycle=execution.job['id'])
            if w.get('visibility') == 'public']
-    frozen = dict(protocol=1, mode=mode, at=now(), names=names,
+    frozen = dict(protocol=1, mode=mode, at=now(), names=names, exploration=exploration,
                   project={'id': pid, 'legal_name': names[0], 'name': names[0], 'website': project.get('website')},
                   public_plan=public_plan, watches=watches, due_ids=due,
                   source_decisions=collection_targets.source_decisions(pipeline.store, pid))
