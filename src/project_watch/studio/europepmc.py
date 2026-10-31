@@ -46,18 +46,19 @@ def page(http, query, *, mode='topic', cursor=None, per_page=20, start=None, end
     more = bool(rows) and len(rows) == per_page and count > len(rows)
     if more and (not token or token == (cursor or '*')):
         raise HttpError('invalid_collection_cursor')
-    items = []
+    items, dropped = [], 0
     for row in rows:
         ident, origin, title = row.get('id'), row.get('source'), row.get('title')
         identity_pattern = r'[A-Z]{2}[A-Z0-9]+' if patent else r'(?:PMC)?[0-9]+'
-        if (not isinstance(ident, str) or not re.fullmatch(identity_pattern, ident)
-                or origin not in (('PAT',) if patent else ('MED', 'PMC')) or not isinstance(title, str) or not title.strip()):
-            raise HttpError('invalid_collection_response')
-        if patent and not isinstance(row.get('patentDetails'), dict):
-            raise HttpError('invalid_collection_response')
         authors = (row.get('authorList') or {}).get('author') or []
-        if not isinstance(authors, list) or any(not isinstance(a, dict) for a in authors):
-            raise HttpError('invalid_collection_response')
+        # One malformed record (the live patent index has blank titles) must not
+        # discard the rest of the page. It is dropped and counted, never guessed.
+        if (not isinstance(ident, str) or not re.fullmatch(identity_pattern, ident)
+                or origin not in (('PAT',) if patent else ('MED', 'PMC')) or not isinstance(title, str) or not title.strip()
+                or (patent and not isinstance(row.get('patentDetails'), dict))
+                or not isinstance(authors, list) or any(not isinstance(a, dict) for a in authors)):
+            dropped += 1
+            continue
         affiliations = list(dict.fromkeys(
             entry['affiliation'] for a in authors
             for entry in (a.get('authorAffiliationDetailsList') or {}).get('authorAffiliation') or []
@@ -83,7 +84,7 @@ def page(http, query, *, mode='topic', cursor=None, per_page=20, start=None, end
                 'open_access': row.get('isOpenAccess') == 'Y',
                 'paper_search': {'query': query, 'mode': mode},
                 'date_basis': 'provider_first_date_unverified' if patent else 'firstPublicationDate', **extra_patent}))
-    return dict(items=items, next_cursor=token if more else None, truncated=more,
+    return dict(items=items, next_cursor=token if more else None, truncated=more, dropped_records=dropped,
                 total_reported=count, date_basis='provider_first_date_unverified' if patent else 'firstPublicationDate', window_applied=True,
                 coverage_kind='biomedical_patent_index' if patent else 'structured_pages', per_request_limit=per_page)
 

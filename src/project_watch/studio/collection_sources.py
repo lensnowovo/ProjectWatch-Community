@@ -162,7 +162,8 @@ class CollectionSources:
             state['pages'] += 1
             state.setdefault('visited', []).append(cursor)
             state['cursor'] = page['next_cursor']
-            state['metadata'] = {key: value for key, value in page.items() if key != 'items'}
+            state['metadata'] = {key: value for key, value in page.items() if key not in ('items', 'dropped_records')}
+            state['dropped_records'] = state.get('dropped_records', 0) + page.get('dropped_records', 0)
             state['done'] = not page['truncated']
             state['exhausted'] = page['truncated'] and state['cursor'] is None
             after_requests, _ = self.snapshot()
@@ -176,6 +177,7 @@ class CollectionSources:
             if page['truncated'] and state['cursor'] is None:
                 break
         return dict(state['metadata'], items=state['items'], truncated=not state['done'],
+                    dropped_records=state.get('dropped_records', 0),
                     next_cursor=state['cursor'], pages_completed=state['pages'],
                     visited_cursors=state['visited'], **interruption)
 

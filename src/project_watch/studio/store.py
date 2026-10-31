@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS studio_usage (
 );
 """
 
-JOB_KINDS = ("internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight", "scope", "assessment")
+JOB_KINDS = ("internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight", "scope", "assessment", "collect", "analyze", "report")
 LANDSCAPE_DAYS = 7  # competition / industry pages are regenerated weekly
 IMPORTANCE = ("major", "notable", "routine")
 ITEM_STATUS = ("new", "read", "starred", "dismissed")
@@ -1376,7 +1376,7 @@ class StudioStore:
             prefer_brief = int(burst[0] if burst else 0) < 2
             row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
-                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief','scope','assessment')
+                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief','scope','assessment','collect','analyze','report')
                     OR COALESCE(p.status,'active')='active')
                 AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints wait
                      WHERE wait.job_id=j.id AND wait.stage='legacy_dispatch_wait') OR NOT EXISTS (

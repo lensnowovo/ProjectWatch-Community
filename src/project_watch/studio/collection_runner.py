@@ -45,7 +45,7 @@ def run_collection(ledger, *, collect, ingest, guard):
                                          next_cursor=payload.get('next_cursor'),
                                          **{key: payload[key] for key in ('pages_completed', 'visited_cursors') if key in payload},
                                          source_scope={key: payload[key] for key in
-                                                       ('coverage_kind', 'per_request_limit', 'window_applied')
+                                                       ('coverage_kind', 'per_request_limit', 'window_applied', 'dropped_records')
                                                        if key in payload},
                                          cache_provenance=payload.get('cache_provenance', [])))
         except HttpError as exc:

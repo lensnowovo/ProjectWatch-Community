@@ -2728,6 +2728,16 @@ class Pipeline:
             }.get(job['kind'])
         previous_execution = getattr(self._execution_state, 'current', None)
         self._execution_state.current = execution
+        if execution and job['kind'] in ('collect', 'analyze', 'report'):
+            # The rewritten pipeline: its own stages, none of the legacy admission below.
+            try:
+                with self.store.write_scope(execution._guard):
+                    from project_watch.studio import spine
+
+                    spine.run(self, execution)
+                return
+            finally:
+                self._execution_state.current = previous_execution
         try:
             with self.store.write_scope(execution._guard if execution else None):
                 if execution:

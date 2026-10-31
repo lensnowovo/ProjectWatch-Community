@@ -1,0 +1,160 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-31T17:05:18.410396+00:00",
+    "endpoint": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "company": "Moderna",
+    "operation": "europepmc_patent",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "hitCount": 17,
+      "resultList": {
+        "result": [
+          {
+            "id": "WO2012019168",
+            "source": "PAT",
+            "title": "ENGINEERED NUCLEIC ACIDS AND METHODS OF USE THEREOF",
+            "firstPublicationDate": "2011-08-05",
+            "pubYear": "2012",
+            "isOpenAccess": "N",
+            "affiliation": "MODERNA THERAPEUTICS INC",
+            "patentDetails": {
+              "typeCode": "A2",
+              "countryCode": "WO"
+            },
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "SCHRUM JASON",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "BANCEL STEPHANE",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "AFEYAN NOUBAR B",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "JP2009195733",
+            "source": "PAT",
+            "title": "THERAPEUTIC TREATMENT DEVICE AND THERAPEUTIC TREATMENT METHOD",
+            "firstPublicationDate": "2009-05-07",
+            "pubYear": "2009",
+            "isOpenAccess": "N",
+            "affiliation": "STUDIO MODERNA SA",
+            "patentDetails": {
+              "typeCode": "A",
+              "countryCode": "JP"
+            },
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "CESKO SANDI",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "KANCILJA TONI",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "HARLEY STEF",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "US2007208288",
+            "source": "PAT",
+            "title": "Therapeutic treatment apparatus and method",
+            "firstPublicationDate": "2007-05-11",
+            "pubYear": "2007",
+            "isOpenAccess": "N",
+            "affiliation": "STUDIO MODERNA SA",
+            "patentDetails": {
+              "typeCode": "A1",
+              "countryCode": "US"
+            },
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "KANCILJA TONI",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "HARLEY STEF",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "CESKO SANDI",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "ZA200502007",
+            "source": "PAT",
+            "title": "Therapeutic treatment apparatus and method",
+            "firstPublicationDate": "2005-03-09",
+            "pubYear": "2006",
+            "isOpenAccess": "N",
+            "affiliation": "STUDIO MODERNA SA",
+            "patentDetails": {
+              "typeCode": "A",
+              "countryCode": "ZA"
+            },
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "CESKO SANDI",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "HARLEY STEF",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                },
+                {
+                  "fullName": "KANCILJA TONI",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": []
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
