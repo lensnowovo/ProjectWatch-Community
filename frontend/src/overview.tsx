@@ -482,12 +482,6 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
       {deep.loading && !deep.data
         ? <div className="rj-tiles qa-tiles">{[1, 2, 3, 4, 5].map((n) => <div key={n} className="rj-tile empty"><Skeleton lines={2} /></div>)}</div>
         : <QuestionAnalysis detail={detail} view={deep.data ?? null} error={deep.error} goto={goto}
-          onSaved={async () => {
-            const saved = deep.data?.saved_analysis;
-            if (!saved) return;
-            await api.savedAnalysis(project.id, {snapshot_id: saved.snapshot_id, request_id: crypto.randomUUID(), parent_attempt_id: saved.parent_attempt_id});
-            deep.reload();
-          }}
           onStart={() => api.refresh(project.id, "insight").then(() => deep.reload(), () => deep.reload())} />}
 
       <Columns

@@ -100,14 +100,3 @@ def save(store, project_id: str, analysis: dict, gathered: dict, model: str = ""
             db.execute('INSERT INTO studio_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                        (key, json.dumps(value, ensure_ascii=False)))
     return record
-
-def held(store, project_id: str) -> bool:
-    """A paid model request with an unknown outcome holds the whole project until its owner confirms recovery.
-
-    Deep analysis is another model round; it must not bypass that hold (project-wide, like question rounds).
-    """
-    from project_watch.studio.recovery import UNRESOLVED
-
-    with closing(store._connect()) as db:
-        return bool(db.execute(f"SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-                               f"WHERE j.project_id=? AND c.kind='model' AND {UNRESOLVED} LIMIT 1", (project_id,)).fetchone())

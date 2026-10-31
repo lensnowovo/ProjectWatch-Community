@@ -20,14 +20,14 @@ def test_stable_phase_vocabulary(text, phase):
 def test_project_status_retains_failure_past_recent_successes_without_writes(tmp_path):
     service, pid = make_service(tmp_path / 'synthetic.sqlite3')
     store = service.store
-    failed = store.enqueue(pid, 'external_followup')
+    failed = store.enqueue(pid, 'collect')
     with closing(store._connect()) as db, db:
         db.execute("UPDATE studio_jobs SET status='failed',finished_at='2026-10-18',error='synthetic' WHERE id=?", (failed['id'],))
     for n in range(12):
         done = store.enqueue(pid, 'brief')
         with closing(store._connect()) as db, db:
             db.execute("UPDATE studio_jobs SET status='done',finished_at=? WHERE id=?", (f'2026-10-19T00:{n:02d}:00', done['id']))
-    active = store.enqueue(pid, 'insight')
+    active = store.enqueue(pid, 'analyze')
     with closing(store._connect()) as db:
         before = [tuple(r) for r in db.execute('SELECT * FROM studio_jobs ORDER BY id')]
     result = project_jobs(store, pid, worker='stopped')
@@ -44,7 +44,7 @@ def test_project_and_taskboard_share_runtime_and_phase(tmp_path):
     from project_watch.studio.taskboard import board
     service, pid = make_service(tmp_path / 'synthetic.sqlite3')
     store = service.store
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     job = store.claim()
     store.set_stage(job['id'], '修订监控方案')
     projected = project_jobs(store, pid)[0]
@@ -58,13 +58,13 @@ def test_active_list_projection_is_not_hidden_by_newer_finished_work(tmp_path):
     from project_watch.studio.runtime_health import active_projections
     service, pid = make_service(tmp_path / 'synthetic.sqlite3')
     store = service.store
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     running = store.claim()
     store.set_stage(running['id'], '更新跟踪问题')
     done = store.enqueue(pid, 'brief')
     with closing(store._connect()) as db, db:
         db.execute("UPDATE studio_jobs SET status='done' WHERE id=?", (done['id'],))
-    store.enqueue(pid, 'insight')
+    store.enqueue(pid, 'analyze')
     projected = active_projections(store)[pid]
     assert projected['status'] == 'running'
     assert projected['runtime']['phase'] == 'judge'
@@ -91,7 +91,7 @@ def test_http_project_and_task_views_agree_without_dispatch(tmp_path):
     repo = ProjectRepository(store.db_path)
     pid = repo.create_project('Synthetic Status').id
     store.upsert_project(pid, {'legal_name': 'Synthetic Status'}, consent=False)
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     before = store.jobs(pid)
     with TestClient(app) as client:
         detail = client.get(f'/api/studio/projects/{pid}').json()

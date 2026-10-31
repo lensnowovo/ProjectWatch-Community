@@ -202,11 +202,13 @@ def test_leased_http_and_reopen_do_not_resend_bad_or_uncertain_response(tmp_path
     retry = reopened.claim()
     current = QuestionLedger(reopened, MonitorStore(reopened))
     if outcome == 'unknown':
-        assert retry is None  # Ambiguous calls are held, not automatically reclaimed.
-        failed = next(j for j in reopened.jobs(pid) if j['id'] == job['id'])
-        assert failed['status'] == 'failed' and failed['retry_after'] == '9999-12-31'
-        assert reopened.claim() is None
-        execution = JobExecution(reopened, failed)
+        # The interrupted job resumes on its checkpoints; its unclear request is never resent.
+        assert retry['id'] == job['id'] and retry['lease_token'] != job['lease_token']
+        execution = JobExecution(reopened, retry)
+        model = NativeLLM(cfg, execution.http(Http(send), lambda _: ('model', 'synthetic-provider')))
+        with pytest.raises(ModelError) as again:
+            current.assess(ModelQuestionAdvisor(), model, pid, {})
+        assert again.value.code == 'unknown_not_resent'
     else:
         assert retry['id'] == job['id'] and retry['lease_token'] != job['lease_token']
         execution = JobExecution(reopened, retry)

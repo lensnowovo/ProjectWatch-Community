@@ -17,7 +17,7 @@ def setup(tmp_path, count=1):
 
 def test_first_brief_precedes_other_company_collection(tmp_path):
     store, ids = setup(tmp_path, 6)
-    external = [store.enqueue(pid, 'external') for pid in ids]
+    external = [store.enqueue(pid, 'collect') for pid in ids]
     first = store.claim()
     assert first['id'] == external[0]['id']
     store.finish(first['id'], lease_token=first['lease_token'])
@@ -27,7 +27,7 @@ def test_first_brief_precedes_other_company_collection(tmp_path):
 
 def test_brief_priority_is_bounded_and_persisted_across_restarts(tmp_path):
     store, ids = setup(tmp_path, 5)
-    old = store.enqueue(ids[0], 'external')
+    old = store.enqueue(ids[0], 'collect')
     briefs = [store.enqueue(pid, 'brief') for pid in ids[1:]]
     for expected in briefs[:2]:
         store = StudioStore(store.db_path)
@@ -39,9 +39,9 @@ def test_brief_priority_is_bounded_and_persisted_across_restarts(tmp_path):
 
 def test_priority_does_not_steal_active_or_paused_external_jobs(tmp_path):
     store, ids = setup(tmp_path, 2)
-    store.enqueue(ids[0], 'external')
+    store.enqueue(ids[0], 'collect')
     active = store.claim()
-    store.enqueue(ids[1], 'external')
+    store.enqueue(ids[1], 'collect')
     store.set_status(ids[1], 'paused')
     assert store.claim() is None
     brief = store.enqueue(ids[0], 'brief')
@@ -51,7 +51,7 @@ def test_priority_does_not_steal_active_or_paused_external_jobs(tmp_path):
 
 def test_single_company_brief_is_immediately_next(tmp_path):
     store, [pid] = setup(tmp_path)
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     job = store.claim()
     store.finish(job['id'], lease_token=job['lease_token'])
     brief = store.enqueue(pid, 'brief')
@@ -60,7 +60,7 @@ def test_single_company_brief_is_immediately_next(tmp_path):
 
 def test_concurrent_claims_are_distinct_and_oldest_work_gets_a_turn(tmp_path):
     store, ids = setup(tmp_path, 5)
-    old = store.enqueue(ids[0], 'external')
+    old = store.enqueue(ids[0], 'collect')
     for pid in ids[1:]:
         store.enqueue(pid, 'brief')
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -71,7 +71,7 @@ def test_concurrent_claims_are_distinct_and_oldest_work_gets_a_turn(tmp_path):
 
 def test_expired_safe_job_recovery_keeps_its_original_order(tmp_path):
     store, ids = setup(tmp_path, 4)
-    store.enqueue(ids[0], 'external')
+    store.enqueue(ids[0], 'collect')
     old = store.claim()
     with store._connect() as db:
         db.execute("UPDATE studio_jobs SET lease_until='2000-01-01T00:00:00+00:00' WHERE id=?", (old['id'],))
@@ -85,12 +85,12 @@ def test_expired_safe_job_recovery_keeps_its_original_order(tmp_path):
 def test_six_company_first_brief_queue_position_compared_with_fifo(tmp_path):
     store, ids = setup(tmp_path, 6)
     for pid in ids:
-        store.enqueue(pid, 'external')
+        store.enqueue(pid, 'collect')
     order = []
     while (job := store.claim()) is not None:
         order.append(job['kind'])
         store.finish(job['id'], lease_token=job['lease_token'])
-        if job['kind'] == 'external':
+        if job['kind'] == 'collect':
             store.enqueue(job['project_id'], 'brief')
     assert len(order) == 12 and order.index('brief') + 1 == 2
     # Same fixture under FIFO: six prequeued external jobs precede generated briefs.

@@ -124,13 +124,3 @@ def test_cross_section_sources_do_not_repair_unrelated_summary():
     assert out['operations']['summary'] == '订单超70套'
 
 
-def test_no_new_calls_or_unstable_fingerprint_after_guarded_save(tmp_path):
-    from test_studio_insight import Model, _setup
-
-    from project_watch.studio.insight import load
-
-    project, store, pipeline = _setup(tmp_path)
-    gen.run(pipeline, Model(answer('产品收入尚未确认', '产品已上市', ['D1'])), project.id)
-    assert '确认情况待核实' in load(store, project.id)['analysis']['headline']
-    assert gen.due(pipeline, project.id) is None
-    assert not store.jobs(project.id)

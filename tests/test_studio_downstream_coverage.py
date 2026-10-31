@@ -114,7 +114,7 @@ def test_later_batch_unknown_preserves_old_profile_and_does_not_resend(tmp_path,
     assert current == old
     with pytest.raises(ModelError) as repeat:
         p.run(job)
-    assert repeat.value.code == 'request_outcome_unknown'
+    assert repeat.value.code == 'unknown_not_resent'  # recorded unknown, never resent
     assert len(calls) == 2
 
 

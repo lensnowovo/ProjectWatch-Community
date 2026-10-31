@@ -3,8 +3,8 @@ import json
 from contextlib import closing
 from copy import deepcopy
 
+import collection_fixtures
 import pytest
-import test_studio_dsh_monitor as fixtures
 from test_collection_plan import candidate, plan
 
 from project_watch.studio.collection_ingest import CollectionIngest
@@ -17,10 +17,7 @@ from project_watch.studio.sources import _item
 
 @pytest.fixture
 def host(tmp_path):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    p = plan([candidate() | {'source': 'clinical_term', 'category': 'trial'}],
-             round_id=research.execution.job['id'], project_id=research.project_id)
-    return research, p['units'][0], CollectionIngest(research.execution)
+    return collection_fixtures.host(tmp_path)
 
 
 def trial(status='RECRUITING', url='https://clinicaltrials.gov/study/NCT00000001'):

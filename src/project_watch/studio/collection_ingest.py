@@ -82,10 +82,6 @@ class CollectionIngest:
             for statement in SCHEMA:
                 db.execute(statement)
             db.execute(evidence_tasks.SCHEMA)
-            from project_watch.studio.material_ownership import SCHEMA as ownership_schema
-
-            for statement in ownership_schema:
-                db.execute(statement)
 
     def __call__(self, unit, items):
         context = None

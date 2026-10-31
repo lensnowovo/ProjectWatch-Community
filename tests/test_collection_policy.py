@@ -3,14 +3,9 @@ import json
 from dataclasses import asdict
 
 import pytest
-import test_collection_host as host_fixtures
 from fastapi.testclient import TestClient
 
-from project_watch.studio import collection_host, dsh_runtime
 from project_watch.studio.app import create_studio_app
-from project_watch.studio.dsh_bootstrap import digest
-from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import Http
 from project_watch.studio.settings import (
     SettingsStore,
     SettingsUnavailable,
@@ -79,65 +74,7 @@ def test_policy_api_preserves_credentials_and_does_not_start_jobs(tmp_path, monk
         assert web.get('/api/studio/projects').json() == []
 
 
-def test_legacy_dsh_binding_resumes_with_defaults_without_new_collection(tmp_path, monkeypatch):
-    pipeline, execution = host_fixtures.setup.__wrapped__(tmp_path)
-    old = asdict(pipeline.settings_store.load())
-    old.pop('collection_overlap_days')
-    old.pop('collection_baseline_days')
-    binding = digest({'entity': 'Synthetic Host', 'settings': old})
-    execution.checkpoint('dsh_binding', binding)
-    pipeline.http_factory = lambda _: Http(lambda *_: pytest.fail('legacy resume must not add collection'))
-    monkeypatch.setattr(dsh_runtime, 'run_dsh', lambda research, *_: research.guard())
-    dsh_runtime.run_bootstrap(pipeline, execution, None)
-    assert execution.read_checkpoint('dsh_binding') == binding
-    assert not execution.usage()
 
 
-def test_policy_change_during_collection_stops_before_next_request(tmp_path, monkeypatch):
-    pipeline, execution = host_fixtures.setup.__wrapped__(tmp_path)
-    calls = []
-
-    def send(_method, url, *_):
-        calls.append(url)
-        pipeline.settings_store.update({'collection_overlap_days': 3})
-        return host_fixtures.response(url)
-
-    pipeline.http_factory = lambda _: Http(send)
-    monkeypatch.setattr(dsh_runtime, 'run_dsh', lambda *_: pytest.fail('changed policy must stop'))
-    with pytest.raises(ValueError, match='dsh_input_changed'):
-        dsh_runtime.run_bootstrap(pipeline, execution, None)
-    assert len(calls) == 1
-    assert execution.read_checkpoint(collection_host.SCOPE)['history_policy'] == dict(overlap_days=7, baseline_days=30)
 
 
-def test_configured_policy_drives_incremental_and_periodic_host_windows(tmp_path, monkeypatch):
-    pipeline, execution = host_fixtures.setup.__wrapped__(tmp_path)
-    pipeline.settings_store.update({'collection_overlap_days': 3, 'collection_baseline_days': 2})
-    calls = []
-
-    def send(_method, url, *_):
-        calls.append(url)
-        return host_fixtures.response(url)
-
-    pipeline.http_factory = lambda _: Http(send)
-    monkeypatch.setattr(dsh_runtime, 'run_dsh', lambda *_: None)
-    plans = []
-    for index, day in enumerate((25, 26, 27)):
-        monkeypatch.setattr(collection_host, 'now', lambda day=day: f'2026-10-{day}T04:00:00+00:00')
-        if index:
-            pipeline.store.enqueue(execution.job['project_id'], 'external', automatic=True)
-            execution = JobExecution(pipeline.store, pipeline.store.claim())
-            pipeline._execution_state.current = execution
-            collection_host.admit(execution, mode='incremental')
-            dsh_runtime.run_monitor(pipeline, execution, None)
-        else:
-            collection_host.admit(execution, mode='first')  # Legacy host-only protocol.
-            dsh_runtime.run_bootstrap(pipeline, execution, None)
-        plan = execution.read_checkpoint('collection_round_v1')['plan']
-        assert plan['history_policy'] == dict(overlap_days=3, baseline_days=2)
-        plans.append(next(u for u in plan['units'] if u['source'] == 'openalex_topic'))
-        assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    assert plans[0]['full_scan'] is True
-    assert plans[1]['full_scan'] is False and plans[1]['window_start'] == '2026-10-22T04:00:00+00:00'
-    assert plans[2]['full_scan'] is True and plans[2]['window_start'] < plans[1]['window_start']
-    assert any('2026-10-22' in url for url in calls)

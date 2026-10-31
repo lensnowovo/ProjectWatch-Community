@@ -1,22 +1,12 @@
 """Professional sources through real collection/ingestion with synthetic wire."""
-import json
-from types import SimpleNamespace
 
 import pytest
-import test_studio_dsh_monitor as fixtures
 from test_collection_pages import wire, work
-from test_collection_plan import candidate, plan
 
-from project_watch.public_article import ArticleReader, extract_article
-from project_watch.studio import collection_dsh
-from project_watch.studio.collection_ingest import CollectionIngest
-from project_watch.studio.collection_ledger import CollectionLedger
+from project_watch.public_article import extract_article
 from project_watch.studio.collection_pages import openalex_page, public_read_request
-from project_watch.studio.collection_runner import run_collection
-from project_watch.studio.collection_sources import CollectionSources
 from project_watch.studio.europepmc import BASE, open_body_url, page
 from project_watch.studio.http import Http, HttpError, Response
-from project_watch.studio.research_sources import research_sources
 from project_watch.studio.settings import SearchConfig
 from project_watch.studio.sources import Collectors
 
@@ -142,37 +132,6 @@ def test_xml_identity_license_entities_and_partial_scope():
     assert extract_article(jats(), 'application/xml', source_url='https://example.com/body')['error_code'] == 'unsupported_media_type'
 
 
-def test_query_failure_other_source_ingestion_page_and_replay(tmp_path, monkeypatch):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution, calls = research.execution, []
-    def send(_method, url, *_args):
-        calls.append(url)
-        return Response(200, {}, json.dumps(response()).encode())
-    sources = CollectionSources(execution, Collectors(execution.http(Http(send),
-        lambda _: ('open_data', 'synthetic-public')), SearchConfig()), max_pages=1)
-    candidates = [candidate() | dict(source='openalex_affiliation', category='paper', query='X,type:book', priority=0),
-                  candidate() | dict(source='europepmc_affiliation', category='paper', query='Synthetic, Inc.', priority=1)]
-    frozen = plan(candidates, round_id=execution.job['id'], project_id=research.project_id)
-    ledger = CollectionLedger(execution, frozen)
-    for _ in range(2):
-        result = run_collection(ledger, collect=sources.collect, ingest=CollectionIngest(execution), guard=research.guard)
-        assert [(r['outcome'], r['reason']) for r in result['rows']] == [('failed', 'invalid_collection_query'), ('success', '')]
-    assert len(calls) == 1
-    saved = research_sources(research.store, research.project_id, 'paper')
-    assert saved['total'] == 1 and saved['items'][0]['extra']['pmcid'] == 'PMC1'
-    sid = collection_dsh.catalog(research)['sources'][0]['id']
-    # Scope is independently tested; isolate the reader route from fixture's
-    # absent frozen full-run settings. Real page, journal and body evidence run.
-    monkeypatch.setattr('project_watch.studio.collection_host.guard_scope', lambda _: None)
-    research.reader = ArticleReader(SimpleNamespace(get_response=lambda url:
-        SimpleNamespace(url=url, body=jats(), headers={'content-type': 'application/xml'})))
-    research.collectors = SimpleNamespace(deepseek_fetch=lambda *_: pytest.fail('no paid fetch'))
-    read = research.pw_read({'source_id': sid, 'view': 'page'})
-    assert read['read_status'] == 'partial_body' and read['source_type'] == 'public_page'
-    assert read['url'] == BASE + 'PMC1/fullTextXML' and 'Synthetic methods' in read['excerpt']
-    assert research.pw_read({'source_id': sid, 'view': 'page'})['evidence_version_id'] == read['evidence_version_id']
-    assert execution.usage()['page']['requests'] == 1
-    assert execution.usage().get('model', {}).get('requests', 0) == 0
 
 
 def test_public_endpoint_contract_does_not_extend_to_credentials_or_other_routes():

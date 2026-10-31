@@ -8,7 +8,6 @@ import pytest
 from project_watch.studio import plan_replan
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.exploration import Explorations
-from project_watch.studio.http import HttpError
 from project_watch.studio.monitor import MonitorStore
 
 
@@ -261,36 +260,8 @@ def test_sleeping_topic_is_not_sent_to_reviser(env):
     assert topic['id'] not in {w['id'] for w in gathered['items'].values()}
 
 
-@pytest.mark.parametrize('error,expected', [('http_failure', 'source_failure'), ('request_outcome_unknown', 'waiting_recovery')])
-def test_real_collection_path_records_failure_without_counting_empty_result(env, monkeypatch, error, expected):
-    p, pid, plan, loop, topic, _ = env
-    def failed(*args, **kwargs):
-        raise HttpError(error)
-    monkeypatch.setattr('project_watch.studio.pipeline._news', failed)
-    # Isolate the topic from the routine query; no provider objects or API keys.
-    monkeypatch.setattr(type(plan), 'query_jobs', lambda *a, **kw: [(topic, topic['queries'][0])])
-    if error == 'request_outcome_unknown':
-        with pytest.raises(HttpError):
-            p._collect_monitor(pid, {}, SimpleNamespace(has_search=False), lambda *_: None)
-    else:
-        p._collect_monitor(pid, {}, SimpleNamespace(has_search=False), lambda *_: None)
-    row = loop.view(pid)[topic['id']]
-    assert row['reason'] == expected and row['no_gain'] == 0
 
 
-def test_real_collection_and_replan_finish_one_cycle(env, monkeypatch):
-    p, pid, _plan, loop, topic, _ = env
-    monkeypatch.setattr('project_watch.studio.pipeline._news', lambda *a, **kw: [])
-    p._execution_state.current = SimpleNamespace(job={'id': 'synthetic-cycle'})
-    try:
-        p._collect_monitor(pid, {}, SimpleNamespace(has_search=False), lambda *_: None)
-        p.plan_reviser = SimpleNamespace(since_last=lambda *_: '', mark=lambda *_: None, run=lambda *a, **kw: {'skipped': True})
-        p._replan(pid, SimpleNamespace(ready=True), lambda *_: None, trigger='external')
-        assert loop.view(pid)[topic['id']]['no_gain'] == 1
-        p._replan(pid, SimpleNamespace(ready=True), lambda *_: None, trigger='external')
-        assert loop.view(pid)[topic['id']]['no_gain'] == 1
-    finally:
-        p._execution_state.current = None
 
 
 @pytest.mark.parametrize('incomplete', [False, True])
@@ -603,21 +574,3 @@ def test_late_recovery_cannot_change_retired_exploration(env, late_action):
     assert loop.view(pid) == before
 
 
-@pytest.mark.parametrize('error,reason', [('request_outcome_unknown', 'waiting_recovery'), ('model_output_invalid_json', 'source_failure')])
-def test_dispatch_failure_after_collection_holds_exploration(env, monkeypatch, error, reason):
-    p, pid, _plan, loop, topic, _ = env
-    parent = p.store.enqueue(pid, 'external')
-    claimed = p.store.claim()
-    assert p.store.finish(parent['id'], lease_token=claimed['lease_token'])
-    p.store.enqueue(pid, 'external_followup', input_version=parent['id'])
-    job = p.store.claim()
-    assert job is not None
-    def dispatch(job):
-        assert loop.start(topic, job['id'])
-        loop.collected(topic['id'], job['id'])
-        raise HttpError(error)
-    monkeypatch.setattr(p, 'run_external_followup', dispatch)
-    with pytest.raises(HttpError, match=error):
-        p.run(job)
-    state = loop.view(pid)[topic['id']]
-    assert state['reason'] == reason and state['no_gain'] == 0

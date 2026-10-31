@@ -140,13 +140,13 @@ def main():
             sys.argv = saved_argv
         # Only the synthetic transport harness comes from source. Its product
         # imports resolve to the already byte-verified installed distribution.
-        progressive = runpy.run_path(str(source / 'tests/progressive_installed_support.py'))
-        progressive_result = progressive['run'](output / 'progressive')
+        journey = runpy.run_path(str(source / 'tests/spine_installed_support.py'))
+        round_result = journey['run'](output / 'round')
     receipt = {'version': distribution.version, 'product_files_verified': count,
                'legacy_report_upgrade': legacy_upgrade,
                'native_imports': modules, 'synthetic_persistence_reopened': True,
                'synthetic_installed_journey': args.full_journey,
-               'progressive_installed_journey': progressive_result if args.full_journey else None,
+               'round_installed_journey': round_result if args.full_journey else None,
                'real_provider_calls': 0, 'desktop_acceptance': False,
                'publication_authorized': False}
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')

@@ -3,9 +3,7 @@ import json
 from contextlib import closing
 
 from project_watch.studio.dependencies import semantic
-from project_watch.studio.dsh_bootstrap import digest
-from project_watch.studio.material_ownership import project_guard
-from project_watch.studio.store import now
+from project_watch.studio.store import digest, now
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS studio_insight_versions (
@@ -29,7 +27,7 @@ def initialize(store):
 
 
 def policy(pipeline):
-    from project_watch.studio import dsh_judgment_review as review
+    from project_watch.studio import judgment_review as review
 
     return digest(['fixed-object-insight-v1', getattr(pipeline.insight_generator, 'SYSTEM', ''),
         review.VERSION, review.SYSTEM, review.CONSISTENCY_SYSTEM, review.MAX_FIELDS,
@@ -83,7 +81,6 @@ def save(research, analysis, ctx, review):
     with closing(store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
-        project_guard(db, pid, execution.job['id'])
         validate(research.pipeline, pid, work, db=db)
         old = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND artifact_key=? AND fingerprint=?',
                          (pid, key, work['fingerprint'])).fetchone()

@@ -7,7 +7,7 @@ export function monitoringRevision(detail: ProjectDetail) {
 }
 
 export function insightRevision(detail: ProjectDetail) {
-  return `${monitoringRevision(detail)}|${(detail.jobs ?? []).filter(j => j.kind === "insight")
+  return `${monitoringRevision(detail)}|${(detail.jobs ?? []).filter(j => (j.kind === "insight" || j.kind === "analyze"))
     .map(j => `${j.id}:${j.status}:${j.finished_at ?? ""}`).join("|")}`;
 }
 

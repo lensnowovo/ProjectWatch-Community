@@ -12,8 +12,7 @@ import json
 from contextlib import closing
 
 from project_watch.studio import material_snapshot
-from project_watch.studio.dsh_bootstrap import digest
-from project_watch.studio.store import now
+from project_watch.studio.store import digest, now
 
 RESULT = 'analyze_result_v1'
 SNAPSHOT = 'analyze_snapshot_v1'
@@ -96,7 +95,7 @@ def select(store, pid, context):
 
 
 def _reviewer(pipeline, execution, llm, guard):
-    from project_watch.studio import dsh_judgment_review as review
+    from project_watch.studio import judgment_review as review
     from project_watch.studio.llm import ModelError
 
     def reviewer(system, payload):
@@ -213,19 +212,22 @@ def run(pipeline, execution):
     if saved:
         return saved
     _, _, llm, _ = pipeline.tools()
-    if not llm.ready:
-        result = dict(status='waiting_for_model', finished_at=now())
-        execution.checkpoint(RESULT, result)
-        return result
     collect_job_id = _collect_job(execution)
     project = pipeline.store.get_project(pid) or {}
 
     def stage(text):
         pipeline.store.set_stage(execution.job['id'], text)
     item_ids = _batch_items(pipeline.store, pid, collect_job_id)
+    # Without a model, triage keeps every item visible as "not AI-screened" and
+    # events group by title only; no model request is made.
     pipeline.triage(pid, llm, project, _plan(pipeline, execution, collect_job_id), stage, item_ids=item_ids)
     stage('整理事件')
     pipeline.cluster(pid, llm, stage)
+    if not llm.ready:
+        result = dict(status='waiting_for_model', finished_at=now(), items_reviewed=len(item_ids))
+        execution.checkpoint(RESULT, result)
+        pipeline.store.enqueue(pid, 'report', input_version='analyze:' + execution.job['id'])
+        return result
     stage('建立材料快照')
     snapshot = execution.read_checkpoint(SNAPSHOT)
     if snapshot is None:

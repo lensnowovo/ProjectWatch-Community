@@ -10,23 +10,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import sqlite3
 import threading
 import time
-import uuid
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
 from project_watch.repository import ProjectRepository
+from project_watch.studio import dispatch, review
 from project_watch.studio import events as ev
-from project_watch.studio import review
 from project_watch.studio.article_lookup import (
     UNRESOLVABLE_LINK_HOSTS,
     matches_original,
@@ -443,9 +440,7 @@ class Pipeline:
         from project_watch.studio.questions import QuestionLedger
 
         if getattr(self, "_questions", None) is None or self._questions.store is not self.store:
-            from project_watch.studio import question_work
-            self._questions = QuestionLedger(self.store, self.monitor, binding_provider=self.model_binding,
-                public_result_provider=lambda pid, wid: question_work.current(self, pid, wid))
+            self._questions = QuestionLedger(self.store, self.monitor, binding_provider=self.model_binding)
         return self._questions
 
     def _question_round(self, project_id: str, project: dict, plan: dict, llm, stage, *, strict: bool = False) -> None:
@@ -458,26 +453,10 @@ class Pipeline:
         advisor = getattr(self, 'question_advisor', None)
         if advisor is None or not getattr(llm, 'ready', False):
             return
-        # A fresh external job must not bypass the original internal job's
-        # ambiguous paid-request receipt. Only its explicit recovery can resend.
         execution = getattr(self._execution_state, 'current', None)
         current_job = execution.job['id'] if execution else ''
         if current_job:
             self.monitoring_plan.explorations.resume_collected(project_id, current_job)
-        from project_watch.studio.recovery import UNRESOLVED
-        with closing(self.store._connect()) as db:
-            held = db.execute(f"SELECT 1 FROM studio_jobs j JOIN studio_job_checkpoints p ON p.job_id=j.id "
-                              "JOIN studio_job_calls c ON c.job_id=j.id WHERE j.project_id=? AND j.id<>? "
-                              f"AND p.stage='internal_questions_ready' AND c.kind='model' AND {UNRESOLVED} LIMIT 1",
-                              (project_id, current_job)).fetchone()
-        if held:
-            if current_job:
-                self.monitoring_plan.explorations.hold_cycle(project_id, current_job, 'waiting_recovery')
-            stage('问题评估等待确认恢复')
-            if strict:
-                raise ModelError('上次问题评估的请求结果不明，请确认恢复原任务；已有材料结果保留。',
-                                 code='request_outcome_unknown')
-            return
         stage("更新跟踪问题")
         view = self.model_view(llm)
         for step in (lambda: self.questions.suggest(advisor, llm, project_id, project, plan, view.get_profile(project_id)),
@@ -815,13 +794,6 @@ class Pipeline:
                 **current, "industry": current.get("industry") or result["industry"],
                 "stage": current.get("stage") or result["stage"],
                 "description": current.get("description") or result["one_liner"]}, consent=False)
-        if execution:
-            from project_watch.studio.recovery import input_binding
-            # Own derived industry/stage writes legitimately change recovery
-            # context. Freeze the post-material context before the paid step.
-            binding = input_binding(self, project_id)
-            execution.checkpoint('recovery_inputs', {'binding': binding})
-            execution.checkpoint('internal_questions_ready', {'binding': binding})
         self._finish_internal_questions(job, llm)
 
     def _replan(self, project_id: str, llm, stage, *, trigger: str) -> None:
@@ -1217,104 +1189,6 @@ class Pipeline:
         if not plan["company_queries"]:
             plan["company_queries"] = fallback["company_queries"]
         return self.objects.scoped_plan(project["id"], plan)
-
-    def collect(self, project_id: str, plan: dict, collectors: Collectors,
-                stage: Callable[[str], None], project: dict | None = None, *, phase: str = 'all') -> dict:
-        from project_watch.studio.peer_names import clean_plan
-        if phase not in ('first', 'followup', 'all'):
-            raise ValueError('invalid collection phase')
-        plan = clean_plan(plan)
-        report: dict[str, dict] = {}
-
-        def run(category: str, label: str, fn, report_key: str | None = None):
-            entry = report.setdefault(report_key or category, {"checked": 0, "added": 0, "errors": []})
-            check_start = len(getattr(collectors, "search_checks", []))
-            try:
-                items = fn()
-                entry["checked"] += 1
-                entry["added"] += self.store.add_items(project_id, category, items)
-            except (HttpError, ValueError, KeyError) as exc:
-                execution = getattr(self._execution_state, 'current', None)
-                # Collection only uses search and free reads: a provider on hold after a
-                # definitive refusal (R46: search quota exhausted) skips that query and
-                # the round continues with the other sources. Unknown outcomes stop.
-                if isinstance(exc, HttpError) and (exc.code in ('request_outcome_unknown', 'request_budget', 'project_paused')
-                        or (execution and any(u['unknown'] for u in execution.usage().values()))):
-                    raise
-                entry["errors"].append(f"{label}: {getattr(exc, 'code', '')} {exc}"[:200])
-                _log.info("collector %s failed: %s", label, exc)
-            finally:
-                for check in getattr(collectors, "search_checks", [])[check_start:]:
-                    entry.setdefault("search_services", []).append(check)
-                    if not check["ok"]:
-                        entry["errors"].append(f"{check['provider']}: {check['code']}")
-
-        stage("检索公司新闻")
-        queries = plan["company_queries"][:5]
-        if phase == 'first':
-            queries = queries[:1]
-        elif phase == 'followup':
-            queries = queries[1:]
-        for query in queries:
-            if getattr(getattr(collectors, 'search_config', None), 'google_news', False):
-                run("company", f"Google News {query}", lambda q=query: collectors.google_news(q))
-            run("company", f"Bing News {query}", lambda q=query: collectors.bing_news(q))
-            if collectors.has_search:
-                run("company", f"搜索 {query}", lambda q=query: collectors.web_search(q, news=True))
-        if phase == 'first':
-            return report
-        short = (project or {}).get("short_name") or plan["company_queries"][0]
-        topic = (plan.get("industry_queries") or [""])[0]
-        for person in plan.get("people", [])[:3]:
-            for context in dict.fromkeys(c for c in (short, topic) if c):
-                run("company", f"人物 {person} {context}",
-                    lambda q=f"{person} {context}": _news(collectors, q))
-        stage("检索竞品动态")
-        for competitor in plan.get("competitors", [])[:6]:
-            query = competitor_news_query(competitor, project, plan)
-            run("competitor", f"竞品 {query}", lambda q=query: _news(collectors, q, 4)[:15])
-        stage("检索赛道与政策")
-        for query in plan.get("industry_queries", [])[:4]:
-            run("industry", f"赛道 {query}", lambda q=query: _news(collectors, q, 4)[:15])
-        for query in plan.get("policy_queries", [])[:3]:
-            run("policy", f"政策 {query}", lambda q=query: _news(collectors, q)[:15])
-        stage("检索论文")
-        for name in plan.get("affiliation_names", [])[:2]:
-            run("paper", f"OpenAlex 署名 {name}",
-                lambda n=name: collectors.openalex(n, affiliation=True))
-        for query in plan.get("paper_queries", [])[:2]:
-            run("paper", f"OpenAlex {query}", lambda q=query: collectors.openalex(q, per_page=8))
-        for author in plan.get("paper_authors", [])[:2]:
-            run("paper", f"OpenAlex 作者 {author}", lambda a=author: collectors.openalex(a, author=True, per_page=10))
-        if plan.get("is_biomed"):
-            stage("检索临床试验")
-            for sponsor in plan.get("trial_sponsors", [])[:3]:
-                run("trial", f"ClinicalTrials {sponsor}",
-                    lambda s=sponsor: collectors.clinical_trials(sponsor=s))
-            # Investigator-initiated studies are sponsored by hospitals or universities, not the company.
-            for term in [*plan.get("trial_terms", [])[:2], *plan.get("paper_authors", [])[:1]]:
-                run("trial", f"ClinicalTrials 检索 {term}",
-                    lambda t=term: collectors.clinical_trials(term=t, page_size=10))
-        legal_name = (project or {}).get("legal_name") or (plan.get("company_queries") or [""])[0]
-        stage("检索上市公司公告")
-        if legal_name:
-            run("company", f"巨潮 全文 {legal_name}", lambda: collectors.cninfo(legal_name), "filing")
-        for competitor in plan.get("competitors", [])[:6]:
-            run("competitor", f"巨潮 竞品 {competitor['name']}",
-                lambda n=competitor["name"]: collectors.cninfo(n, fulltext=False, limit=10), "filing")
-        if collectors.has_registry and legal_name:
-            stage("检索工商变更")
-            run("company", f"工商变更 {legal_name}", lambda: collectors.registry_changes(legal_name), "registry")
-        if plan.get("is_biomed") and collectors.has_search:
-            stage("检索国内临床与审评")
-            for sponsor in [legal_name, *plan.get("trial_sponsors", [])][:3]:
-                if sponsor:
-                    run("trial", f"国内临床/审评 {sponsor}", lambda s=sponsor: collectors.cn_regulatory(s), "cn_trial")
-        if collectors.has_search:
-            stage("检索专利")
-            for assignee in plan.get("patent_assignees", [])[:2]:
-                run("patent", f"专利 {assignee}", lambda a=assignee: collectors.patents(a))
-        return report
 
     def triage(self, project_id: str, llm: LLM, project: dict, plan: dict,
                stage: Callable[[str], None], *, item_ids: set[str] | None = None) -> None:
@@ -1842,246 +1716,6 @@ class Pipeline:
             else:
                 self.store.create_event(project_id, ev.summarise(group), ids)
 
-    def run_external(self, job: dict) -> None:
-        """Company-first delivery releases the worker before full-track collection."""
-        project_id = job["project_id"]
-        execution = getattr(self._execution_state, 'current', None)
-        # Operator opt-in, first public bootstrap only. DSH owns research choices;
-        # never silently fall back to the legacy collector on failure.
-        dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
-        frozen = execution.read_checkpoint('material_pipeline_v1') if execution else None
-        if frozen:
-            # Publication may advance last_external_at before the worker can
-            # mark this job done. Its durable entry still owns every replay.
-            from project_watch.studio.dsh_runtime import run_bootstrap, run_monitor
-            from project_watch.studio.public_executor import require_available
-
-            require_available()
-            if not dsh_root:
-                raise ValueError('frozen public research requires DSH runtime')
-            if frozen['entry'] == 'bootstrap':
-                run_bootstrap(self, execution, Path(dsh_root))
-                if (os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
-                        and not execution.read_checkpoint('bootstrap_collection_resume_v1')
-                        and not execution.read_checkpoint('update_run_owner_v1')):
-                    from project_watch.studio import collection_round
-
-                    collection_round.enqueue(self, execution)
-            elif frozen['entry'] == 'monitor':
-                run_monitor(self, execution, Path(dsh_root))
-            else:
-                raise ValueError('invalid frozen public research entry')
-            return
-        if execution and (execution.read_checkpoint('collection_request_v1') or {}).get('mode') == 'topic':
-            from project_watch.studio.dsh_runtime import run_monitor
-            from project_watch.studio.public_executor import require_available
-
-            require_available()
-            if not dsh_root or os.environ.get('PROJECT_WATCH_DSH_MONITOR') != '1':
-                raise ValueError('bounded topic requires DSH monitoring runtime')
-            run_monitor(self, execution, Path(dsh_root))
-            return
-        if (dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1"
-                and self.store.get_project(project_id).get("last_external_at")):
-            from project_watch.studio.dsh_runtime import run_monitor
-
-            run_monitor(self, execution, Path(dsh_root))
-            return
-        project = self.store.get_project(project_id)
-        if dsh_root and execution and project and (
-                execution.read_checkpoint("dsh_binding") or not project.get("last_external_at")):
-            from project_watch.studio.dsh_runtime import run_bootstrap
-
-            run_bootstrap(self, execution, Path(dsh_root))
-            if os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
-                from project_watch.studio import collection_round
-
-                collection_round.enqueue(self, execution)
-            return
-        # DSH chosen but unavailable: hold with a visible reason, never the legacy collector.
-        from project_watch.studio.public_executor import require_available
-
-        require_available()
-        if execution and execution.read_checkpoint('external_first_ready'):
-            return
-        _settings, _http, llm, collectors = self.tools()
-        project = self.store.get_project(project_id)
-        if not project:
-            return
-        self.store.set_stage(job["id"], "制定监控方案")
-        saved = execution.read_checkpoint('external_first_inputs') if execution else None
-        if saved:
-            plan = saved['plan']
-            if saved['binding'] != self._external_binding(project_id, project, llm, plan):
-                raise ValueError('监控依据已变化，请重新更新项目；已有结果保留。')
-        else:
-            view = self.model_view(llm)
-            plan = view.get_plan(project_id)
-            # Analysed materials (BP entry) change the queries too, not only entity edits.
-            profile_version = (view.get_profile(project_id) or {}).get("updated_at")
-            dossier_version = (self.store.get_public_profile(project_id) or {}).get("updated_at")
-            if (not plan or plan.get("entity_version") != project.get("updated_at")
-                    or plan.get("profile_version") != profile_version
-                    or plan.get("dossier_version") != dossier_version):
-                plan = self.build_plan(llm, project)
-                plan["entity_version"] = project.get("updated_at")
-                plan["profile_version"] = profile_version
-                plan["dossier_version"] = dossier_version
-                self.store.put_plan(project_id, plan)
-            plan = self.relationships.public_plan(project_id, plan)
-
-        def stage(text):
-            self.store.set_stage(job['id'], text)
-
-        if not saved:
-            try:
-                report = self.collect(project_id, plan, collectors, stage, project, phase='first')
-            except HttpError as exc:
-                # An early stop still leaves an observed failure (M4-CORE-02), never "not observed".
-                self.health.record(project_id, {'company': {'checked': 0, 'added': 0, 'errors': [exc.code]}})
-                raise
-            ids = [i['id'] for i in self.store.untriaged(project_id, limit=FIRST_RESULT_ITEMS, category='company')]
-            saved = {'plan': plan, 'report': report, 'item_ids': ids,
-                     'binding': self._external_binding(project_id, project, llm, plan)}
-            if execution:
-                execution.checkpoint('external_first_inputs', saved)
-        ids = set(saved['item_ids'])
-        eligible = self.prefilter_bodies(project_id, llm, project, plan, stage, item_ids=ids)
-        self.fetch_bodies(project_id, stage, eligible_ids=eligible, collectors=collectors,
-                          page_limit=FIRST_RESULT_PAGES, lookup_limit=2)
-        self.triage(project_id, llm, project, plan, stage, item_ids=ids)
-        self.cluster(project_id, llm, stage)
-        if execution and any(u['unknown'] for u in execution.usage().values()):
-            raise HttpError('request_outcome_unknown')
-        current_project = self.store.get_project(project_id)
-        if not current_project or saved['binding'] != self._external_binding(project_id, current_project, llm, plan):
-            raise ValueError('监控依据已变化，请重新更新项目；已有结果保留。')
-        from project_watch.studio.store import now
-
-        first_at = now()
-        report = saved['report']
-        self.health.record(project_id, {key: {**row, 'deferred': True} for key, row in report.items()})
-        self.store.put_plan(project_id, {**plan, 'last_report': report, 'collection_phase': 'first',
-                                        'first_result_at': first_at, 'round_id': job['id'],
-                                        'has_search': collectors.has_search, 'has_registry': collectors.has_registry})
-        self.store.queue_external_followup(job, {**saved, 'first_result_at': first_at})
-
-    def _external_binding(self, project_id: str, project: dict, llm, plan: dict) -> str:
-        """Pause/note changes do not invalidate a round; company/model/material/peer edits do."""
-        view = self.model_view(llm)
-        profile = view.get_profile(project_id) or {}
-        payload = {'model': view.binding, 'profile_version': profile.get('updated_at'),
-                   'plan_allowed': view.get_plan(project_id) is not None,
-                   'entity': {key: project.get(key) for key in (
-                       'name', 'legal_name', 'short_name', 'aliases', 'description', 'industry', 'website')},
-                   'plan': self.relationships.public_plan(project_id, plan)}
-        # Stored health/progress additions are not inputs to monitoring queries.
-        for key in ('last_report', 'collection_phase', 'first_result_at', 'round_id', 'has_search', 'has_registry',
-                    'profile_version'):
-            payload['plan'].pop(key, None)
-        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-
-    def run_external_followup(self, job: dict) -> None:
-        project_id = job['project_id']
-        execution = getattr(self._execution_state, 'current', None)
-        if execution is None:
-            raise ValueError('补全任务需要有效的持久任务记录')
-        if execution.read_checkpoint('bootstrap_collection_resume_v1'):
-            self.run_external(job)
-            return
-        dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
-        if dsh_root and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
-            from project_watch.studio.dsh_runtime import run_monitor
-
-            run_monitor(self, execution, Path(dsh_root))
-            return
-        from project_watch.studio.public_executor import require_available
-
-        require_available()
-        saved = execution.read_checkpoint('external_followup_input')
-        if not saved:
-            raise ValueError('补全记录缺失，请重新更新项目')
-        _settings, _http, llm, collectors = self.tools()
-        project = self.store.get_project(project_id)
-        if project and project['status'] == 'paused':
-            raise HttpError('project_paused')
-        if not project or not project.get('activated') or project['status'] != 'active':
-            raise ValueError('请先恢复监控')
-        plan = saved['plan']
-        if saved['binding'] != self._external_binding(project_id, project, llm, plan):
-            raise ValueError('监控依据已变化，请重新更新项目；已有结果保留。')
-
-        def stage(text):
-            self.store.set_stage(job["id"], text)
-
-        report = execution.read_checkpoint('external_collected')
-        if report is None:
-            site_report = self._check_sites(project_id, project, stage, collectors)
-            followup = self.collect(project_id, plan, collectors, stage, project, phase='followup')
-            followup.update(self._collect_monitor(project_id, project, collectors, stage))
-            if site_report:
-                followup['site'] = {'checked': site_report['checked'], 'added': site_report['changed'], 'errors': site_report['errors']}
-            report = {key: dict(row) for key, row in saved['report'].items()}
-            for key, row in followup.items():
-                old = report.get(key, {})
-                report[key] = {**row, 'checked': old.get('checked', 0) + row.get('checked', 0),
-                               'added': old.get('added', 0) + row.get('added', 0),
-                               'errors': [*old.get('errors', []), *row.get('errors', [])],
-                               'search_services': [*old.get('search_services', []), *row.get('search_services', [])]}
-            execution.checkpoint('external_collected', report)
-            execution.yield_if_due()
-        self.health.record(project_id, report)
-        self.store.put_plan(project_id, {**plan, "last_report": report,
-                                         'collection_phase': 'complete', 'first_result_at': saved['first_result_at'],
-                                         'round_id': job['input_version'],
-                                         "has_search": collectors.has_search,
-                                         "has_registry": collectors.has_registry})
-        if not execution.read_checkpoint('followup_bodies_done'):
-            eligible = self.prefilter_bodies(project_id, llm, project, plan, stage)
-            self.fetch_bodies(project_id, stage, eligible_ids=eligible, collectors=collectors)
-            execution.checkpoint('followup_bodies_done', True)
-            execution.yield_if_due()
-        if not execution.read_checkpoint('followup_events_done'):
-            self.triage(project_id, llm, project, plan, stage)
-            self.cluster(project_id, llm, stage)
-            execution.checkpoint('followup_events_done', True)
-            execution.yield_if_due()
-        from project_watch.studio import monitor as mon
-
-        stage("更新事件线索")
-        mon.update_threads(self.monitor, self.store, llm, project_id, project)
-        # Seed the first monitoring plan with products, people and business
-        # facts, not just the identity description and the first news titles.
-        if not self.store.get_public_profile(project_id):
-            try:
-                self.run_public_profile(job)
-            except (HttpError, ModelError, ValueError) as exc:
-                if ((isinstance(exc, HttpError) and exc.code in ('request_outcome_unknown', 'request_budget', 'provider_backoff', 'project_paused'))
-                        or any(u['unknown'] for u in execution.usage().values())):
-                    raise
-                _log.info("public profile unavailable; external monitoring continues")
-        self._question_round(project_id, project, plan, llm, stage)
-        self._replan(project_id, llm, stage, trigger="external")
-        if any(u['unknown'] for u in execution.usage().values()):
-            raise HttpError('request_outcome_unknown')
-        current_project = self.store.get_project(project_id)
-        if not current_project or saved['binding'] != self._external_binding(project_id, current_project, llm, plan):
-            raise ValueError('监控依据已变化，请重新更新项目；已有结果保留。')
-        # The company itself must have been observed: free paper/filing sources
-        # answering while every news and search query failed is not an update.
-        if (report.get('company') or {}).get('checked', 0):
-            self.store.touch(project_id, "last_external_at")
-        else:
-            # Every source failed (M4-CORE-01): not a completed observation. The
-            # attempt time paces the scheduler without claiming an update.
-            from project_watch.studio.store import now as _now
-            self.store.set_state(f'external_attempt:{project_id}', _now())
-        self.store.enqueue(project_id, "brief")
-        if _settings.commercial.ready_providers():
-            self.store.enqueue(project_id, 'commercial', automatic=True)
-        if llm.ready and self.landscape_stale(project_id):
-            self.store.enqueue(project_id, "landscape")
-
     def landscape_stale(self, project_id: str, *, min_hours: int = LANDSCAPE_MIN_HOURS) -> bool:
         """Competition/industry pages follow the news: refresh when notable competitor, industry or
         policy events arrived after the last version (at most every few hours), or when missing."""
@@ -2096,131 +1730,6 @@ class Pipeline:
                                   AND category IN ('competitor','industry','policy') AND importance IN ('major','notable')
                                   AND created_at > ?""", (project_id, since)).fetchone()[0]
         return fresh > 0
-
-    def _check_sites(self, project_id: str, project: dict, stage, collectors: Collectors | None = None) -> dict | None:
-        """Official-website pages: discovered from the company website, read at most daily.
-
-        A project without a website gets one search for its official site during the round; a
-        candidate is adopted only when its homepage names the company (see ``site_discovery``)."""
-        from project_watch.studio import monitor as mon
-        from project_watch.studio import sitewatch as sw
-
-        transport = getattr(self.reader(), "transport", None)
-        if transport is None or not hasattr(transport, "get_response"):
-            return None
-        execution = getattr(self._execution_state, 'current', None)
-        if project.get("website") or self.monitor.pages(project_id):
-            return mon.check_sites(self.monitor, transport, project_id, project.get("website"), stage,
-                                   execution=execution)
-        state = mon.site_discovery(self.store, project_id)
-        if state.get("status") == "dismissed" or (
-                state.get("status") in ("not_found", "no_search")
-                and state.get("checked_at", "") > (datetime.now(UTC) - timedelta(days=mon.SITE_RETRY_DAYS)).isoformat()):
-            return None
-        names = sw.site_names(project.get("short_name"), project.get("name"), project.get("legal_name"),
-                              project.get("aliases"))
-        record = {"checked_at": datetime.now(UTC).isoformat(), "names": names[:4]}
-        if collectors is None or not collectors.has_search or not names:
-            self.store.set_state(f"site_discovery:{project_id}", json.dumps(
-                {**record, "status": "no_search" if names else "not_found"}, ensure_ascii=False))
-            return None
-        stage("寻找公司官网")
-        legal = project.get("legal_name") or ""
-        queries = [f"{names[0]} 官网"] + ([f"{legal} 官网"] if legal and legal != names[0] else [])
-        report: dict = {"checked": 0, "changed": 0, "errors": []}
-        tried: list[str] = []
-        rejected: dict[str, str] = {}
-        searched = False
-        for query in queries:
-            try:
-                hits = collectors.web_search(query, count=8)
-            except HttpError as exc:
-                if exc.code in ('request_outcome_unknown', 'request_budget', 'project_paused') or (
-                        execution and (execution.usage().get('search') or {}).get('unknown')):
-                    raise
-                continue  # search service failed or paused: not evidence that there is no site
-            searched = True
-            # Only this search's own outcome matters here: an earlier unknown page read that the owner
-            # authorised to resend is still "unresolved" until the replay reaches it.
-            if execution and (execution.usage().get('search') or {}).get('unknown'):
-                raise HttpError('request_outcome_unknown')
-            candidates = [c for c in sw.official_candidates(hits, names) if c not in tried]
-            if not candidates:
-                continue
-            report = mon.check_sites(self.monitor, transport, project_id, None, stage, execution=execution,
-                                     candidates=candidates, names=names)
-            tried += report.get("tried", candidates)
-            rejected.update(report.get("rejected", {}))
-            if report.get("found"):
-                break
-        found = report.get("found")
-        status = "found" if found else "not_found" if searched else "search_failed"
-        self.store.set_state(f"site_discovery:{project_id}", json.dumps(
-            {**record, "status": status, "query": query, "url": found or "",
-             "matched": report.get("matched", ""), "tried": tried, "rejected": rejected}, ensure_ascii=False))
-        return report
-
-    def _collect_monitor(self, project_id: str, project: dict, collectors: Collectors, stage) -> dict:
-        """Searches for the monitoring plan's due items and for the next step of open storylines.
-
-        Plan items run by cadence (core first; trial/reduced monthly; event-driven ones wait for a trigger).
-        News found for a competition/demand/technology/rules item is filed under that category, not as company news."""
-        from project_watch.studio import monitor as mon
-        from project_watch.studio.monitoring_plan import AXIS_CATEGORY
-
-        report: dict[str, dict] = {}
-        exploration = self.monitoring_plan.explorations
-        exploration.refresh(project_id, self.questions)
-        execution = getattr(self._execution_state, 'current', None)
-        cycle = execution.job['id'] if execution else 'adhoc:' + uuid.uuid4().hex
-        jobs = [("watch", q, AXIS_CATEGORY.get(w.get("axis") or "self", "company"), w)
-                for w, q in self.monitoring_plan.query_jobs(project_id, PLAN_QUERY_LIMIT, cycle=cycle)]
-        jobs += [("thread", q, "company", None) for q in mon.thread_queries(self.monitor, project_id)]
-        if jobs:
-            stage("检索监控方案条目与事件线索")
-        for key, query, category, watch in jobs:
-            watch_id = watch['id'] if watch else None
-            version = str(watch.get('lifecycle_version', '0')) if watch else None
-            if watch:
-                current = self.monitoring_plan._get(project_id, watch_id)
-                if (not current or current['status'] == 'retired' or query not in current['queries']
-                        or str(current.get('lifecycle_version', '0')) != version):
-                    continue
-                if exploration.managed(watch) and not exploration.start(watch, cycle):
-                    continue
-            entry = report.setdefault(key, {"checked": 0, "added": 0, "errors": []})
-            try:
-                items = _news(collectors, query, 8)
-                entry["checked"] += 1
-                entry["added"] += self.store.add_items(project_id, category, items)
-                if watch_id:
-                    complete = self.monitoring_plan.mark_query(watch_id, query, success=True, lifecycle_version=version)
-                    if complete and exploration.managed(watch):
-                        exploration.collected(watch_id, cycle)
-            except (HttpError, ValueError, KeyError) as exc:
-                if watch_id:
-                    self.monitoring_plan.mark_query(watch_id, query, success=False, lifecycle_version=version)
-                    if exploration.managed(watch) and getattr(exc, 'code', '') != 'project_paused':
-                        exploration.hold(watch, 'waiting_recovery' if getattr(exc, 'code', '') == 'request_outcome_unknown' else 'source_failure')
-                if getattr(exc, "code", "") in ("request_outcome_unknown", "request_budget", "provider_backoff", "project_paused"):
-                    raise
-                entry["errors"].append(f"{query}: {getattr(exc, 'code', '')} {exc}"[:200])
-        if collectors.has_search:
-            from project_watch.studio import signals as sig
-
-            stage("检索招投标与资质许可")
-            try:
-                records = sig.public_records(collectors, company_names(project), report=report,
-                                             biomed=bool((self.store.get_plan(project_id) or {}).get('is_biomed')))
-                for key, items in records.items():
-                    entry = report.setdefault(key, {"checked": 0, "added": 0, "errors": []})
-                    entry["added"] = self.store.add_items(project_id, "company", items)
-            except (HttpError, ValueError, KeyError) as exc:
-                if getattr(exc, 'code', '') == 'project_paused':
-                    raise
-                for key in ("tender", "license"):
-                    report[key] = {"checked": 0, "added": 0, "errors": [f"{getattr(exc, 'code', '')} {exc}"[:200]]}
-        return report
 
     def run_public_profile(self, job: dict) -> None:
         from project_watch.studio.public_profile import build_public_profile
@@ -2373,89 +1882,6 @@ class Pipeline:
             _log.info("crosscheck skipped: %s", exc)
 
     # ------------------------------------------------------------------ deep analysis
-    def run_scope(self, job: dict) -> None:
-        from project_watch.studio import scope_maintenance
-
-        execution = getattr(self._execution_state, 'current', None)
-        root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
-        if not execution or not root:
-            raise ValueError('scope maintenance requires leased DSH runtime')
-        scope_maintenance.run(self, execution, Path(root))
-
-    def run_assessment(self, job: dict) -> None:
-        from project_watch.studio import question_assessment
-
-        execution = getattr(self._execution_state, 'current', None)
-        root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
-        if not execution or not root:
-            raise ValueError('question assessment requires leased DSH runtime')
-        question_assessment.run(self, execution, Path(root))
-
-    def run_insight(self, job: dict) -> None:
-        """深度分析: cross-source AI judgments (position, technology, consensus, industry), each bound to numbered sources."""
-        dsh_root = os.environ.get("PROJECT_WATCH_DSH_RUNTIME", "")
-        execution = getattr(self._execution_state, 'current', None)
-        if execution and execution.read_checkpoint('snapshot_analysis_input_v1'):
-            from project_watch.studio import snapshot_work
-
-            snapshot_work.complete(self, execution)
-            return
-        if execution and execution.read_checkpoint('event_insight_input_v1'):
-            from project_watch.studio import event_insight
-
-            if not dsh_root:
-                raise ValueError('frozen insight requires DSH runtime')
-            event_insight.run(self, execution, Path(dsh_root))
-            return
-        if dsh_root and execution and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
-            from project_watch.studio.dsh_runtime import run_monitor
-
-            run_monitor(self, execution, Path(dsh_root), analysis_only=True)
-            return
-        from project_watch.studio.public_executor import require_available
-
-        require_available()
-        if job.get('id'):
-            self.store.set_stage(job['id'], '深度分析')
-        if self.insight_generator is None:
-            raise ValueError('insight_unavailable: 当前安装未包含深度分析生成器')
-
-        _settings, _http, llm, _ = self.tools()
-        if not llm.ready:
-            raise ValueError("需先在设置中连接 AI 模型")
-        self.insight_generator.run(self, llm, job["project_id"])
-
-    def schedule_insight(self, project_id: str) -> dict | None:
-        """Analyse settled new evidence once, without holding it behind a daily gate."""
-        from project_watch.studio.public_executor import unavailable_reason
-
-        if unavailable_reason():
-            return None
-        if os.environ.get("PROJECT_WATCH_DSH_RUNTIME") and os.environ.get("PROJECT_WATCH_DSH_MONITOR") == "1":
-            project, settings = self.store.get_project(project_id), self.settings_store.load()
-            if not project or not project['activated'] or project['status'] != 'active' or not settings.model.ready:
-                return None
-            # Dispatch only durable object/event work from a settled source round.
-            from project_watch.studio import event_insight_work
-
-            try:
-                return event_insight_work.dispatch_pending(self, project_id)
-            except HttpError:
-                return None  # Existing project hold remains visible; no new stage bypasses it.
-        if self.insight_generator is None:
-            return None
-
-        project, settings = self.store.get_project(project_id), self.settings_store.load()
-        if not project or not project['activated'] or project['status'] != 'active' or not settings.model.ready:
-            return None
-        checked = self._insight_checked.get(project_id)
-        moment = datetime.now(UTC)
-        if checked and moment - checked < timedelta(seconds=60):
-            return None  # Gathering reads every source; do not repeat it on each 5-second tick.
-        self._insight_checked[project_id] = moment
-        fingerprint = self.insight_generator.due(self, project_id, now=moment)
-        return self.store.enqueue(project_id, 'insight', automatic=True, input_version=fingerprint) if fingerprint else None
-
     # ------------------------------------------------------------------ landscape
     def schedule_details(self, project_id: str) -> dict | None:
         project, settings = self.store.get_project(project_id), self.settings_store.load()
@@ -2754,79 +2180,21 @@ class Pipeline:
                 return
             finally:
                 self._execution_state.current = previous_execution
+        if job['kind'] in dispatch.LEGACY_KINDS:
+            self._execution_state.current = previous_execution
+            raise ValueError('此任务类型已停用，已有结果保留；请点“更新”开始新一轮。')
         try:
             with self.store.write_scope(execution._guard if execution else None):
-                if execution:
-                    from project_watch.studio.acceptance_batch import prepare_continuation
-
-                    prepare_continuation(execution)
-                if execution and job['kind'] == 'external':
-                    from project_watch.studio.independent_collection import run_if_admitted
-                    from project_watch.studio.public_research_admission import admit
-
-                    admit(self, execution)
-                    if run_if_admitted(self, execution):
-                        execution.checkpoint('dispatch_completed', {'completed': True})
-                        return
-                if (execution and job['kind'] == 'insight' and job.get('input_version', '').startswith('manual:')
-                        and os.environ.get('PROJECT_WATCH_DSH_RUNTIME') and os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'):
-                    from project_watch.studio import event_insight_work
-
-                    event_insight_work.admit_manual(self, execution)
-                if (execution and job['kind'] in ('external', 'external_followup')
-                        and os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
-                        and execution.read_checkpoint('material_pipeline_v1') is None):
-                    from project_watch.studio import progressive_bootstrap
-
-                    request = execution.read_checkpoint('collection_request_v1') or {}
-                    monitor = os.environ.get('PROJECT_WATCH_DSH_MONITOR') == '1'
-                    project = self.store.get_project(job['project_id']) or {}
-                    if request.get('mode') == 'topic' or (monitor and (job['kind'] == 'external_followup' or project.get('last_external_at'))):
-                        progressive_bootstrap.freeze(execution, 'monitor', materials=True)
-                    elif not project.get('last_external_at'):
-                        progressive_bootstrap.freeze(execution, 'bootstrap')
-                    from project_watch.studio import update_run
-
-                    update_run.freeze(execution)
-                if execution and job['kind'] != 'commercial':
-                    from project_watch.studio.recovery import input_binding
-
-                    saved_recovery = execution.read_checkpoint('recovery_inputs')
-                    current_binding = input_binding(self, job['project_id'])
-                    if saved_recovery and saved_recovery['binding'] != current_binding:
-                        raise ValueError('监控依据已变化，请重新更新项目；已有结果保留。')
-                    if not saved_recovery:
-                        execution.checkpoint('recovery_inputs', {'binding': current_binding})
                 if execution and execution.read_checkpoint("dispatch_completed"):
                     return
-                if execution and job['kind'] == 'external_followup':
-                    self.monitoring_plan.explorations.resume_collected(job['project_id'], job['id'])
-                {"internal": self.run_internal, "external": self.run_external, 'external_followup': self.run_external_followup,
-                 "brief": self.run_brief, "public_profile": self.run_public_profile,
+                {"internal": self.run_internal, "brief": self.run_brief, "public_profile": self.run_public_profile,
                  "landscape": self.run_landscape, "business": self.run_business, "competition": self.run_competition,
-                 "details": self.run_details, "commercial": self.run_commercial, "insight": self.run_insight,
-                 "scope": self.run_scope, "assessment": self.run_assessment}[job["kind"]](job)
+                 "details": self.run_details, "commercial": self.run_commercial}[job["kind"]](job)
                 if execution:
+                    # A pause during the job leaves it unfinished (resumed later), never "done".
                     if job['kind'] != 'internal' and (self.store.get_project(job['project_id']) or {}).get('status') == 'paused':
                         raise HttpError('project_paused')
-                    from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE
-
-                    with closing(self.store._connect()) as db:
-                        pending_model = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job['id'],)).fetchone()
-                    if pending_model:
-                        raise HttpError('model_http_5xx')
                     execution.checkpoint("dispatch_completed", {"completed": True})
-        except (ModelError, HttpError, ValueError) as exc:
-            if execution and job['kind'] == 'external_followup' and getattr(exc, 'code', '') != 'project_paused':
-                try:
-                    with self.store.write_scope(execution._guard):
-                        self.monitoring_plan.explorations.hold_cycle(job['project_id'], job['id'],
-                            'waiting_recovery' if getattr(exc, 'code', '') == 'request_outcome_unknown' else 'source_failure')
-                except Exception:
-                    # A lost lease must not acquire a new write path just to
-                    # record diagnostics, nor replace the original exception.
-                    _log.info('exploration failure receipt unavailable')
-            raise
         finally:
             self._execution_state.current = previous_execution
 
@@ -2896,31 +2264,7 @@ class StudioWorker:
                                 'WHERE project_id=? AND artifact_key=? AND generation=? AND status=?',
                                 (pid, request['artifact_key'], request['generation'], status))
                         continue
-                    if dependency and dependency['kind'] in ('insight', 'question'):
-                        if not model_ready or project['status'] != 'active' or not project['activated']:
-                            continue
-                        from project_watch.studio import event_insight_work, question_work
-
-                        try:
-                            rebuild = event_insight_work.rebuild if dependency['kind'] == 'insight' else question_work.rebuild
-                            job = rebuild(self.pipeline, pid, request)
-                        except HttpError:
-                            continue
-                        except ValueError:
-                            # Expected stale/bounded input is a visible blocked rebuild,
-                            # never a reason to prevent the next baseline source round.
-                            with closing(store._connect()) as db, db:
-                                db.execute("UPDATE studio_rebuild_requests SET status='blocked_input_changed' "
-                                    'WHERE project_id=? AND artifact_key=? AND generation=? AND status=?',
-                                    (pid, request['artifact_key'], request['generation'], status))
-                            continue
-                        if job is None:
-                            continue
-                        new_status = 'scheduled:' + job['id']
-                        with closing(store._connect()) as db, db:
-                            db.execute('UPDATE studio_rebuild_requests SET status=? WHERE project_id=? AND artifact_key=? '
-                                'AND generation=? AND status=?', (new_status, pid, request['artifact_key'], request['generation'], status))
-                        continue
+                    # Insight and question artifacts are rebuilt by the next round's analysis.
                     kind = {"profile": "internal", "public_profile": "public_profile", "brief": "brief"}.get(dependency["kind"] if dependency else "")
                     if not kind:
                         new_status = "awaiting_source_update"

@@ -7,11 +7,10 @@ import json
 import re
 from contextlib import closing
 from copy import deepcopy
-from datetime import datetime
 from decimal import Decimal
 from itertools import pairwise
 
-from project_watch.studio.insight import SOURCE_LABEL, VERDICTS, counts, held, load, save
+from project_watch.studio.insight import SOURCE_LABEL, VERDICTS, counts
 
 CONFIDENCE = ("high", "medium", "low")
 
@@ -715,41 +714,3 @@ def normalize(data: dict, numbered: dict) -> dict:
             "operations": rings["operations"], "chain": rings["chain"],
             "gaps": gaps, "qualifier_checks": qualifier_checks, "consistency_checks": consistency_checks,
             "cited": [_ref(code, numbered) for code in cited]}
-
-def run(pipeline, llm, project_id: str) -> dict:
-    if held(pipeline.store, project_id):
-        raise ValueError("该项目有结果不明的模型请求等待确认恢复；请先处理原任务，深度分析不会绕过它。")
-    gathered = gather(pipeline, project_id, llm)
-    if not gathered["numbered"]:
-        raise ValueError("还没有可分析的素材：请先上传资料或等待首轮信息收集完成。")
-    data = llm.json(SYSTEM, gathered["text"], max_tokens=6000)
-    return save(pipeline.store, project_id, normalize(data, gathered["numbered"]), gathered,
-                model=getattr(getattr(llm, "config", None), "model", ""))
-
-def due(pipeline, project_id: str, *, now: datetime | None = None) -> str | None:
-    """Fingerprint to analyse once changed evidence settles; no wall-clock daily gate.
-
-    Waits while collection or analysis jobs for the project are still running, so one pass sees settled inputs.
-    """
-    store = pipeline.store
-    if held(store, project_id):
-        return None
-    with closing(store._connect()) as db:
-        busy = db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
-                          (project_id,)).fetchone()
-    if busy:
-        return None
-    previous = load(store, project_id)
-    gathered = gather(pipeline, project_id)
-    if not gathered["numbered"] or (previous and previous.get("fingerprint") == gathered["fingerprint"]):
-        return None
-    # Removing the time gate must not turn a failed analysis into a paid loop.
-    # Same-input failure needs explicit recovery; genuinely new inputs may run.
-    # Unknown paid outcomes are held project-wide above, even with new inputs.
-    with closing(store._connect()) as db:
-        failed = db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND kind='insight' "
-                            "AND status='failed' AND input_version=? LIMIT 1",
-                            (project_id, gathered["fingerprint"])).fetchone()
-    if failed:
-        return None
-    return gathered["fingerprint"]

@@ -10,6 +10,7 @@ analysis, and analysis never re-collects.
 """
 import re
 from contextlib import closing
+from datetime import date
 
 from project_watch.studio import collection_targets, query_names
 from project_watch.studio.collection_ingest import CollectionIngest
@@ -18,8 +19,7 @@ from project_watch.studio.collection_plan import make_plan
 from project_watch.studio.collection_runner import run_collection
 from project_watch.studio.collection_scope import build_collection_plan
 from project_watch.studio.collection_sources import CollectionSources
-from project_watch.studio.dsh_bootstrap import digest
-from project_watch.studio.store import now
+from project_watch.studio.store import digest, now
 
 INPUT = 'collect_input_v1'
 RESULT = 'collect_result_v1'
@@ -31,17 +31,71 @@ WATCH_FIELDS = ('id', 'visibility', 'status', 'scope_kind', 'relation_type', 're
                 'axis', 'queries', 'lifecycle_version')
 
 
-def _names(pipeline, project_id, project):
-    from project_watch.studio.collection_host import subject_names
+def subject_names(pipeline, project_id):
+    """Confirmed subject names only; internal aliases and resolver guesses are excluded.
 
-    class Research:  # subject_names only needs these two attributes
-        pass
-    research = Research()
-    research.pipeline, research.project_id = pipeline, project_id
-    raw = subject_names(research) or [project.get('legal_name') or project.get('name') or '']
+    Current names first, then public aliases whose validity has ended (former
+    names): institution and applicant indexes are historical, so older papers
+    and filings carry them. Not-yet-valid aliases are never used.
+    """
+    objects = pipeline.objects
+    names = list(objects.query_inputs(project_id)['company_names'])
+    today = date.today().isoformat()
+    for row in objects.page(project_id, include_internal=False, current_aliases_only=True):
+        if row.get('purpose') != 'subject' or row['kind'] != 'company':
+            continue
+        names.extend(a['name'] for a in row['aliases'] if a['visibility'] == 'public' and a['valid_to']
+                     and a['valid_to'] < today and (not a['valid_from'] or a['valid_from'] <= a['valid_to']))
+    return list(dict.fromkeys(names))
+
+
+def _names(pipeline, project_id, project):
+    raw = subject_names(pipeline, project_id) or [project.get('legal_name') or project.get('name') or '']
     if project.get('short_name') and project['short_name'] not in raw:
         raw = [*raw, project['short_name']]
     return query_names.query_names(raw)
+
+
+PLAN_FIELDS = ('industry_queries', 'policy_queries', 'paper_queries', 'paper_authors', 'trial_terms', 'trial_sponsors')
+
+
+def _stored_plan(pipeline, pid, project):
+    """The project's public plan; the model drafts it once when none is stored yet.
+
+    AI decides what to watch, once, as data: competitors, industry and policy
+    queries, paper topics. Later changes come from the scope review after each
+    analysis. A model failure leaves the round on confirmed names and watches.
+    """
+    from project_watch.studio.http import HttpError
+    from project_watch.studio.llm import ModelError
+
+    stored = pipeline.store.get_plan(pid) or {}
+    if 'competitors' in stored:
+        return stored
+    _, _, llm, _ = pipeline.tools()
+    if not llm.ready:
+        return stored
+    try:
+        drafted = pipeline.build_plan(llm, {**project, 'id': pid})
+    except (ModelError, HttpError, ConnectionError, TimeoutError) as exc:
+        # An unclear plan request stays recorded (never resent in this job); the round goes on.
+        if getattr(exc, 'code', '') in ('project_paused', 'project_not_consented'):
+            raise
+        return stored
+    plan = {**stored, **drafted, 'drafted_at': now()}
+    pipeline.store.put_plan(pid, plan)
+    return plan
+
+
+def _merge_stored_plan(public_plan, stored):
+    """Watch-derived entries first, then the stored plan; confirmed names stay the company queries."""
+    names = {c['name'] for c in public_plan['competitors']}
+    public_plan['competitors'] = [*public_plan['competitors'], *[
+        {k: c[k] for k in ('name', 'query') if c.get(k)} for c in stored.get('competitors') or []
+        if isinstance(c, dict) and c.get('name') and c['name'] not in names]][:8]
+    for field in PLAN_FIELDS:
+        merged = [*public_plan.get(field, []), *[q for q in stored.get(field) or [] if isinstance(q, str)]]
+        public_plan[field] = list(dict.fromkeys(merged))[:8]
 
 
 def freeze(pipeline, execution, *, mode):
@@ -71,6 +125,7 @@ def freeze(pipeline, execution, *, mode):
     for kind, field in (('technology', 'technology_queries'), ('industry', 'industry_queries'),
                         ('policy', 'policy_queries')):
         public_plan[field] = [q for w in relation if w['relation_type'] == kind for q in w['queries'] or []]
+    _merge_stored_plan(public_plan, _stored_plan(pipeline, pid, project))
     # Exploration quota: queries the last early-warning check proposed, used once.
     from project_watch.studio.assumptions import take_exploration
     exploration = take_exploration(pipeline.store, pid, execution.job['id'])
@@ -135,6 +190,28 @@ def read_bodies(pipeline, execution, collectors):
     return {'read': read, 'candidates': len(ids)}
 
 
+def _record_health(pipeline, pid, rows):
+    """Per-channel source health from this round's receipts (counts only, no content)."""
+    from project_watch.studio.collection_plan import channel_key
+    from project_watch.studio.health import SOURCE_KINDS
+
+    report = {}
+    for row in rows:
+        if row['capability'] != 'available' or row['outcome'] == 'not_due':
+            continue
+        key = channel_key(row)
+        if key not in SOURCE_KINDS:
+            continue
+        entry = report.setdefault(key, {'checked': 0, 'added': 0, 'errors': []})
+        if row['outcome'] in ('success', 'partial'):
+            entry['checked'] += 1
+            entry['added'] += row.get('saved_count') or 0
+        if row['outcome'] != 'success':
+            entry['errors'].append(row['reason'] or row['outcome'])
+    if report:
+        pipeline.health.record(pid, report)
+
+
 def run(pipeline, execution, *, mode='refresh'):
     frozen = freeze(pipeline, execution, mode=mode)
     pid = execution.job['project_id']
@@ -179,9 +256,17 @@ def run(pipeline, execution, *, mode='refresh'):
               else 'complete' if all(o == 'success' for o in outcomes) else 'partial')
     result = dict(status=status, finished_at=now(), sources=len(rows),
                   outcomes={o: outcomes.count(o) for o in set(outcomes)}, patent_documents=numbers,
-                  bodies_read=bodies.get('read', 0))
+                  bodies_read=bodies.get('read', 0),
+                  not_collected=[dict(source=r['source'], outcome=r['outcome'], reason=(r['reason'] or '')[:80])
+                                 for r in rows if r['capability'] == 'available'
+                                 and r['outcome'] not in ('success', 'not_due')][:30])
     execution.checkpoint(RESULT, result)
-    pipeline.store.touch(pid, 'last_external_at')
+    _record_health(pipeline, pid, rows)
+    # The scheduler's cadence counts attempts, so a failing source never loops;
+    # only a round that collected something counts as observed.
+    pipeline.store.set_state('external_attempt:' + pid, now())
+    if status != 'failed':
+        pipeline.store.touch(pid, 'last_external_at')
     if status != 'failed':
         pipeline.store.enqueue(pid, 'analyze', input_version='collect:' + execution.job['id'])
     return result

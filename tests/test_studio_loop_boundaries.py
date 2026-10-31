@@ -1,7 +1,6 @@
 """Loop stopping invariants. Synthetic databases and fake transports only."""
 import socket
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 from threading import Barrier
 from types import SimpleNamespace
 
@@ -121,7 +120,7 @@ def test_close_restore_rejects_old_question_snapshot(env):
 
 def test_pause_keeps_received_receipt_but_blocks_next_dispatch(env):
     p, pid, _ = env
-    p.store.enqueue(pid, 'external')
+    p.store.enqueue(pid, 'collect')
     job = p.store.claim()
     execution = JobExecution(p.store, job)
     def receive():
@@ -135,37 +134,11 @@ def test_pause_keeps_received_receipt_but_blocks_next_dispatch(env):
     assert execution.usage()['model']['requests'] == 1
 
 
-def test_paused_dispatch_remains_same_job_and_resumes_receipts(env, monkeypatch):
-    p, pid, _ = env
-    p.store.enqueue(pid, 'external')
-    job = p.store.claim()
-    calls = []
-    def dispatch(job):
-        execution = p._execution_state.current
-        def receive():
-            calls.append('received')
-            p.store.set_status(pid, 'paused')
-            return Response(200, {}, b'{}')
-        execution.call('model', 'already-received', receive)
-        # Even a downstream collector swallowing a control error cannot mark success.
-        with suppress(HttpError):
-            execution.call('model', 'next', lambda: Response(200, {}, b'{}'))
-    monkeypatch.setattr(p, 'run_external', dispatch)
-    with pytest.raises(HttpError, match='project_paused'):
-        p.run(job)
-    assert p.store.defer_paused(job)
-    assert p.store.claim() is None
-    p.store.set_status(pid, 'active')
-    resumed = p.store.claim()
-    assert resumed['id'] == job['id']
-    p.run(resumed)
-    assert calls == ['received']
-    assert JobExecution(p.store, resumed).read_checkpoint('dispatch_completed')
 
 
 def test_worker_records_pause_as_queued_not_failed(env, monkeypatch):
     p, pid, _ = env
-    queued = p.store.enqueue(pid, 'external')
+    queued = p.store.enqueue(pid, 'collect')
     worker = StudioWorker(p)
     monkeypatch.setattr(worker, 'schedule', lambda: None)
     def pause(job):
@@ -186,20 +159,6 @@ def test_paused_project_does_not_claim_brief(env):
     assert p.store.claim() is None
 
 
-def test_closed_collection_skips_remaining_queries_and_late_hits(env, monkeypatch):
-    p, pid, plan = env
-    w = add(plan, pid, '监控中关闭', queries=['第一条', '第二条'])
-    calls = []
-    def search(*args):
-        calls.append(args[1])
-        plan.update(w['id'], {'status': 'retired'}, actor='human')
-        return []
-    monkeypatch.setattr('project_watch.studio.pipeline._news', search)
-    p._collect_monitor(pid, p.store.get_project(pid), SimpleNamespace(has_search=False), lambda _: None)
-    assert calls == ['第一条']
-    assert not plan._get(pid, w['id'])['last_run_at']
-    seed_pending(p, pid, w)
-    assert p.monitor.watch_event_ids(w['id']) == []
 
 
 def test_old_query_receipt_cannot_advance_restored_item(env):

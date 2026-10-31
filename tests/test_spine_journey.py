@@ -6,14 +6,12 @@ deterministic double (its JSON contract is covered by section analysis tests).
 No network.
 """
 import json
-import re
 import socket
 from contextlib import closing
 from urllib.parse import unquote_plus, urlsplit
 
 import pytest
-from test_collect_job import paper, patents
-from test_retrieval_queries import patent_html
+from synthetic_providers import EMPTY_RSS, model_answer, paper, patent_html, patents, section
 
 from project_watch.studio import analyze_job, dispatch, insight
 from project_watch.studio.app import create_studio_app
@@ -25,45 +23,6 @@ from project_watch.studio.settings import ModelConfig
 from project_watch.studio.store import now
 
 LEGAL = 'Synthetic Bio Inc.（合成生物，开曼注册主体）'
-
-
-def section(ref='S1'):
-    return dict(verdict='steady', confidence='low', summary='合成材料显示研发仍在推进。',
-                **{'for': [dict(text='合成材料记录了研发进展。', refs=[ref])], 'against': [], 'change_if': []})
-
-
-def model_answer(system, user, state):
-    if '值得读取正文' in system:
-        return {'results': [{'id': i, 'read': False} for i in re.findall(r'id=(\S+)', user)]}
-    if '筛选与被监控公司相关的公开信息' in system:
-        results = []
-        for block in user.split('id=')[1:]:
-            item_id = block.split(' |', 1)[0].strip()
-            title = re.search(r'标题：(.*)', block).group(1).strip()
-            subject = 'Synthetic Biologics' in block or 'SYNTHETIC BIOLOGICS' in block
-            results.append(dict(id=item_id, relevant=True, category=None, relation='subject' if subject else 'field',
-                                importance='notable', summary='合成研究记录。', impact='与已知计划无直接关联，属研发进展。',
-                                source_title=title, source_quote=title))
-        return {'results': results}
-    if '是否在讲同一事件' in system:
-        return {'results': [{'pair': n + 1, 'same': False} for n in range(user.count('pair'))]}
-    if '列出这项投资成立所依赖的关键假设' in system:
-        return {'assumptions': [{'text': '核心研发管线持续推进', 'basis': '公司资料'},
-                                {'text': '专利布局覆盖核心技术', 'basis': '公司资料'}]}
-    if '对照每条投资假设' in system:
-        ids = re.findall(r'^(A[0-9a-f]{8})：', user, re.M)
-        items = re.findall(r'id=(\S+)', user)
-        return {'assumptions': [{'id': ids[0], 'status': 'strengthened', 'signals': [{'item': items[0], 'why': '署名研究'}]},
-                                {'id': ids[1], 'status': 'weakened', 'signals': [{'item': 'not-given', 'why': '编造'}]}],
-                'unforeseen': [{'text': '出现新技术路线', 'items': [items[0]]}, {'text': '无依据', 'items': []}],
-                'explore': [{'query': 'Synthetic Rival 新靶点', 'reason': '新竞品'}]}
-    if '一级市场投资研究员' in system:
-        state['drafts'] += 1
-        if state.get('fail_draft'):
-            state['fail_draft'] -= 1
-            return 500
-        return dict(operations=section(), chain=section())
-    return {}
 
 
 @pytest.fixture
@@ -102,6 +61,8 @@ def env(tmp_path, monkeypatch):
         elif host == 'patents.google.com':
             number = urlsplit(url).path.split('/')[2]
             return Response(200, {}, patent_html(number, applicant='Synthetic Biologics Suzhou Co Ltd', family=None).encode())
+        elif host == 'www.bing.com':
+            return Response(200, {}, EMPTY_RSS)
         elif host == 'clinicaltrials.gov':
             data = {'studies': []}
         elif host == 'www.cninfo.com.cn':
@@ -222,7 +183,7 @@ def test_assumptions_warning_and_exploration_feed_the_next_round(env):
     # The proposed exploration query is used once, by the next collection.
     work(pipeline, 'report')
     with pipeline.store._connect() as db:
-        db.execute("UPDATE studio_jobs SET status='done' WHERE kind='brief' AND project_id=?", (pid,))
+        db.execute("UPDATE studio_jobs SET status='done' WHERE kind IN ('brief','landscape') AND project_id=?", (pid,))
     pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
     second = work(pipeline, 'collect')
     frozen = second.read_checkpoint(collect_job.INPUT)

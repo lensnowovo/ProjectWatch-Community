@@ -143,11 +143,12 @@ def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
     assert rollup['steps'][-1]['run'] == 'python -I -X utf8 scripts/ci_scope.py summary'
 
 
-def test_progressive_installed_harness_uses_actual_worker_and_fixed_consumers(tmp_path):
+def test_installed_round_harness_runs_collect_analyze_report(tmp_path):
     import runpy
-    support = runpy.run_path(str(ROOT / 'tests/progressive_installed_support.py'))
+    support = runpy.run_path(str(ROOT / 'tests/spine_installed_support.py'))
     result = support['run'](tmp_path)
-    assert result['immutable_insight'] and result['counts']['materials'] == 1
+    assert result['jobs'] == ['collect', 'analyze', 'report'] and result['sections']
+    assert result['materials']['paper'] >= 1 and result['materials']['patent'] >= 1
 
 
 def test_candidate_gate_requires_exact_commit_and_never_publishes():

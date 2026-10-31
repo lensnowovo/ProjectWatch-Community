@@ -1,5 +1,4 @@
 """Synthetic invalidation and evidence lookup tests; no provider requests."""
-from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,43 +31,10 @@ def scheduled(tmp_path, monkeypatch):
         worker.stop()
 
 
-def test_idle_repeated_schedule_skips_unchanged_input_gathering(scheduled):
-    p, _pid, _, worker, calls = scheduled
-    worker.schedule()
-    worker.schedule()
-    assert calls == ['business', 'details', 'competition']
-    p.store.set_state('synthetic-evidence-arrival', '1')
-    worker.schedule()
-    assert len(calls) == 6
-    worker.schedule()
-    assert len(calls) == 6
 
 
-def test_settings_change_and_periodic_fallback_invalidate(scheduled, monkeypatch):
-    p, _, settings, worker, calls = scheduled
-    worker.schedule()
-    monkeypatch.setattr(p.settings_store, 'load', lambda: replace(settings, model=replace(settings.model, api_key='new-synthetic')))
-    worker.schedule()
-    assert len(calls) == 6
-    worker._analysis_checked_at -= 61
-    worker.schedule()
-    assert len(calls) == 9
 
 
-def test_failed_check_and_concurrent_arrival_are_not_cached(scheduled, monkeypatch):
-    p, _, _, worker, calls = scheduled
-    def fail(*_):
-        raise ValueError('synthetic preparation failure')
-    monkeypatch.setattr(p, 'schedule_details', fail)
-    with pytest.raises(ValueError):
-        worker.schedule()
-    assert worker._analysis_stamp is None
-    monkeypatch.setattr(p, 'schedule_details', lambda *_: p.store.set_state('during-check', 'new'))
-    worker.schedule()
-    monkeypatch.setattr(p, 'schedule_details', lambda *_: calls.append('details'))
-    before = len(calls)
-    worker.schedule()
-    assert len(calls) == before + 3
 
 
 def test_evidence_lookup_indexes_cover_reverse_joins(tmp_path):

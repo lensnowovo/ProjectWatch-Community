@@ -5,12 +5,10 @@ They reference original evidence, not an additional mutable facts database.
 This boundary produces drafts, not reviewed publications.
 """
 import json
-from contextlib import closing, suppress
+from contextlib import closing
 
-from project_watch.studio.dsh_bootstrap import digest
 from project_watch.studio.http import HttpError
-from project_watch.studio.material_ownership import project_guard
-from project_watch.studio.store import now
+from project_watch.studio.store import digest, now
 
 KEY = 'material-snapshot-v1'
 
@@ -45,13 +43,8 @@ def _permitted(db, project_id, version_id):
 
 
 def _guard(execution, db):
-    from project_watch.studio.dispatch import KINDS
-
+    # Another job's unknown request is accounting, not a reason to stop (dispatch.py).
     execution._guard(db)
-    if execution.job.get('kind') not in KINDS:
-        # Legacy owners keep their cross-job hold. The rewritten pipeline treats
-        # another job's unknown request as accounting, not a reason to stop.
-        project_guard(db, execution.job['project_id'], execution.job['id'])
     project = db.execute('SELECT status,consent_at FROM studio_projects WHERE project_id=?',
                          (execution.job['project_id'],)).fetchone()
     if not project or project[0] != 'active':
@@ -159,50 +152,3 @@ def derive_permitted(execution, snapshot_id):
         db.execute('INSERT INTO studio_insight_versions VALUES (?,?,?,?,?,?)',
                    (value['id'], pid, key, signature, json.dumps(value, ensure_ascii=False), value['created_at']))
         return value
-
-
-def analyze_saved(execution, snapshot_id, *, attempt_key, analyze):
-    """Invoke an injected analysis-only role on fixed originals, retaining drafts.
-
-    The role must use the existing journal/lease/cost ledger. This function has
-    no collector, HTTP client, scheduler or event publisher. Terminal attempts
-    are replay-only; a settled failure requires an explicit new attempt key.
-    An interrupted running attempt is never automatically redispatched.
-    """
-    if not isinstance(attempt_key, str) or not attempt_key.strip():
-        raise ValueError('analysis attempt key required')
-    stage = 'snapshot-analysis:' + digest([snapshot_id, attempt_key])[:40]
-    with closing(execution.store._connect()) as db:
-        _guard(execution, db)
-    context = read(execution.store, execution.job['project_id'], snapshot_id)
-    previous = execution.read_checkpoint(stage)
-    if previous:
-        if previous['status'] == 'draft':
-            return previous
-        raise ValueError('new analysis attempt required; previous attempt retained')
-    if not context['materials']:
-        raise ValueError('snapshot contains no permitted material')
-    receipt = dict(snapshot_id=snapshot_id, attempt_key=attempt_key, job_id=execution.job['id'],
-                   status='running', started_at=now(), publication='not_reviewed')
-    execution.checkpoint_chunked(stage, receipt)
-    try:
-        draft = analyze(context)
-        if not isinstance(draft, dict):
-            raise ValueError('analysis draft must be an object')
-        # Disclosure can change while a model is working; do not publish or
-        # return a usable draft whose evidence was withdrawn during that call.
-        read(execution.store, execution.job['project_id'], snapshot_id)
-        with closing(execution.store._connect()) as db:
-            _guard(execution, db)
-        receipt.update(status='draft', draft=draft, finished_at=now())
-        execution.checkpoint_chunked(stage, receipt)
-        return receipt
-    except Exception as exc:
-        uncertain = getattr(exc, 'code', None) == 'request_outcome_unknown'
-        with suppress(Exception):
-            uncertain = uncertain or any(v['unknown'] for v in execution.usage().values())
-        receipt.update(status='outcome_unknown' if uncertain else 'failed',
-                       error=getattr(exc, 'code', type(exc).__name__), finished_at=now())
-        with suppress(Exception):  # An expired lease cannot write a receipt.
-            execution.checkpoint_chunked(stage, receipt)
-        raise

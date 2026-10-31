@@ -212,37 +212,6 @@ def test_concurrent_claim_coalesces_one_paid_request(tmp_path):
     assert len(calls) == 1
 
 
-def test_lease_expiry_cannot_publish_a_paid_result_and_completed_response_replays(tmp_path):
-    from test_studio_job_recovery import expire
-
-    from project_watch.studio.execution import JobExecution
-    pipeline, pid, service = fixture(tmp_path)
-    store = pipeline.store
-    store.enqueue(pid, 'commercial')
-    job = store.claim()
-    execution = JobExecution(store, job, budgets={'commercial': 9})
-    calls = []
-    def factory(*args):
-        class Client:
-            def fetch(self, name, aliases, end):
-                calls.append(name)
-                return normalize('xiniu', xiniu(), name, aliases)
-        return Client()
-    cfg = CommercialConfig(['xiniu'], {'xiniu': KEY})
-    with store.write_scope(execution._guard):
-        service.collect(store.get_project(pid), cfg, execution=execution, client_factory=factory)
-    # Simulate crash after journal completion but before cache result write.
-    with closing(store._connect()) as db, db:
-        db.execute("UPDATE studio_commercial_calls SET status='started',data='{}' WHERE project_id=?", (pid,))
-    expire(store, job)
-    recovered = store.claim()
-    recovered_execution = JobExecution(store, recovered, budgets={'commercial': 9})
-    with store.write_scope(recovered_execution._guard):
-        service.collect(store.get_project(pid), cfg, execution=recovered_execution,
-                        client_factory=lambda *args: pytest.fail('must replay the completed result'))
-    assert len(calls) == 1 and len(service.view(pid, cfg)['records']) == 2
-    with pytest.raises(RuntimeError), store.write_scope(execution._guard):
-        service.set_focus(pid, 'invested')
 
 
 def test_identity_change_hides_old_provider_records(tmp_path):

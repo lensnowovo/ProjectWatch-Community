@@ -40,9 +40,9 @@ def test_failure_remains_visible_until_same_kind_recovers(tmp_path):
     store.finish(store.jobs(pid)[0]["id"], error="synthetic error")
     other = store.enqueue(pid, "brief")
     store.finish(other["id"])
-    assert store.nav_alerts(pid) == ["外部更新未完成"]
-    retry = store.enqueue(pid, "external")
-    assert store.nav_alerts(pid) == ["外部更新未完成"]
+    assert store.nav_alerts(pid) == ["公开信息收录未完成"]
+    retry = store.enqueue(pid, "collect")
+    assert store.nav_alerts(pid) == ["公开信息收录未完成"]
     store.finish(retry["id"])
     assert store.nav_alerts(pid) == []
 

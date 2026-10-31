@@ -39,13 +39,12 @@ def main(corpus_path, source_path, job_id, workdir):
         raise SystemExit('work directory must be new and empty')
     socket.create_connection = _deny_network  # belt and braces: replay must not reach the network
 
-    from project_watch.studio import collection_host
     from project_watch.studio.app import create_studio_app
     from project_watch.studio.collection_ingest import CollectionIngest
     from project_watch.studio.collection_ledger import CollectionLedger
     from project_watch.studio.collection_plan import make_plan
     from project_watch.studio.collection_runner import run_collection
-    from project_watch.studio.dsh_bootstrap import PublicBootstrap
+    from project_watch.studio.collection_sources import CollectionSources
     from project_watch.studio.execution import JobExecution
     from project_watch.studio.replay import Corpus, ReplayTransport, replay_factory
     from project_watch.studio.research_sources import research_sources
@@ -59,7 +58,7 @@ def main(corpus_path, source_path, job_id, workdir):
     pipeline = create_studio_app(workdir, start_worker=False).state.studio_pipeline
     project = pipeline.repository.create_project(short or legal)
     pipeline.store.upsert_project(project.id, {'legal_name': legal, 'short_name': short or ''}, consent=True)
-    pipeline.store.enqueue(project.id, 'external')
+    pipeline.store.enqueue(project.id, 'collect', input_version='replay:' + job_id[:40])
     execution = JobExecution(pipeline.store, pipeline.store.claim())
     pipeline._execution_state.current = execution
     transport = ReplayTransport(Corpus(corpus_path))
@@ -71,8 +70,7 @@ def main(corpus_path, source_path, job_id, workdir):
     plan = make_plan(round_id=execution.job['id'], project_id=project.id, binding='offline-replay',
                      mode=saved['plan']['mode'], candidates=candidates, at=saved['plan']['created_at'])
     _, _, _, collectors = pipeline.tools()
-    research = PublicBootstrap(pipeline, execution, collectors, None)
-    sources = collection_host.sources_for(research)
+    sources = CollectionSources(execution, collectors)  # the same adapters the collect job uses
     ledger = CollectionLedger(execution, plan)
     run_collection(ledger, collect=sources.collect, ingest=CollectionIngest(execution), guard=lambda: None)
 

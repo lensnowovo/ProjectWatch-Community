@@ -18,7 +18,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -118,9 +117,12 @@ def legacy_config_hashes(path: Path) -> set[str]:
     return {hashlib.sha256(data).hexdigest() for data in (lf, lf.replace(b'\n', b'\r\n'))}
 
 
+# The in-app DSH executor was removed (core rewrite, 2026-11); installers still
+# bundle this pinned runtime until packaging is updated.
+DSH_VERSION = "0.2.1-rc.2"
+
+
 def dsh_version() -> str:
-    sys.path.insert(0, str(REPO/'src'))
-    from project_watch.studio.dsh_runtime import DSH_VERSION
     return DSH_VERSION
 
 

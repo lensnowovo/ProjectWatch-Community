@@ -3,15 +3,13 @@ import json
 from contextlib import closing
 from datetime import UTC, datetime
 
+import collection_fixtures as fixtures
 import pytest
-import test_collection_host as fixtures
 from test_collection_plan import candidate, plan, success
 
-from project_watch.studio import collection_history, collection_host, dsh_runtime
+from project_watch.studio import collection_history
 from project_watch.studio.collection_ledger import CollectionLedger
 from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import Http, Response
-from project_watch.studio.settings import SearchConfig
 
 
 @pytest.fixture
@@ -71,7 +69,7 @@ def test_successes_across_budget_limited_rounds_use_oldest_query_fetch_time(setu
     first.record(success(first.plan))
     assert not current(pipeline, execution, watch)['last_run_at']
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    pipeline.store.enqueue(execution.job['project_id'], 'external')
+    pipeline.store.enqueue(execution.job['project_id'], 'collect')
     second_execution = JobExecution(pipeline.store, pipeline.store.claim())
     second = ledger_for(second_execution, watch, ['Synthetic B'], at='2026-10-27T04:00:00+00:00')
     second.record(success(second.plan))
@@ -119,41 +117,3 @@ def test_index_and_schedule_update_roll_back_together_and_recover_without_calls(
     assert not execution.usage()
 
 
-def test_runtime_host_success_updates_cadence_before_model_and_explore_only_reuses(setup, monkeypatch):
-    pipeline, execution, watch = setup
-    settings = pipeline.settings_store.load()
-    settings.search = SearchConfig(provider='tavily', api_key='synthetic')
-    pipeline.settings_store.save(settings)
-    calls = []
-
-    def send(method, url, headers, body, timeout):
-        if 'api.tavily.com' in url:
-            calls.append(json.loads(body)['query'])
-            return Response(200, {}, b'{"results":[]}')
-        return fixtures.response(url)
-
-    pipeline.http_factory = lambda _: Http(send)
-    def model_turn(research, *_):
-        before = current(pipeline, execution, watch)
-        assert before['last_run_at']
-        assert watch['id'] not in {w['id'] for w in pipeline.monitoring_plan.due(execution.job['project_id'])}
-        sent = list(calls)
-        for query in watch['queries']:
-            response = research.tool('pw_explore', dict(watch_id=watch['id'], query=query))
-            assert response['collection']['outcome'] == 'success'
-        assert calls == sent
-        assert current(pipeline, execution, watch) == before
-        # A new relation discovered by DSH uses its own lifecycle-bound receipt.
-        added = pipeline.monitoring_plan.add(execution.job['project_id'], dict(
-            text='New supplier', queries=['Synthetic new'], scope_kind='relation',
-            reason='Synthetic evidence', sources=['https://example.org/new'], relation_type='supplier',
-            relation_target='Synthetic new', axis='partners'), actor='human', origin='human', visibility='public')
-        response = research.tool('pw_explore', dict(watch_id=added['id'], query='Synthetic new'))
-        assert response['collection']['outcome'] == 'success'
-        assert current(pipeline, execution, added)['last_run_at']
-
-    monkeypatch.setattr(dsh_runtime, 'run_dsh', model_turn)
-    # This fake speaks legacy pw_explore, not the new independent collector.
-    collection_host.admit(execution, mode='refresh')
-    dsh_runtime.run_monitor(pipeline, execution, None)
-    assert execution.read_checkpoint(collection_host.ADMISSION)['mode'] == 'refresh'

@@ -124,7 +124,7 @@ def test_unknown_lookup_does_not_fall_through_or_resend(tmp_path):
             raise HttpError('request_outcome_unknown')
         return execution.call('search', 'lost-search', lost)
     for _ in range(2):
-        with pytest.raises(HttpError, match='request_outcome_unknown'):
+        with pytest.raises(HttpError, match=r'request_outcome_unknown|unknown_not_resent'):
             pipeline.competition_research.originals(pid, [hit('blocked.test')], execution=execution,
                 collectors=SimpleNamespace(web_search=search))
     assert calls == ['accepted'] and len(reads) == 1

@@ -156,7 +156,7 @@ def test_agent_update_after_merge_versions_actual_owner_and_prevents_undo(tmp_pa
     assert reply.status_code == 201
     events = {e['title']: e['id'] for e in store.list_events(project_id=pid)}
     a, b = events['Factory opened'], events['Second event']
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     execution = JobExecution(store, store.claim())
     receipt = store.event_revisions.merge(execution, b, {e: head(store, e) for e in (a, b)})
     merged = head(store, b)

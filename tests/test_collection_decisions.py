@@ -3,19 +3,11 @@ import json
 from contextlib import closing
 
 import pytest
-import test_collection_targets as target_fixtures
 from fastapi.testclient import TestClient
 from test_collection_scope import build
 
-from project_watch.studio import collection_host, collection_targets
+from project_watch.studio import collection_targets
 from project_watch.studio.app import create_studio_app
-from project_watch.studio.collection_ledger import STAGE
-from project_watch.studio.http import Http
-
-
-@pytest.fixture
-def research(tmp_path):
-    return target_fixtures.research.__wrapped__(tmp_path)
 
 
 @pytest.fixture
@@ -87,37 +79,5 @@ def test_owner_decision_overrides_registered_professional_query_and_default(sele
     assert all(u['applicability_evidence_ids'] == ['source-decision:synthetic'] for u in rows)
 
 
-def test_model_cannot_dispatch_or_register_an_owner_excluded_source(research):
-    loop, args, calls, searches = research
-    collection_targets.decide_source(loop.store, loop.project_id, adapter='clinical_term', **payload())
-    with pytest.raises(ValueError, match='excluded by owner'):
-        loop.tool('pw_collect', args)
-    collection_targets.decide_source(loop.store, loop.project_id, adapter='search', **payload(selection='disabled'))
-    with pytest.raises(ValueError, match='excluded by owner'):
-        loop.tool('pw_search', {'query': 'New query', 'category': 'company'})
-    assert not calls and searches == ['base'] and collection_targets.targets(loop) == []
 
 
-def test_host_freezes_choices_and_change_blocks_next_dispatch(research):
-    loop, _, calls, _ = research
-    # A new job uses the real host preparation path, all providers excluded by
-    # explicit owner selections so this test cannot accidentally use a network.
-    assert loop.store.finish(loop.execution.job['id'], lease_token=loop.execution.job['lease_token'])
-    from project_watch.studio.dsh_bootstrap import PublicBootstrap
-    from project_watch.studio.execution import JobExecution
-
-    for adapter in collection_targets.SOURCE_ADAPTERS:
-        collection_targets.decide_source(loop.store, loop.project_id, adapter=adapter, **payload(selection='disabled'))
-    loop.store.enqueue(loop.project_id, 'external')
-    execution = JobExecution(loop.store, loop.store.claim())
-    loop.pipeline._execution_state.current = execution
-    collection_host.admit(execution, mode='first')
-    loop.pipeline.http_factory = lambda _: Http(lambda *_: pytest.fail('owner disabled source dispatched'))
-    current = PublicBootstrap(loop.pipeline, execution, loop.pipeline.tools()[3], None)
-    collection_host.prepare(current)
-    assert not calls and not execution.usage()
-    assert all(u['capability'] == 'disabled' for u in execution.read_checkpoint(STAGE)['plan']['units'])
-    collection_targets.decide_source(loop.store, loop.project_id, adapter='search',
-                                    **payload(selection='enabled', expected_version=1))
-    with pytest.raises(RuntimeError, match='scope changed'):
-        collection_host.guard_scope(current)

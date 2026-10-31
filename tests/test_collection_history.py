@@ -2,16 +2,13 @@
 from contextlib import closing
 from copy import deepcopy
 
+import collection_fixtures as host_fixtures
 import pytest
-import test_collection_host as host_fixtures
 from test_collection_plan import candidate, plan, success
 
 from project_watch.studio import collection_history as history
-from project_watch.studio import collection_host, dsh_runtime
 from project_watch.studio.collection_ledger import CollectionLedger
 from project_watch.studio.collection_plan import reconcile
-from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import Http
 
 
 @pytest.fixture
@@ -148,46 +145,3 @@ def test_expired_lease_cannot_backfill_success_index(execution):
     assert history.read(execution.store, p['project_id']) == {}
 
 
-def test_real_host_next_round_uses_own_success_window_and_budget_failure_keeps_it(tmp_path, monkeypatch):
-    pipeline, execution = host_fixtures.setup.__wrapped__(tmp_path)
-    calls = []
-
-    def send(_method, url, *_args):
-        calls.append(url)
-        return host_fixtures.response(url)
-
-    pipeline.http_factory = lambda _: Http(send)
-    monkeypatch.setattr(dsh_runtime, 'run_dsh', lambda *_: None)
-    monkeypatch.setattr(collection_host, 'now', lambda: '2026-10-25T12:00:00+08:00')
-    collection_host.admit(execution, mode='first')  # Frozen legacy host-only fixture.
-    dsh_runtime.run_bootstrap(pipeline, execution, None)
-    first = history.read(pipeline.store, execution.job['project_id'])
-    assert len(first) == 5  # OpenAlex (2), Europe PMC affiliation/patent (2), filings (1).
-    first_plan = execution.read_checkpoint('collection_round_v1')['plan']
-    assert {u['source'] for u in first_plan['units'] if u.get('history_key') in first} == {
-        'openalex_affiliation', 'openalex_topic', 'europepmc_affiliation', 'europepmc_patent', 'cninfo'}
-    assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    pipeline.store.enqueue(execution.job['project_id'], 'external', automatic=True)
-    second = JobExecution(pipeline.store, pipeline.store.claim())
-    pipeline._execution_state.current = second
-    monkeypatch.setattr(collection_host, 'now', lambda: '2026-10-26T12:00:00+08:00')
-    collection_host.admit(second, mode='incremental')
-    dsh_runtime.run_monitor(pipeline, second, None)
-    manifest = second.read_checkpoint('collection_round_v1')['plan']
-    topic = next(u for u in manifest['units'] if u['source'] == 'openalex_topic')
-    affiliation = next(u for u in manifest['units'] if u['source'] == 'openalex_affiliation')
-    assert topic['window_start'] == '2026-10-18T04:00:00+00:00'
-    assert affiliation['window_start'] is None
-    assert any('2026-10-18' in url for url in calls)
-    after = history.read(pipeline.store, second.job['project_id'])
-    assert after[topic['history_key']]['window_end'] == '2026-10-26T04:00:00+00:00'
-    assert pipeline.store.finish(second.job['id'], lease_token=second.job['lease_token'])
-    pipeline.store.enqueue(second.job['project_id'], 'external', automatic=True)
-    third = JobExecution(pipeline.store, pipeline.store.claim())
-    pipeline._execution_state.current = third
-    third.budgets.update(search=0, model=0, page=0, open_data=0)
-    count = len(calls)
-    monkeypatch.setattr(collection_host, 'now', lambda: '2026-10-27T12:00:00+08:00')
-    collection_host.admit(third, mode='incremental')
-    dsh_runtime.run_monitor(pipeline, third, None)
-    assert len(calls) == count and history.read(pipeline.store, third.job['project_id']) == after

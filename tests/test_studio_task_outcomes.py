@@ -33,9 +33,8 @@ def test_unknown_partial_has_cost_warning_not_automatic_retry():
     from project_watch.studio.taskboard import advice
     value = advice({'kind': 'commercial', 'status': 'done', 'unknown': 1,
                     'runtime': {'state': 'partial', 'label': '已有结果保留，部分请求结果不明'}})
-    assert '结果不明' in value['why']
+    assert '没有取得明确结果' in value['why'] and '不会自动重发' in value['why']
     assert value['action'] == 'none'
-    assert '不会自动重发' in value['todo']
 
 
 def test_partial_dismiss_only_saves_reminder_not_outcome_or_queue(tmp_path):

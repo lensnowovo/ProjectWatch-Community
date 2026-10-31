@@ -159,42 +159,6 @@ def test_raw_affiliations_require_a_separate_identity_not_substring(record, matc
     assert paper_affiliated({"extra": {"affiliations": [record]}}, ["Synthetic Cell", "合成细胞"]) is matched
 
 
-def test_collection_to_event_keeps_topic_paper_and_original_abstract(tmp_path):
-    pipeline = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
-    project = pipeline.repository.create_project("合成细胞")
-    pipeline.store.upsert_project(project.id, {"description": "CAR-T细胞治疗"}, consent=True)
-    paper, _query = collect_paper(index("CAR-T cells target tumors with durable persistence."))
-
-    class Sources:
-        has_search = has_registry = False
-
-        def google_news(self, *_args, **_kwargs):
-            return []
-
-        bing_news = cninfo = google_news
-
-        def openalex(self, *_args, **_kwargs):
-            return [paper]
-
-    class Model:
-        ready = True
-
-        def json(self, _system, user, **_kwargs):
-            assert "durable persistence" in user and "CAR-T cells" in user
-            rows = pipeline.store.untriaged(project.id)
-            return {"results": [{"id": r["id"], "source_title": r["title"], "source_quote": r["title"], "relevant": True, "category": "paper",
-                                 "importance": "notable", "summary": "CAR-T持续性研究线索"} for r in rows]}
-
-    plan = {"company_queries": ["合成细胞"], "paper_queries": ["CAR-T cells"], "affiliation_names": []}
-    report = pipeline.collect(project.id, plan, Sources(), lambda _: None, pipeline.store.get_project(project.id))
-    assert report["paper"]["checked"] == 1 and report["paper"]["added"] == 1
-    pipeline.triage(project.id, Model(), pipeline.store.get_project(project.id), plan, lambda _: None)
-    pipeline.cluster(project.id, Model(), lambda _: None)
-    [event] = pipeline.store.list_events(project_id=project.id)
-    assert event["category"] == "paper" and event["sources"][0]["body_status"] == "paper_abstract"
-    [stored] = pipeline.store.list_items(project_id=project.id, category="paper")
-    assert not paper_affiliated(stored, ["合成细胞"])
-    assert stored["extra"]["paper_abstract"]["text"] == paper["extra"]["paper_abstract"]["text"]
 
 
 def test_oversized_word_index_cannot_allocate_from_untrusted_offsets():
@@ -210,7 +174,7 @@ def test_leased_abstract_ingestion_uses_real_dispatch_fence(tmp_path, expired):
     pipeline.store.upsert_project(pid, {}, consent=True)
     paper, _ = collect_paper(index('Synthetic CAR-T cells persist after treatment.'))
     pipeline.store.add_items(pid, 'paper', [paper])
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     job = pipeline.store.claim()
     execution = JobExecution(pipeline.store, job)
     pipeline._execution_state.current = execution

@@ -130,21 +130,6 @@ def test_withdrawn_match_not_shown_or_reused(sample):
     assert not p.monitoring_plan.explorations.tokens(child)
 
 
-def test_full_saved_body_beyond_preview_reaches_dsh_context(sample):
-    from project_watch.studio.dsh_monitor import PublicMonitor
-    from project_watch.studio.execution import JobExecution
-
-    p, pid, root, child = sample
-    _, eid = add_event(p, pid, "long", "背景段落。" * 4000 + "合成手部系统获得许可。")
-    p.store.enqueue(pid, "external")
-    run = PublicMonitor(p, JobExecution(p.store, p.store.claim()), None, None)
-    ctx = run.tool("pw_context", {})
-    entry = next(e for e in ctx["numbered"].values() if e.get("id") == eid)
-    assert {root["id"], child["id"]} <= set(entry["topic_ids"])
-    assert len(entry["association_excerpts"]) == 1  # Shared excerpt, not duplicated per branch.
-    assert "合成手部系统获得许可" in entry["association_excerpts"][0]["excerpt"]
-    assert len(entry["association_excerpts"][0]["excerpt"]) < 600
-    assert p.monitoring_plan.explorations.tokens(child)
 
 
 def test_changed_body_becomes_pending_once_after_previous_assessment(sample):

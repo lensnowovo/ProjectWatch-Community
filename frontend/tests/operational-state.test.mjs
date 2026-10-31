@@ -34,13 +34,13 @@ const base = () => ({ project:{id:'synthetic',activated:true,status:'active'}, j
 const job = (state='running', phase='collect') => ({id:'job',kind:'external_followup',status:state==='queued'?'queued':state==='failed'?'failed':'running',created_at:'2026-10-19T00:00:00Z',stage:'实际执行步骤',runtime:{state,label:state,phase}});
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props));
 
-test('zero-call blocked refresh points to project receipt lookup, not its own retry or dead history anchors', () => {
-  const j={...job('failed'), project_id:'synthetic',project_name:'Synthetic',label:'收集公开信息',
-    error:'request_outcome_unknown',runtime:{state:'blocked',label:'本次未执行',blocking_jobs:['old-omitted-from-list']},
-    advice:{action:'none',why:'本次未执行，先前请求结果待核。',todo:'查看先前请求'}};
+test('an unsent or unclear request is explained without a resend button', () => {
+  const j={...job('failed'), project_id:'synthetic',project_name:'Synthetic',label:'收录公开信息',
+    error:'request_outcome_unknown',runtime:{state:'failed',label:'未完成 · 部分请求结果不明，未自动重发'},
+    advice:{action:'none',why:'有 1 次请求没有取得明确结果，服务商可能已计费。这些请求不会自动重发，已有结果保留。',todo:'不影响下一次更新'}};
   const html=render(MemoryRouter,{children:React.createElement(FailureRow,{j,onChanged:()=>{}})});
-  assert.match(html,/本次未执行/); assert.match(html,/查看先前请求/); assert.match(html,/查看来源与结果/);
-  assert.doesNotMatch(html,/查看并重发|重新运行|href="#task-/);
+  assert.match(html,/不会自动重发/); assert.match(html,/不影响下一次更新/);
+  assert.doesNotMatch(html,/查看并重发|查看先前请求|重新运行/);
 });
 
 test('a saved multi-batch wait is distinct from an unsent whole job or an unknown request', () => {

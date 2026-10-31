@@ -59,7 +59,7 @@ def project_jobs(store, project_id, *, worker='running'):
 
     A small recent-history limit must not hide a still-unresolved older failure.
     """
-    from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
+    from project_watch.studio.dispatch import RECEIVED_MODEL_FAILURE, UNRESOLVED
 
     with closing(store._connect()) as db:
         rows = db.execute(f"""WITH ranked AS (
@@ -68,7 +68,7 @@ def project_jobs(store, project_id, *, worker='running'):
                 ORDER BY COALESCE(finished_at,created_at) DESC, created_at DESC, id DESC
             ) AS rn FROM studio_jobs j WHERE project_id=?
         ) SELECT * FROM ranked WHERE rn=1 OR EXISTS (SELECT 1 FROM studio_job_calls c
-          WHERE c.job_id=ranked.id AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE})))
+          WHERE c.job_id=ranked.id AND (({UNRESOLVED}) OR ({RECEIVED_MODEL_FAILURE})))
           ORDER BY created_at DESC""", (project_id,)).fetchall()
         dismissed = {r[0].removeprefix('task_dismissed:') for r in db.execute(
             "SELECT key FROM studio_state WHERE key LIKE 'task_dismissed:%'")}
@@ -105,7 +105,7 @@ def progress(db, job_id):
 
 
 def expired_reason(db, job, at=None):
-    from project_watch.studio.recovery import UNRESOLVED
+    from project_watch.studio.dispatch import UNRESOLVED
 
     at = at or datetime.now(UTC)
     pending = db.execute(f"SELECT created_at,deadline_at FROM studio_job_calls c WHERE c.job_id=? AND c.status='started' AND {UNRESOLVED}",
@@ -127,7 +127,7 @@ def tick(store, job, *, at=None):
     Safe work is queued under the same id (bounded recovery); an ambiguous call
     holds the job indefinitely. Old writers are fenced before either transition.
     """
-    from project_watch.studio.recovery import UNRESOLVED
+    from project_watch.studio.dispatch import UNRESOLVED
 
     at = at or datetime.now(UTC)
     with closing(store._connect()) as db, db:
@@ -154,7 +154,7 @@ def tick(store, job, *, at=None):
 
 def activity(db, job_id, at):
     """Receipt-only progress. Never return evidence, prompts or provider errors."""
-    from project_watch.studio.recovery import UNRESOLVED
+    from project_watch.studio.dispatch import UNRESOLVED
 
     calls = db.execute('SELECT kind,status,response_status,created_at,input_tokens,output_tokens,'
                        'cache_read_tokens,cache_creation_tokens FROM studio_job_calls WHERE job_id=?',
@@ -222,7 +222,7 @@ def projection(db, job, *, worker='running', at=None):
     label = labels.get(state, state)
     if state == 'running':
         reason = expired_reason(db, job, at)
-        from project_watch.studio.recovery import UNRESOLVED
+        from project_watch.studio.dispatch import UNRESOLVED
 
         pending = db.execute(f"SELECT kind FROM studio_job_calls c WHERE c.job_id=? AND c.status='started' AND {UNRESOLVED} LIMIT 1", (job['id'],)).fetchone()
         if reason:
@@ -232,43 +232,26 @@ def projection(db, job, *, worker='running', at=None):
         elif pending:
             state, label = 'waiting_response', '正在研究 · 模型处理中' if pending[0] == 'model' else '正在获取来源响应'
     elif state == 'queued':
-        from project_watch.studio.recovery import project_request_holds
-
-        waiting = db.execute("SELECT 1 FROM studio_job_checkpoints WHERE job_id=? AND stage='legacy_dispatch_wait'",
-                             (job['id'],)).fetchone()
-        held = project_request_holds(db, job['project_id']) if waiting else []
-        continuation_wait = bool(waiting and held)
-        if continuation_wait:
-            blocking_jobs = list(dict.fromkeys(row['job_id'] for row in held))
         project = db.execute('SELECT status FROM studio_projects WHERE project_id=?', (job['project_id'],)).fetchone()
         if project and project[0] == 'paused' and job['kind'] != 'internal':
             state, label = 'paused', '项目已暂停'
         elif worker != 'running':
             state, label = 'blocked', '等待后台恢复'
-        elif continuation_wait:
-            state, label = 'blocked', '进度已保存，后续批次暂未发送'
-        elif waiting:
-            label = '进度已保存，排队继续后续批次'
         elif job['stalled_at']:
             state, label = 'recovering', '已保留进度，等待恢复'
         elif job['yield_count']:
             label = '已保存进度，排队继续'
     elif state in ('failed', 'done'):
-        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
+        from project_watch.studio.dispatch import RECEIVED_MODEL_FAILURE, UNRESOLVED
 
+        # Unsettled requests are accounted and never resent automatically; they do not
+        # wait for a confirmation and do not stop later rounds.
         if db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1', (job['id'],)).fetchone():
-            state, label = ('needs_confirmation', '请求结果不明，等待确认') if state == 'failed' else (
-                'partial', '已有结果保留，部分请求结果不明')
-        elif db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job['id'],)).fetchone():
-            state, label = 'needs_confirmation', '模型服务出错，等待确认恢复'
-        elif (state == 'failed' and job['error'].startswith('request_outcome_unknown')
-              and not db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (job['id'],)).fetchone()):
-            from project_watch.studio.recovery import project_request_holds
-
-            held = project_request_holds(db, job['project_id'], before=job['created_at'], exclude_job=job['id'])
-            if held:
-                blocking_jobs = list(dict.fromkeys(row['job_id'] for row in held))
-                state, label = 'blocked', '本次未执行，先前请求结果待核'
+            label = '未完成 · 部分请求结果不明，未自动重发' if state == 'failed' else '已有结果保留，部分请求结果不明'
+            state = 'failed' if state == 'failed' else 'partial'
+        elif state == 'failed' and db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({RECEIVED_MODEL_FAILURE}) LIMIT 1',
+                                              (job['id'],)).fetchone():
+            label = '未完成 · 模型服务出错，未自动重发'
         elif job['error'].startswith('watchdog_'):
             state, label = 'stalled', '多次无进展，已停止恢复'
         elif state == 'done':

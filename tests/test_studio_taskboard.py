@@ -44,14 +44,14 @@ def test_board_orders_running_then_queue_and_hides_removed_projects(tmp_path):
         # Remove only admission metadata in this synthetic queue-reset fixture.
         db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute("DELETE FROM studio_jobs")
-    first = store.enqueue(a["id"], "external")
+    first = store.enqueue(a["id"], "collect")
     store.enqueue(a["id"], "brief")
-    store.enqueue(b["id"], "external")
+    store.enqueue(b["id"], "collect")
     with closing(store._connect()) as db, db:
         db.execute("UPDATE studio_jobs SET status='running', started_at=created_at, stage='检索公司新闻' WHERE id=?", (first["id"],))
     view = client.get("/api/studio/tasks").json()
     assert [j["status"] for j in view["jobs"]] == ["running", "queued", "queued"]
-    assert view["jobs"][0]["label"] == "收集公开信息" and view["jobs"][0]["stage"] == "检索公司新闻"
+    assert view["jobs"][0]["label"] == "收录公开信息" and view["jobs"][0]["stage"] == "检索公司新闻"
     assert [j.get("position") for j in view["jobs"][1:]] == [1, 2]
     assert view["summary"]["running"] == 1 and view["summary"]["queued"] == 2
     client.delete(f"/api/studio/projects/{b['id']}")
@@ -69,9 +69,9 @@ def test_task_page_is_served_by_the_app(tmp_path):
 
 
 def test_each_failure_says_what_happened_what_to_do_and_which_button():
-    assert taskboard.advice({"error": "request_outcome_unknown", "unknown": 2})["action"] == "recover"
+    assert taskboard.advice({"error": "request_outcome_unknown", "unknown": 2})["action"] == "none"
     assert "2 次请求" in taskboard.advice({"error": "request_outcome_unknown", "unknown": 2})["why"]
-    assert taskboard.advice({"error": "interrupted: request outcome uncertain or recovery limit", "unknown": 0})["action"] == "recover"
+    assert taskboard.advice({"error": "interrupted: request outcome uncertain or recovery limit", "unknown": 0})["action"] == "none"
     assert taskboard.advice({"error": "provider_backoff", "unknown": 0})["action"] == "settings"
     assert taskboard.advice({"error": "request_budget", "unknown": 0})["action"] == "rerun"
     refusal = taskboard.advice({"error": "模型服务拒绝分析本批内容；已保留资料和响应，未自动重发", "unknown": 0})
@@ -89,7 +89,7 @@ def test_dismissed_failures_leave_the_attention_list_but_stay_in_history(tmp_pat
         # Remove only admission metadata in this synthetic queue-reset fixture.
         db.execute("DELETE FROM studio_job_checkpoints WHERE stage='collection_request_v1'")
         db.execute("DELETE FROM studio_jobs")
-    job = store.enqueue(a["id"], "external")
+    job = store.enqueue(a["id"], "collect")
     with closing(store._connect()) as db, db:
         db.execute("UPDATE studio_jobs SET status='failed', error='request_budget', started_at=created_at, finished_at=created_at WHERE id=?",
                    (job["id"],))

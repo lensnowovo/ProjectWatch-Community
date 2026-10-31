@@ -4,11 +4,12 @@ import json
 import socket
 
 import pytest
+from synthetic_providers import legacy_job
 
 from project_watch.studio import dispatch
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import HttpError, Response
+from project_watch.studio.http import Response
 from project_watch.studio.store import now
 
 
@@ -52,19 +53,37 @@ def ok(sent):
     return send
 
 
-def test_unknown_request_elsewhere_is_never_resent_but_independent_work_proceeds(env):
+def test_an_old_round_unknown_is_never_settled_and_a_new_round_is_a_new_request(env):
     store, pid = env
-    legacy = job(store, pid, 'external')
-    receipt(store, legacy.job['id'], 'model', 'same-request', 'unknown')
-    with store._connect() as db:
-        db.execute("UPDATE studio_jobs SET status='failed' WHERE id=?", (legacy.job['id'],))
+    legacy = legacy_job(store, pid, 'external', status='failed')
+    receipt(store, legacy['id'], 'search', 'same-query', 'unknown')
     before, sent = rows(store), []
     work = job(store, pid, 'collect')
-    with pytest.raises(dispatch.NotSent, match='unknown_not_resent'):
-        work.call('model', 'same-request', ok(sent))
-    assert sent == [] and rows(store) == before  # nothing sent, nothing recorded, old row untouched
-    work.call('model', 'another-request', ok(sent))  # another job's pending request blocks nothing else
+    work.call('search', 'same-query', ok(sent))  # undated query, next round: sent and counted
     assert sent == [1]
+    assert [r for r in rows(store) if r in before] == before  # the old unknown row is untouched
+    with store._connect() as db:
+        assert dispatch.spent(db, pid, 'search') == 2  # both count
+
+
+def test_analyses_of_one_batch_never_resend_an_unknown_request(env):
+    store, pid = env
+    first = job(store, pid, 'analyze')
+    with store._connect() as db:
+        db.execute("UPDATE studio_jobs SET input_version='collect:batch-1',status='failed' WHERE id=?", (first.job['id'],))
+    receipt(store, first.job['id'], 'model', 'draft', 'unknown')
+    store.enqueue(pid, 'analyze', input_version='collect:batch-1')
+    again, sent = JobExecution(store, store.claim()), []
+    with pytest.raises(dispatch.NotSent, match='unknown_not_resent'):
+        again.call('model', 'draft', ok(sent))
+    again.call('model', 'another', ok(sent))
+    assert sent == [1]
+    with store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE id=?", (again.job['id'],))
+    store.enqueue(pid, 'analyze', input_version=dispatch.REDO_PREFIX + 'batch-1')
+    redo = JobExecution(store, store.claim())
+    redo.call('model', 'draft', ok(sent))  # the owner's explicit redo may resend
+    assert sent == [1, 1]
 
 
 def test_unknown_in_the_same_job_stops_only_that_request(env):
@@ -116,26 +135,28 @@ def test_completed_answers_replay_within_a_job_but_not_across_jobs(env):
     assert sent == [1, 1]  # a new round fetches fresh results
 
 
-def test_legacy_kinds_keep_their_original_rule_until_removed(env):
+def test_side_jobs_follow_the_same_rule(env):
     store, pid = env
-    old = job(store, pid, 'external')
-    receipt(store, old.job['id'], 'model', 'pending', 'unknown')
-    with pytest.raises(HttpError, match='request_outcome_unknown'):
-        old.call('model', 'other', ok([]))
+    side, sent = job(store, pid, 'business'), []
+    receipt(store, side.job['id'], 'model', 'pending', 'unknown')
+    with pytest.raises(dispatch.NotSent, match='unknown_not_resent'):
+        side.call('model', 'pending', ok(sent))
+    side.call('model', 'other', ok(sent))  # no job-wide hold
+    assert sent == [1]
 
 
 def test_archive_ends_retired_jobs_without_touching_requests(env):
     store, pid = env
-    running = job(store, pid, 'external')
-    receipt(store, running.job['id'], 'model', 'pending', 'unknown')
-    store.enqueue(pid, 'external_followup', input_version='queued-followup')
+    running = legacy_job(store, pid, 'external', status='running')
+    receipt(store, running['id'], 'model', 'pending', 'unknown')
+    legacy_job(store, pid, 'external_followup', input_version='queued-followup')
     store.enqueue(pid, 'brief', input_version='side-feature')
     failed = job(store, pid, 'brief')
     with store._connect() as db:
         db.execute("UPDATE studio_jobs SET status='failed' WHERE id=?", (failed.job['id'],))
     before = rows(store)
     archived = dispatch.archive_legacy(store)
-    assert running.job['id'] in archived and len(archived) == 2
+    assert running['id'] in archived and len(archived) == 2
     assert dispatch.archive_legacy(store) == []  # idempotent
     with store._connect() as db:
         statuses = dict(db.execute('SELECT kind,status FROM studio_jobs WHERE project_id=? AND id!=?',

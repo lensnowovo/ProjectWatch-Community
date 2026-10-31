@@ -1,5 +1,6 @@
 """Every entry that starts public work creates the new round kinds only. Synthetic data; no network."""
 from fastapi.testclient import TestClient
+from synthetic_providers import legacy_job
 from test_spine_journey import env, work  # noqa: F401  (pytest fixture)
 
 from project_watch.studio import dispatch, spine
@@ -14,7 +15,7 @@ def _kinds(pipeline, pid):
 
 def test_refresh_starts_one_round_despite_an_old_unknown_request(env):  # noqa: F811
     pipeline, pid, _state = env
-    legacy = pipeline.store.enqueue(pid, 'external', input_version='legacy')
+    legacy = legacy_job(pipeline.store, pid, 'external')
     with pipeline.store._connect() as db:
         db.execute("UPDATE studio_jobs SET status='failed' WHERE id=?", (legacy['id'],))
         db.execute('INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at) VALUES (?,?,?,?,?,?)',
@@ -43,7 +44,7 @@ def test_scheduler_and_watch_entry_use_the_round(env):  # noqa: F811
 
 def test_legacy_jobs_are_archived_and_never_run(env):  # noqa: F811
     pipeline, pid, _state = env
-    queued = pipeline.store.enqueue(pid, 'external_followup', input_version='legacy')
+    queued = legacy_job(pipeline.store, pid, 'external_followup')
     assert dispatch.archive_legacy(pipeline.store) == [queued['id']]
     assert dispatch.archive_legacy(pipeline.store) == []
     assert pipeline.store.claim() is None

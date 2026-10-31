@@ -53,7 +53,7 @@ def test_instance_survives_restart_and_copy_is_a_different_instance(tmp_path):
 
 def test_reads_do_not_recover_or_enqueue_running_jobs(tmp_path):
     service, project_id = make_service(tmp_path / "read.sqlite3")
-    job = service.store.enqueue(project_id, "external")
+    job = service.store.enqueue(project_id, "collect")
     service.store.claim()
     service.project(project_id)
     service.search("Optics", [project_id])

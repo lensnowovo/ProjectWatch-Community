@@ -45,7 +45,7 @@ OPENALEX = {"results": [{"id": "https://openalex.org/W1", "doi": "https://doi.or
                          "primary_location": {"source": {"display_name": "Optics Letters"}},
                          "authorships": [{"author": {"display_name": "A. Author"},
                                           "institutions": [{"display_name": "Lumina Optics"}]}],
-                         "cited_by_count": 3}]}
+                         "cited_by_count": 3}], "meta": {"count": 1}}
 
 TRIALS = {"studies": [{"protocolSection": {
     "identificationModule": {"nctId": "NCT01234567", "briefTitle": "Synthetic Phase 1 Study"},
@@ -67,7 +67,12 @@ BP = """光启视界科技有限公司 商业计划书（合成数据）
 LIVE_FIXTURES = Path(__file__).parent / "fixtures" / "studio_live"
 
 
-@pytest.mark.parametrize("path", sorted(LIVE_FIXTURES.glob("*.json")), ids=lambda p: p.stem)
+# Europe PMC and Google Patents fixtures are parsed by their own adapters (test_provider_contracts).
+COLLECTOR_FIXTURES = [p for p in sorted(LIVE_FIXTURES.glob("*.json"))
+                      if not p.stem.endswith(("europepmc", "europepmc_patent", "google_patent"))]
+
+
+@pytest.mark.parametrize("path", COLLECTOR_FIXTURES, ids=lambda p: p.stem)
 def test_public_live_response_replay(path):
     fixture = json.loads(path.read_text(encoding="utf-8"))
     meta, response = fixture["provenance"], fixture["response"]
@@ -412,6 +417,13 @@ class FakeWeb:
                                    'criteria': '量产或交付消息'}]}
         if question_advisor._ASSESS in system:
             return {'results': []}
+        from project_watch.studio import assumptions
+        if system.startswith(assumptions.DRAFT_SYSTEM[:40]):
+            return {'assumptions': []}
+        if system.startswith(assumptions.CHECK_SYSTEM[:40]):
+            return {'assumptions': [], 'unforeseen': [], 'explore': []}
+        if "一级市场投资研究员" in system:  # section drafts: nothing to publish in this fixture
+            return {}
         raise AssertionError(f"unexpected prompt: {system[:40]}")
 
     def __call__(self, method, url, headers, body, timeout):
@@ -432,7 +444,7 @@ class FakeWeb:
         if url.startswith("https://clinicaltrials.gov/"):
             return Response(200, {}, json.dumps(TRIALS).encode())
         if url.startswith('https://www.cninfo.com.cn/'):
-            return Response(200, {}, b'{"announcements":[]}')
+            return Response(200, {}, b'{"announcements":[],"totalAnnouncement":0}')
         raise HttpError("connection_failed")
 
 

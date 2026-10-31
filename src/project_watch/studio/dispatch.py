@@ -1,19 +1,20 @@
-"""The one dispatch rule for the rewritten pipeline (collect / analyze / report).
+"""The one dispatch rule for every job's outgoing requests.
 
 A request journal is accounting, not a gate:
 
 - every dispatched request counts against the project's monthly budget for its
   kind, whatever its outcome (completed, failed, unknown);
-- a request key whose earlier outcome is unknown, or a model request answered
-  with a 5xx, is never sent again automatically; the caller gets a definite
-  "not sent". The owner's explicit redo is consent to resend; a request still
-  in flight is never sent twice;
+- a request whose earlier outcome is unknown, or a model request answered
+  with a 5xx, is never sent again automatically within the same job or the
+  same analysis batch; the caller gets a definite "not sent". The owner's
+  explicit redo is consent to resend; a request still in flight is never sent
+  twice. A later round is a new request even if its bytes repeat;
 - nothing else blocks work. Another job's pending request is not a reason to
   stop an independent request.
 
 Completed answers are replayed only within the same job (in JobExecution.call):
 many requests carry no date, so replaying another job's answer would freeze
-news. Old job kinds keep their original journal rules until they are removed.
+news.
 """
 import json
 from contextlib import closing
@@ -22,7 +23,7 @@ from datetime import UTC, datetime
 from project_watch.studio.http import HttpError
 from project_watch.studio.store import now
 
-KINDS = frozenset(('collect', 'analyze', 'report'))
+KINDS = frozenset(('collect', 'analyze', 'report'))  # the round's job kinds
 # Requests per project per calendar month (UTC). Generous for normal use and
 # finite, so a fault can never spend without bound. Overridable per project.
 DEFAULT_MONTHLY = {'model': 400, 'search': 400, 'open_data': 1500, 'page': 400, 'site': 120, 'commercial': 60}
@@ -31,8 +32,21 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_project_budgets (
     project_id TEXT PRIMARY KEY REFERENCES projects(id), monthly TEXT NOT NULL, updated_at TEXT NOT NULL)'''
 
 
+UNRESOLVED = "c.status IN ('started','unknown')"  # SQL over studio_job_calls c
 RECEIVED_FAILURE = '(500,502,503,504,529)'  # answered, but no usable reply; billing may be unknown
+RECEIVED_MODEL_FAILURE = f"c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE}"
 REDO_PREFIX = 'redo:'
+
+
+def batch_of(job):
+    """The collection batch an analysis reads, or None for every other job."""
+    version = job.get('input_version') or ''
+    if job.get('kind') != 'analyze':
+        return None
+    for prefix in ('collect:', REDO_PREFIX):
+        if version.startswith(prefix):
+            return version[len(prefix):]
+    return None
 
 
 def explicit_redo(job):
@@ -66,22 +80,30 @@ def check(db, job, kind, call_key, provider_hash):
     """Inside JobExecution.call's admission transaction, before the started row."""
     project = db.execute('SELECT status,consent_at FROM studio_projects WHERE project_id=?',
                          (job['project_id'],)).fetchone()
-    if not project or project['status'] == 'paused':
+    if not project or (project['status'] == 'paused' and job['kind'] != 'internal'):
+        # The owner's own uploaded documents keep being read while public monitoring is paused.
         raise NotSent('project_paused')
-    if not project['consent_at']:
+    if not project['consent_at'] and job['kind'] in KINDS:
+        # Consent covers public monitoring rounds; owner documents and side jobs keep their own scheduling gates.
         raise NotSent('project_not_consented')
     # A request still in flight is never sent twice, whoever asks.
     if db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
                   "WHERE j.project_id=? AND c.call_key=? AND c.status='started' AND j.status='running' "
                   "AND j.lease_until>? LIMIT 1", (job['project_id'], call_key, now())).fetchone():
         raise NotSent('request_in_flight')
-    # The same request with an unresolved or billing-ambiguous outcome: never
-    # resent automatically. An owner's explicit redo is consent to resend it.
+    # The same logical request with an unresolved or billing-ambiguous outcome is
+    # never resent automatically: within one job, and across the analyses of one
+    # collection batch (their snapshot sends identical requests). An owner's
+    # explicit redo is consent to resend it. A later round is a new request even
+    # when its bytes repeat (an undated search query); the earlier one stays
+    # recorded, counted and unsettled, never retried.
+    batch = batch_of(job)
     if not explicit_redo(job) and db.execute(
             "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-            "WHERE j.project_id=? AND c.call_key=? AND (c.status IN ('unknown','started') "
+            "WHERE j.project_id=? AND c.call_key=? AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' "
+            "AND j.input_version IN ('collect:'||?, ?||?))) AND (c.status IN ('unknown','started') "
             f"OR (c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE})) LIMIT 1",
-            (job['project_id'], call_key)).fetchone():
+            (job['project_id'], call_key, job['id'], batch, batch, REDO_PREFIX, batch)).fetchone():
         raise NotSent('unknown_not_resent')
     backoff = db.execute('SELECT retry_after FROM studio_provider_backoff WHERE provider=?', (provider_hash,)).fetchone()
     if backoff and backoff[0] > now():

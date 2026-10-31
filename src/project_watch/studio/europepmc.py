@@ -84,6 +84,8 @@ def page(http, query, *, mode='topic', cursor=None, per_page=20, start=None, end
                 'open_access': row.get('isOpenAccess') == 'Y',
                 'paper_search': {'query': query, 'mode': mode},
                 'date_basis': 'provider_first_date_unverified' if patent else 'firstPublicationDate', **extra_patent}))
+    if rows and not items:
+        raise HttpError('invalid_collection_response')  # nothing usable: a failed read, never an empty result
     return dict(items=items, next_cursor=token if more else None, truncated=more, dropped_records=dropped,
                 total_reported=count, date_basis='provider_first_date_unverified' if patent else 'firstPublicationDate', window_applied=True,
                 coverage_kind='biomedical_patent_index' if patent else 'structured_pages', per_request_limit=per_page)

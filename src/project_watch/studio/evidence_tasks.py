@@ -5,11 +5,10 @@ No independent scheduler, lease, transport or automatic retry is introduced.
 """
 import hashlib
 import json
-from contextlib import closing
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 POLICY = 'event-observation-v1'
 TYPED_POLICY = 'public-record-candidate-v2'
@@ -98,116 +97,3 @@ def admit(db, execution, evidence_id):
     db.execute("INSERT OR IGNORE INTO studio_evidence_tasks (id,project_id,job_id,evidence_version_id,policy,status) "
                "VALUES (?,?,?,?,?,'pending')", (key, project_id, execution.job['id'], evidence_id, policy))
     return key
-
-
-def _input(execution, task):
-    record = execution.store.evidence.get(task['project_id'], task['evidence_version_id'], include_internal=False)
-    # A reference ID selects an exact immutable part. The host restores the
-    # original text, not a model-transcribed quote. Location is not entailment.
-    refs = {}
-    for index, part in enumerate(record['parts']):
-        key = hashlib.sha256(f"{record['id']}:{index}".encode()).hexdigest()
-        refs[key] = dict(evidence_version_id=record['id'], part_index=index, start=0,
-                         end=len(part['text']), quote=part['text'], locator=part['locator'])
-    source = dict(task_id=task['id'], evidence_version_id=record['id'], source_type=record['source_type'],
-                  read_scope=record['read_scope'], refs=refs)
-    if task['policy'] == TYPED_POLICY:
-        source['policy'] = task['policy']
-    return source
-
-
-def _withdrawn(db, task):
-    return db.execute("SELECT 1 FROM studio_evidence_lifecycle WHERE project_id=? AND evidence_version_id=? "
-                      "AND status='withdrawn'", (task['project_id'], task['evidence_version_id'])).fetchone() is not None
-
-
-def _save(execution, task, status, result):
-    with closing(execution.store._connect()) as db, db:
-        db.execute('BEGIN IMMEDIATE')
-        execution._guard(db)
-        current = db.execute('SELECT status FROM studio_evidence_tasks WHERE id=? AND job_id=?',
-                             (task['id'], execution.job['id'])).fetchone()
-        if not current or current[0] != 'pending':
-            raise RuntimeError('material stage already resolved or replaced')
-        if _withdrawn(db, task):
-            status, result = 'rejected', {'code': 'source_withdrawn'}
-        if status == 'complete':
-            dependency = execution.store.evidence.dependencies.track(task['project_id'], 'event-input:' + task['id'],
-                'fact', [task['evidence_version_id']], db=db)
-            result['input_status'] = dependency['status']
-        db.execute('UPDATE studio_evidence_tasks SET status=?,result=? WHERE id=?',
-                   (status, json.dumps(result, ensure_ascii=False, allow_nan=False), task['id']))
-
-
-def run_pending(execution, extractor, *, limit=20, policy=POLICY, task_id=None):
-    """Bounded processing using the same JobExecution as collection/review.
-
-The extractor must journal external calls on that execution with task_id in
-its request identity. Transport/unknown/lease errors propagate, never become
-item-format errors. Invalid returned structure affects only that material.
-"""
-    if type(limit) is not int or not 1 <= limit <= 100:
-        raise ValueError('invalid material batch size')
-    if policy not in (POLICY, TYPED_POLICY):
-        raise ValueError('unsupported material policy')
-    from project_watch.studio.material_ownership import MaterialExecution, project_guard
-
-    isolated_limit = (policy == TYPED_POLICY and task_id is not None
-                      and execution.read_checkpoint('material_local_limits_v1')
-                      == {'isolate_received_output_limit': True})
-    with closing(execution.store._connect()) as db:
-        execution._guard(db)
-        if not isolated_limit and db.execute("SELECT 1 FROM studio_evidence_tasks t JOIN studio_job_checkpoints c "
-                "ON c.job_id=t.job_id AND c.stage=? || t.id WHERE t.job_id=? AND t.project_id=? "
-                "AND t.status='pending' AND json_extract(c.data,'$.code')='material_output_limit' LIMIT 1",
-                (DEFERRED, execution.job['id'], execution.job['project_id'])).fetchone():
-            return 0
-        tasks = [dict(row) for row in db.execute("SELECT * FROM studio_evidence_tasks WHERE job_id=? AND project_id=? "
-            "AND policy=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c "
-            "WHERE c.job_id=studio_evidence_tasks.job_id AND c.stage=? || studio_evidence_tasks.id) "
-            "AND (? IS NULL OR id=?) ORDER BY rowid LIMIT ?",
-            (execution.job['id'], execution.job['project_id'], policy, DEFERRED, task_id, task_id, limit))]
-    processed = 0
-    for task in tasks:
-        processed += 1
-        material = MaterialExecution(execution, task)
-        with closing(execution.store._connect()) as db:
-            material._guard(db)
-            project_guard(db, task['project_id'], execution.job['id'])
-            withdrawn = _withdrawn(db, task)
-        if withdrawn:
-            _save(execution, task, 'rejected', {'code': 'source_withdrawn'})
-            continue
-        source = _input(execution, task)
-        try:
-            from project_watch.studio.research_records import proposal
-
-            response = proposal(execution, task, source) if policy == TYPED_POLICY else None
-            if response is None:
-                response = extractor(source, material)
-        except MaterialDeferred as exc:
-            _save(execution, task, 'pending', exc.receipt)
-            if exc.receipt['code'] == 'material_output_limit':
-                break  # Do not spend the batch on repeated truncated responses.
-            continue
-        try:
-            proposed = (RecordProposal if policy == TYPED_POLICY else Proposal).model_validate(response)
-            observations = []
-            for observation in proposed.observations:
-                if any(ref not in source['refs'] for ref in observation.refs):
-                    raise ValueError('reference_not_in_material')
-                if policy == TYPED_POLICY:
-                    ref = source['refs'][observation.refs[0]]
-                    if not 6 <= observation.end - observation.start <= 1500 or observation.end > len(ref['quote']):
-                        raise ValueError('invalid_reference_span')
-                    observations.append(observation.model_dump())
-                else:
-                    observations.append(dict(text=observation.text,
-                        event_at=observation.event_at, refs=list(dict.fromkeys(observation.refs))))
-        except (ValidationError, ValueError):
-            _save(execution, task, 'rejected', {'code': 'invalid_observation'})
-            continue
-        used = {ref for observation in observations for ref in observation['refs']}
-        _save(execution, task, 'complete', {'observations': observations,
-            'refs': {ref: source['refs'][ref] for ref in used}, 'review_status': 'pending'})
-    return processed

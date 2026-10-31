@@ -6,7 +6,6 @@ import pytest
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.llm import ModelError
 from project_watch.studio.monitoring_plan import _same_story
-from project_watch.studio.pipeline import PLAN_QUERY_LIMIT
 
 
 @pytest.fixture
@@ -32,30 +31,8 @@ class Collector:
         return []
 
 
-def test_background_eventually_gets_a_turn(env):
-    pipe, pid, plan = env
-    for n in range((PLAN_QUERY_LIMIT + 3) // 4):
-        add(plan, pid, f"核心问题{n}", tier="core", queries=[f"核心{n}-{i}" for i in range(4)])
-    add(plan, pid, "背景问题", queries=["背景检索"])
-    collector = Collector()
-    for _ in range(5):
-        pipe._collect_monitor(pid, pipe.store.get_project(pid), collector, lambda _: None)
-    assert "背景检索" in collector.seen, f"background starved; {len(collector.seen)} calls all core"
 
 
-def test_partial_query_batch_does_not_mark_weekly_item_complete(env):
-    pipe, pid, plan = env
-    sizes = [4] * ((PLAN_QUERY_LIMIT - 1) // 4)
-    if (PLAN_QUERY_LIMIT - 1) % 4:
-        sizes.append((PLAN_QUERY_LIMIT - 1) % 4)
-    for n, size in enumerate(sizes):
-        add(plan, pid, f"核心问题{n}", tier="core", queries=[f"核心{n}-{i}" for i in range(size)])
-    weekly = add(plan, pid, "每周问题", cadence="medium", queries=[f"周查询{i}" for i in range(4)])
-    collector = Collector()
-    pipe._collect_monitor(pid, pipe.store.get_project(pid), collector, lambda _: None)
-    done = [q for q in collector.seen if q.startswith("周查询")]
-    due = [w["id"] for w in plan.due(pid)]
-    assert len(done) == 4 or weekly["id"] in due, f"only {done} searched but remaining queries deferred for days"
 
 
 def test_human_confirmation_protects_system_trial(env):
@@ -105,73 +82,12 @@ def test_dedup_does_not_erase_a_later_negative_update():
     assert not _same_story("合成药物临床试验获批启动", "合成药物临床试验因安全问题暂停")
 
 
-def test_partial_queries_resume_after_reopen_without_repeating_successes(env, monkeypatch):
-    from project_watch.studio import pipeline as pipeline_module
-    from project_watch.studio.monitor import MonitorStore
-    from project_watch.studio.monitoring_plan import MonitoringPlan
-
-    pipe, pid, plan = env
-    watch = add(plan, pid, "每周续跑", cadence="medium", queries=["查询一", "查询二", "查询三"])
-    monkeypatch.setattr(pipeline_module, "PLAN_QUERY_LIMIT", 1)
-    collector = Collector()
-    for index in range(3):
-        reopened = MonitoringPlan(MonitorStore(pipe.store))
-        assert reopened.query_jobs(pid, 1)[0][1] == f"查询{'一二三'[index]}"
-        pipe._collect_monitor(pid, pipe.store.get_project(pid), collector, lambda _: None)
-    assert collector.seen == ["查询一", "查询二", "查询三"]
-    assert watch["id"] not in {w["id"] for w in plan.due(pid)}
-    assert plan._get(pid, watch["id"])["last_run_at"]
 
 
-def test_failed_query_remains_pending_but_successful_siblings_do_not(env):
-    pipe, pid, plan = env
-    watch = add(plan, pid, "失败后补齐", cadence="medium", queries=["正常查询", "失败查询"])
-    collector = Collector()
-    def fail_once(query, search_count=0):
-        collector.seen.append(query)
-        if query == "失败查询":
-            raise ValueError("synthetic failure")
-        return []
-    collector.news = fail_once
-    pipe._collect_monitor(pid, pipe.store.get_project(pid), collector, lambda _: None)
-    assert not plan._get(pid, watch["id"])["last_run_at"]
-    assert [q for _, q in plan.query_jobs(pid, 30)] == ["失败查询"]
-    plan.update(watch["id"], {"queries": ["新的查询"]}, actor="human")
-    assert [q for _, q in plan.query_jobs(pid, 30)] == ["新的查询"]
 
 
-def test_failed_core_does_not_starve_background_with_one_slot(env, monkeypatch):
-    from project_watch.studio import pipeline as pipeline_module
-
-    pipe, pid, plan = env
-    add(plan, pid, "失败核心", tier="core")
-    add(plan, pid, "可用背景")
-    monkeypatch.setattr(pipeline_module, "PLAN_QUERY_LIMIT", 1)
-    collector = Collector()
-    def failing(query, search_count=0):
-        collector.seen.append(query)
-        raise ValueError("synthetic failure")
-    collector.news = failing
-    for _ in range(2):
-        pipe._collect_monitor(pid, pipe.store.get_project(pid), collector, lambda _: None)
-    assert collector.seen == ["失败核心", "可用背景"]
 
 
-@pytest.mark.parametrize("code", ["request_outcome_unknown", "request_budget", "provider_backoff"])
-def test_collection_control_signal_stops_dispatch(env, code):
-    from project_watch.studio.http import HttpError
-
-    pipe, pid, plan = env
-    watch = add(plan, pid, "中断查询", queries=["未知查询", "不要执行"])
-    collector = Collector()
-    def stop(query, search_count=0):
-        collector.seen.append(query)
-        raise HttpError(code)
-    collector.news = stop
-    with pytest.raises(HttpError):
-        pipe._collect_monitor(pid, pipe.store.get_project(pid), collector, lambda _: None)
-    assert collector.seen == ["未知查询"]
-    assert not plan._get(pid, watch["id"])["last_run_at"]
 
 
 @pytest.mark.parametrize("code", ["request_budget", "provider_backoff", "model_timeout"])

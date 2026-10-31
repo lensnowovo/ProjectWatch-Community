@@ -108,23 +108,6 @@ class RefreshRequest(BaseModel):
     kind: Literal["internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight"] = "external"
 
 
-class SavedAnalysisRequest(BaseModel):
-    snapshot_id: str = Field(min_length=1, max_length=64)
-    request_id: str = Field(min_length=1, max_length=128)
-    parent_attempt_id: str | None = Field(default=None, min_length=1, max_length=64)
-
-
-class TopicRequest(BaseModel):
-    watch_id: str = Field(min_length=1, max_length=64)
-    expected_version: str = Field(min_length=1, max_length=64)
-
-
-class RecoveryRequest(BaseModel):
-    expected_version: str = Field(min_length=1, max_length=64)
-    idempotency_key: str = Field(min_length=8, max_length=100)
-    accept_duplicate_cost: bool = Field(strict=True)
-
-
 class DirectRetryRequest(BaseModel):
     accept_duplicate_cost: bool = Field(strict=True)
 
@@ -288,25 +271,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             return SettingsStore.public_view(settings_store.update(body))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-
-    @app.get("/api/studio/settings/executor")
-    def get_executor():
-        from project_watch.studio import public_executor
-
-        return public_executor.current(data_dir)
-
-    @app.put("/api/studio/settings/executor")
-    def put_executor(body: dict):
-        from project_watch.studio import public_executor
-
-        if type(body.get('enabled')) is not bool:
-            raise HTTPException(422, 'enabled 必须是 true 或 false')
-        if not public_executor.current(data_dir)['configurable']:
-            raise HTTPException(409, {'code': 'executor_not_configurable',
-                                      'message': '当前以开发方式运行，执行方式由环境变量决定。'})
-        # Saved only; the running worker keeps its executor until the app restarts.
-        public_executor.write_choice(data_dir, body['enabled'])
-        return public_executor.current(data_dir)
 
     @app.get('/api/studio/projects/{project_id}/commercial')
     def commercial_view(project_id: str):
@@ -729,7 +693,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         metrics = store.list_metrics(project_id)
         detail_result = pipeline.structured_facts.get(project_id)
         from project_watch.studio.agent_results import project_projection
-        from project_watch.studio.collection_dsh import latest_report
 
         return project_projection(store, project_id, {
             "project": project,
@@ -744,7 +707,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "trials": company_trials(project, store.list_items(project_id=project_id, category="trial", limit=100)),
             "brief": store.get_brief(project_id),
             "plan": plan,
-            "collection_report": latest_report(store, project_id),
+            "collection_report": None,  # per-source receipts now live in the round view (/round)
             "research_source_counts": research_source_counts(store, project_id),
             "metrics": metrics,
             "finance": finance.view(metrics),
@@ -854,39 +817,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         store.reset_analyzed(project_id)
         return {"status": retried.status}
 
-    @app.get('/api/studio/projects/{project_id}/research-topic/{watch_id}')
-    def research_topic_result(project_id: str, watch_id: str):
-        from project_watch.studio.dsh_topic import latest_topic
-
-        project_or_404(project_id)
-        try:
-            return latest_topic(store, project_id, watch_id, pipeline=pipeline)
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(409, '专题结果暂时无法核验，请保留原任务并检查本地回执') from exc
-
-    @app.post('/api/studio/projects/{project_id}/research-topic', status_code=202)
-    def research_topic(project_id: str, body: TopicRequest):
-        from project_watch.studio.dsh_runtime import runtime_entry
-        from project_watch.studio.dsh_topic import enqueue_topic
-        from project_watch.studio.public_executor import require_available
-
-        project_or_404(project_id)
-        try:
-            require_available()
-            root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
-            if not root or os.environ.get('PROJECT_WATCH_DSH_MONITOR') != '1':
-                raise ValueError('专题研究需要启用 DSH 监控')
-            if not runtime_entry(Path(root)).is_file():
-                raise ValueError('DSH 运行时不可用')
-            settings = settings_store.load()
-            if not settings.model.ready or not settings.search.ready_providers():
-                raise ValueError('请先配置模型与搜索服务')
-            return enqueue_topic(pipeline, project_id, body.watch_id, body.expected_version)
-        except (ValueError, OSError) as exc:
-            raise HTTPException(409, str(exc)) from exc
-
     @app.post("/api/studio/projects/{project_id}/refresh", status_code=202)
     def refresh(project_id: str, body: RefreshRequest):
         project = project_or_404(project_id)
@@ -932,20 +862,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                 raise HTTPException(409, '暂无获准分析的来源')
             return store.enqueue(project_id, 'details', input_version='manual:' + uuid.uuid4().hex)
         return store.enqueue(project_id, body.kind)
-
-    @app.post("/api/studio/projects/{project_id}/saved-analysis")
-    def saved_analysis(project_id: str, body: SavedAnalysisRequest):
-        project_or_404(project_id)
-        if not settings_store.load().model.ready:
-            raise HTTPException(409, '请先在设置中连接模型')
-        from project_watch.studio import snapshot_work
-
-        try:
-            return snapshot_work.enqueue(pipeline, project_id, body.snapshot_id, body.request_id,
-                                         parent_attempt_id=body.parent_attempt_id)
-        except (ValueError, KeyError, HttpError) as exc:
-            return JSONResponse(status_code=409, content={'code': getattr(exc, 'code', 'saved_analysis_blocked'),
-                'detail': '当前材料或前序任务状态不允许创建分析；已有结果保留。', 'dispatch': 'not_started'})
 
     @app.get("/api/studio/tasks")
     def task_board(project_id: str | None = None):
@@ -1042,16 +958,15 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     @app.get('/api/studio/projects/{project_id}/insight')
     def insight_view(project_id: str):
         """Stored deep analysis (AI judgments with numbered sources), its history and the latest job state."""
-        from project_watch.studio import insight, snapshot_work
+        from project_watch.studio import insight
 
         project_or_404(project_id)
         with closing(store._connect()) as db:
             job = db.execute("SELECT id, status, error, created_at, started_at, finished_at FROM studio_jobs "
-                             "WHERE project_id=? AND kind='insight' ORDER BY created_at DESC, rowid DESC LIMIT 1", (project_id,)).fetchone()
+                             "WHERE project_id=? AND kind='analyze' ORDER BY created_at DESC, rowid DESC LIMIT 1", (project_id,)).fetchone()
         from project_watch.studio.agent_results import insight_history, insight_projection
 
         return {"record": insight_projection(store, project_id, insight.load(store, project_id)), "history": insight_history(store, project_id, insight.history(store, project_id)),
-                "saved_analysis": snapshot_work.view(pipeline, project_id),
                 "job": dict(job) if job else None, "model_ready": settings_store.load().model.ready,
                 "generation_available": pipeline.insight_generator is not None,
                 "labels": insight.VERDICTS, "sources": {**insight.SOURCE_LABEL, 'E':'公开来源（Agent）'}}
@@ -1068,13 +983,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         if found is None:
             raise HTTPException(404, "事件不存在")
         return found
-
-    @app.get('/api/studio/projects/{project_id}/recovery')
-    def project_recovery_preview(project_id: str):
-        from project_watch.studio.recovery import project_preview
-
-        project_or_404(project_id)
-        return project_preview(pipeline, project_id)
 
     @app.get('/api/studio/projects/{project_id}/events/{event_id}/merges')
     def event_merges(project_id: str, event_id: str):
@@ -1094,28 +1002,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         except KeyError as exc:
             raise HTTPException(404, '归并回执不存在') from exc
         except (ValueError, HttpError) as exc:
-            raise HTTPException(409, str(exc)) from exc
-
-    @app.get('/api/studio/projects/{project_id}/jobs/{job_id}/recovery')
-    def recovery_preview(project_id: str, job_id: str):
-        from project_watch.studio.recovery import preview
-
-        project_or_404(project_id)
-        try:
-            return preview(pipeline, project_id, job_id)
-        except KeyError as exc:
-            raise HTTPException(404, '任务不存在') from exc
-
-    @app.post('/api/studio/projects/{project_id}/jobs/{job_id}/recovery', status_code=202)
-    def recovery_authorize(project_id: str, job_id: str, body: RecoveryRequest):
-        from project_watch.studio.recovery import authorize
-
-        project_or_404(project_id)
-        try:
-            return authorize(pipeline, project_id, job_id, **body.model_dump())
-        except KeyError as exc:
-            raise HTTPException(404, '任务不存在') from exc
-        except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
     # ------------------------------------------------------------- feed

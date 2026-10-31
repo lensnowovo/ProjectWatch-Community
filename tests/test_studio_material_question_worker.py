@@ -106,15 +106,17 @@ def test_normal_worker_materials_survive_optional_question_failure_and_reopen(tm
     if outcome == 'unknown':
         reopened.state.studio_worker.schedule()
         drain(reopened)
-        assert new_calls == []  # The normal scheduler also honors the hold.
-        held = next(j for j in current.store.jobs(pid) if j['id'] == internal['id'])
+        # The next scheduled round is a new request: it may assess the still pending
+        # material. The original unclear request stays recorded and is never resent.
+        assert len(new_calls) == 1
+        held = next(j for j in current.store.jobs(pid, 50) if j['id'] == internal['id'])
         assert held['status'] == 'failed' and held['retry_after'] == '9999-12-31'
-        assert material(current, pid, watches[0]['id'])[0]['status'] == 'pending'
+        assert JobExecution(current.store, held).usage()['model']['unknown'] == 1
 
     if outcome == 'malformed':
         # A deliberately initiated *new* monitoring round can assess the still
         # pending material; this is not an automatic retry of the failed reply.
-        current.store.enqueue(pid, 'external')
+        current.store.enqueue(pid, 'collect')
         drain(reopened)
         assert len(new_calls) == 1
         assert material(current, pid, watches[0]['id'])[0]['status'] == 'assessed'

@@ -1,23 +1,17 @@
 """Bounded ordinary collection, synthetic companies only; never real transport."""
 import json
 import re
-from contextlib import closing
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
 import test_collection_supplements as fixtures
 
 from project_watch.studio import (
-    collection_dsh,
-    collection_targets,
     google_patents,
     research_records,
-    retrieval_queries,
 )
 from project_watch.studio.collection_pages import public_read_request
 from project_watch.studio.http import Http, HttpError, Response
-from project_watch.studio.research_sources import research_sources
 
 
 def patent_html(number='US123456A1', applicant='Synthetic Institute', family='987654', current='Other Owner',
@@ -126,115 +120,18 @@ def setup(tmp_path, *, applicant='Synthetic Institute', failure=False, empty=Fal
     return loop, args, calls
 
 
-@pytest.mark.parametrize('applicant', ['Synthetic Institute', 'Unrelated Institute'])
-def test_ordinary_specialist_path_retains_bridge_without_claiming_affiliation(tmp_path, applicant):
-    loop, args, calls = setup(tmp_path, applicant=applicant)
-    result = loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    assert result['collection']['outcome'] == 'success'
-    [row] = research_sources(loop.store, loop.project_id, 'paper')['items']
-    meta = research_records.evidence_metadata(loop.store, loop.project_id, row['evidence_version_id'])
-    assert meta['affiliations'] == [applicant]
-    assert meta['query_context']['relationship'] == 'same_entity'
-    assert row['extra']['query_relationship']['basis'] == 'query_hypothesis_not_verified_relationship'
-    assert not loop.store.list_events(project_id=loop.project_id)
-    assert loop.execution.usage()['open_data']['requests'] == 1
-    assert len(calls) == 2  # one disclosure search, one actual specialist request
-    # Query echo and a Chinese/English name hypothesis never overwrite the
-    # provider's actual author institution, even in the unrelated-company case.
-    assert row['processing_status'] == 'pending'
 
 
-def test_patent_document_family_keeps_all_versions_and_original_dates(tmp_path):
-    loop, args, calls = setup(tmp_path)
-    for number in ('US123456A1', 'US123456B2'):
-        result = loop.tool('pw_collect', args | dict(adapter='google_patent', query=number, relationship='unverified'))
-        assert result['collection']['outcome'] == 'success'
-    page = research_sources(loop.store, loop.project_id, 'patent')
-    assert page['total'] == 2 and page['family_count'] == 1
-    assert all(r['family']['document_count'] == 2 and r['published_at'].startswith('2021-02-03') for r in page['items'])
-    assert len({r['id'] for r in page['items']}) == 2
-    assert not loop.store.list_events(project_id=loop.project_id)
-    assert len(calls) == 3
 
 
-def test_document_failure_preserves_sources_and_does_not_repeat(tmp_path):
-    loop, args, calls = setup(tmp_path, failure=True)
-    args |= dict(adapter='google_patent', query='US123456A1', relationship='unverified')
-    result = loop.tool('pw_collect', args)
-    assert result['collection']['outcome'] == 'failed'
-    before = len(calls)
-    loop.tool('pw_collect', args)
-    assert len(calls) == before and collection_dsh.catalog(loop)['total'] >= 2
-    assert research_sources(loop.store, loop.project_id, 'patent')['total'] == 0
 
 
-def test_relationship_requires_literal_subject_and_query(tmp_path):
-    loop, args, calls = setup(tmp_path)
-    with pytest.raises(ValueError, match='shared public excerpt'):
-        loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute', subject='Other Company'))
-    assert len(calls) == 1 and not collection_targets.targets(loop)
 
 
-@pytest.mark.parametrize('empty', [True, False])
-def test_product_fallback_requires_same_subject_receipt_and_one_dimension(tmp_path, empty):
-    loop, args, _ = setup(tmp_path, empty=empty, applicant='Unrelated Institute')
-    role = SimpleNamespace(parent=loop, execution=loop.execution)
-    request = args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product')
-    with pytest.raises(ValueError, match='requires_unconfirmed'):
-        retrieval_queries.require_product_fallback(role, request)
-    # The other subject's successful receipt cannot unlock this product.
-    loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Unrelated Institute', subject='Other Host'))
-    with pytest.raises(ValueError, match='requires_unconfirmed'):
-        retrieval_queries.require_product_fallback(role, request)
-    loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    retrieval_queries.require_product_fallback(role, request)
-    retrieval_queries.require_product_fallback(role, request)
-    with pytest.raises(ValueError, match='one_product_dimension'):
-        retrieval_queries.require_product_fallback(role, request | dict(query='SYN-202'))
 
 
-def test_matching_affiliation_prevents_product_expansion_without_asserting_ownership(tmp_path):
-    loop, args, _ = setup(tmp_path)
-    loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    with pytest.raises(ValueError, match='requires_unconfirmed'):
-        retrieval_queries.require_product_fallback(SimpleNamespace(parent=loop, execution=loop.execution),
-            args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product'))
-    assert not loop.store.list_events(project_id=loop.project_id)
 
 
-@pytest.mark.parametrize('empty', [True, False])
-def test_product_fallback_uses_original_settled_receipt_after_handoff(tmp_path, empty):
-    from copy import copy
-
-    from project_watch.studio.update_handoff import digest
-
-    loop, args, calls = setup(tmp_path, empty=empty, applicant='Unrelated Institute')
-    loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    original = loop.execution
-    saved = collection_dsh.rounds(loop)[-1]
-    unit, receipt = saved['plan']['units'][0], saved['receipts'][0]
-    entry = dict(origin_job_id=original.job['id'], unit_id=unit['id'], adapter=unit['source'],
-                 query=unit['query'], outcome=receipt['outcome'], result_count=receipt['result_count'],
-                 reason=receipt.get('reason', ''), receipt_fingerprint=digest(receipt))
-    assert loop.store.finish(original.job['id'], lease_token=original.job['lease_token'])
-    checkpoints = {'update_handoff_v1': {'professional_query_history': [entry]},
-                   'collection_source_imports_v1': [r for group in collection_dsh._refs(loop).values() for r in group]}
-    # A successor's empty ledger must not require the old affiliation query again.
-    successor = copy(loop)
-    successor.execution = SimpleNamespace(job={'id': 'synthetic-successor'},
-        read_checkpoint=lambda stage: checkpoints.get(stage),
-        checkpoint=lambda stage, value: checkpoints.__setitem__(stage, value))
-    role = SimpleNamespace(parent=successor, execution=successor.execution)
-    before = list(calls)
-    retrieval_queries.require_product_fallback(role,
-        args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product'))
-    assert calls == before
-    assert checkpoints['collection_product_dimension_v2']['query'] == 'SYN-101'
-    # Context is not evidence: a tampered summary cannot unlock a new query.
-    entry['receipt_fingerprint'] = 'tampered'
-    with pytest.raises(ValueError, match='historical collection'):
-        retrieval_queries.require_product_fallback(role,
-            args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product'))
 
 
 def test_patent_time_fields_positions_and_nested_unrelated_records():
@@ -309,49 +206,8 @@ def test_owner_named_only_in_a_nested_citation_is_not_the_applicant():
     assert record['applicants'] == ['Unrelated Applicant Co'] and record['current_assignees'] == []
 
 
-def test_query_bridge_is_bound_to_independent_review_and_withdrawal(tmp_path):
-    loop, args, _ = setup(tmp_path)
-    result = loop.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    source = result['sources'][0]
-    meta = research_records.evidence_metadata(loop.store, loop.project_id, source['evidence_version_id'])
-    from project_watch.studio.dsh_record_review import payload_for
-    version = loop.store.evidence.get(loop.project_id, source['evidence_version_id'], include_internal=False)
-    ref = dict(evidence_version_id=version['id'], part_index=0, start=0, end=10, quote=version['parts'][0]['text'][:10])
-    row = dict(kind='paper', subject='Synthetic Host', label='Synthetic research', refs=[ref],
-               research_metadata=meta, research_relation='author_affiliation')
-    payload = payload_for(loop, {'record:one': row})
-    assert len(payload['bound_evidence']['record:one']) == 2
-    bridge = meta['query_context']['ref']['evidence_version_id']
-    with closing(loop.store._connect()) as db, db:
-        db.execute("INSERT INTO studio_evidence_lifecycle(project_id,evidence_version_id,status,reason,actor) VALUES (?,?,'withdrawn','test','synthetic')",
-                   (loop.project_id, bridge))
-    with pytest.raises((KeyError, ValueError)):
-        payload_for(loop, {'record:one': row})
 
 
-def test_refused_product_fallback_is_not_recorded_and_allowed_one_is(tmp_path):
-    """A refused, never-dispatched query keeps no action slot or receipt-less started action."""
-    from project_watch.studio import bootstrap_collection
-
-    loop, args, calls = setup(tmp_path, empty=True)
-    role = bootstrap_collection.Collection(loop)
-    role.retrieval_contract = 'evidence-query-v2'
-    product = args | dict(adapter='europepmc_topic', query='SYN-101', relationship='product')
-    before = len(calls)
-    with pytest.raises(ValueError, match='product_fallback_requires'):
-        role.tool('pw_collect', product)  # no same-subject institution receipt yet
-    assert role.data['actions'] == {} and len(calls) == before
-    assert role.execution.read_checkpoint('collection_product_dimension_v2') is None
-    # Same subject's institution query returns zero results: the fallback opens once.
-    role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    result = role.tool('pw_collect', product)
-    assert result['collection']['outcome'] == 'success'
-    assert [a['status'] for a in role.data['actions'].values()] == ['complete', 'complete']
-    assert role.execution.read_checkpoint('collection_product_dimension_v2')['query'] == 'SYN-101'
-    # A second product dimension is refused before recording, too.
-    with pytest.raises(ValueError, match='one_product_dimension'):
-        role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202', relationship='product'))
-    assert len(role.data['actions']) == 2
 
 
 def test_listed_versions_are_validated_numbers_with_provenance():
@@ -364,27 +220,6 @@ def test_listed_versions_are_validated_numbers_with_provenance():
         google_patents.metadata(tampered)
 
 
-def test_unsent_invalid_product_does_not_consume_dimension(tmp_path):
-    from project_watch.studio import bootstrap_collection
-
-    loop, args, calls = setup(tmp_path, empty=True)
-    role = bootstrap_collection.Collection(loop)
-    role.retrieval_contract = 'evidence-query-v2'
-    role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    before, actions = len(calls), dict(role.data['actions'])
-    with pytest.raises(ValueError, match='reason'):
-        role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-101',
-                                           relationship='product', reason=''))
-    assert len(calls) == before and role.data['actions'] == actions
-    assert role.execution.read_checkpoint('collection_product_dimension_v2') is None
-    result = role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202', relationship='product'))
-    assert result['collection']['outcome'] == 'success'
-    claim = role.execution.read_checkpoint('collection_product_dimension_v2')
-    assert claim['query'] == 'SYN-202'
-    with pytest.raises(ValueError):
-        role.tool('pw_collect', args | dict(adapter='europepmc_topic', query='SYN-202',
-                                           relationship='product', reason=''))
-    assert role.execution.read_checkpoint('collection_product_dimension_v2') == claim
 
 
 def test_duplicate_publications_keep_one_sided_version_link_regardless_of_order():
@@ -401,30 +236,6 @@ def test_duplicate_publications_keep_one_sided_version_link_regardless_of_order(
         assert set(grouped.values()) == {('versions:US123456A1', 'listed_versions')}
 
 
-def test_application_and_grant_group_only_through_their_own_listed_versions(tmp_path):
-    """No family ID on the page: link A1/B2 by listed versions, never by title or applicant."""
-    loop, args, calls = setup(tmp_path)
-    pages = {'US123456A1': patent_html('US123456A1', family=None, versions=('US123456B2',)),
-             'US123456B2': patent_html('US123456B2', family=None, versions=('US123456A1',))}
-
-    def send(method, url, headers, raw, timeout):
-        calls.append(url)
-        if urlsplit(url).hostname != 'patents.google.com':
-            pytest.fail('unexpected source: ' + url)
-        return Response(200, {}, pages[url.split('/')[-2]].encode())
-
-    loop.pipeline.http_factory = lambda _: Http(send)
-    loop.collectors = loop.pipeline.tools()[3]
-    for number in pages:
-        result = loop.tool('pw_collect', args | dict(adapter='google_patent', query=number, relationship='unverified'))
-        assert result['collection']['outcome'] == 'success'
-    page = research_sources(loop.store, loop.project_id, 'patent')
-    groups = {r['extra']['patent_number']: r['family'] for r in page['items']}
-    assert groups['US123456A1']['key'] == groups['US123456B2']['key'] == 'versions:US123456A1'
-    assert groups['US123456A1']['basis'] == 'listed_versions' and groups['US123456B2']['document_count'] == 2
-    assert page['family_count'] == 1 and page['total'] == 2  # both documents are kept, not merged
-    assert all(r['extra']['legal_status'] == 'unknown' for r in page['items'])
-    assert not loop.store.list_events(project_id=loop.project_id)
 
 
 def test_unlinked_documents_and_provider_family_keep_their_own_grouping():
@@ -446,49 +257,5 @@ def test_unlinked_documents_and_provider_family_keep_their_own_grouping():
     assert keys['d'] == keys['e'] == ('versions:CN5000005A', 'listed_versions')
 
 
-def test_validation_refusal_is_forgotten_but_a_journaled_request_is_not(tmp_path):
-    from project_watch.studio import bootstrap_collection
-
-    loop, args, calls = setup(tmp_path)
-    role = bootstrap_collection.Collection(loop)
-    bad = args | dict(adapter='europepmc_affiliation', query='Synthetic Institute', quote='not in the excerpt')
-    before = len(calls)
-    with pytest.raises(ValueError, match='exact public quote'):
-        role.tool('pw_collect', bad)
-    assert role.data['actions'] == {} and len(calls) == before  # refused before dispatch: no slot, no started
-
-    original = loop.tool
-
-    def sent_then_failed(name, tool_args):
-        # A request reaches the journal, then local processing fails.
-        loop.execution.call('open_data', 'synthetic-sent', lambda: Response(200, {}, b'{}'), provider='synthetic')
-        raise ValueError('post-dispatch processing failed')
-
-    loop.tool = sent_then_failed
-    try:
-        with pytest.raises(ValueError, match='post-dispatch'):
-            role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    finally:
-        loop.tool = original
-    assert [a['status'] for a in role.data['actions'].values()] == ['started']  # conservative, as before
 
 
-def test_existing_receipt_change_without_row_growth_keeps_started_action(tmp_path):
-    from project_watch.studio import bootstrap_collection
-
-    loop, args, _calls = setup(tmp_path)
-    role = bootstrap_collection.Collection(loop)
-    loop.execution.call('open_data', 'existing', lambda: Response(200, {}, b'{}'), provider='synthetic')
-    before = role._journal_rows()
-
-    def changed_then_failed(name, tool_args):
-        with closing(loop.store._connect()) as db, db:
-            db.execute("UPDATE studio_job_calls SET response_status=503 WHERE job_id=?", (loop.execution.job['id'],))
-        raise ValueError('post-dispatch processing failed')
-
-    loop.tool = changed_then_failed
-    with pytest.raises(ValueError, match='post-dispatch'):
-        role.tool('pw_collect', args | dict(adapter='europepmc_affiliation', query='Synthetic Institute'))
-    after = role._journal_rows()
-    assert len(after) == len(before) and after != before
-    assert [a['status'] for a in role.data['actions'].values()] == ['started']

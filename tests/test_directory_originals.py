@@ -134,7 +134,7 @@ def test_unknown_child_is_not_resent_or_followed_by_other_pages(tmp_path):
         return original(url)
     pipeline.article_reader = SimpleNamespace(read=read)
     for _ in range(2):
-        with pytest.raises(HttpError, match='request_outcome_unknown'):
+        with pytest.raises(HttpError, match=r'request_outcome_unknown|unknown_not_resent'):
             pipeline.competition_research.originals(pid, [{'url': ROOT}],
                 execution=execution, context=CONTEXT)
     assert reads == [ROOT, CHILD] and execution.usage()['page']['unknown'] == 1

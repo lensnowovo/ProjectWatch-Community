@@ -5,7 +5,7 @@ from contextlib import closing
 from urllib.parse import unquote_plus, urlsplit
 
 import pytest
-from test_retrieval_queries import patent_html
+from synthetic_providers import EMPTY_RSS, paper, patent_html, patents
 
 from project_watch.studio import collect_job
 from project_watch.studio.app import create_studio_app
@@ -16,20 +16,6 @@ from project_watch.studio.settings import ModelConfig
 from project_watch.studio.store import now
 
 LEGAL = 'Synthetic Bio Inc.（合成生物，开曼注册主体）'
-
-
-def paper(affiliation):
-    return {'hitCount': 1, 'resultList': {'result': [dict(source='MED', id='123456', title='Synthetic study',
-        firstPublicationDate='2025-01-02', authorList={'author': [dict(fullName='A. Author',
-            authorAffiliationDetailsList={'authorAffiliation': [dict(affiliation=affiliation)]})]})]}}
-
-
-def patents():
-    return {'hitCount': 2, 'resultList': {'result': [
-        dict(source='PAT', id='WO2099123456', title='Synthetic conjugate', firstPublicationDate='2024-01-01',
-             affiliation='SYNTHETIC BIOLOGICS SUZHOU CO LTD', patentDetails={'typeCode': 'A1', 'countryCode': 'WO'}),
-        dict(source='PAT', id='US2099000001', title='Other owner device', firstPublicationDate='2024-02-02',
-             affiliation='UNRELATED MEDICAL INC', patentDetails={'typeCode': 'A1', 'countryCode': 'US'})]}}
 
 
 @pytest.fixture
@@ -53,6 +39,9 @@ def env(tmp_path, monkeypatch):
         host, query = urlsplit(url).hostname, unquote_plus(urlsplit(url).query)
         if host in fail:
             return Response(500, {}, b'{}')
+        if host == 'model.example.invalid':  # the one-time plan draft: nothing beyond confirmed names
+            answer = json.dumps({'competitors': [], 'industry_queries': []})
+            return Response(200, {}, json.dumps({'choices': [{'message': {'content': answer}, 'finish_reason': 'stop'}]}).encode())
         if host == 'www.ebi.ac.uk':
             data = patents() if 'SRC:PAT' in query else paper('Synthetic Biologics, Shanghai') if 'AFFILIATION' in query \
                 else {'hitCount': 0, 'resultList': {'result': []}}
@@ -61,6 +50,8 @@ def env(tmp_path, monkeypatch):
         elif host == 'patents.google.com':
             number = urlsplit(url).path.split('/')[2]
             return Response(200, {}, patent_html(number, applicant='Synthetic Biologics Suzhou Co Ltd', family=None).encode())
+        elif host == 'www.bing.com':
+            return Response(200, {}, EMPTY_RSS)
         elif host == 'clinicaltrials.gov':
             data = {'studies': []}
         elif host == 'www.cninfo.com.cn':
@@ -127,7 +118,7 @@ def test_restart_replays_the_same_plan_without_new_requests(env):
     assert len(sent) == before
 
 
-def test_unknown_request_elsewhere_fails_only_that_source(env):
+def test_an_unclear_request_in_an_earlier_round_is_kept_and_a_new_round_asks_again(env):
     pipeline, pid, _sent, _ = env
     first = run_collect(pipeline, pid)
     with pipeline.store._connect() as db:
@@ -136,9 +127,11 @@ def test_unknown_request_elsewhere_fails_only_that_source(env):
         db.execute("UPDATE studio_job_calls SET status='unknown' WHERE job_id=? AND call_key=?", (first.job['id'], row[0]))
         db.execute("UPDATE studio_jobs SET status='done' WHERE kind='analyze' AND project_id=?", (pid,))
     second = run_collect(pipeline, pid)
-    result = second.read_checkpoint(collect_job.RESULT)
-    assert result['status'] in ('partial', 'complete')
+    assert second.read_checkpoint(collect_job.RESULT)['status'] == 'complete'
     with pipeline.store._connect() as db:
-        assert db.execute('SELECT COUNT(*) FROM studio_job_calls WHERE job_id=? AND call_key=?',
-                          (second.job['id'], row[0])).fetchone()[0] == 0  # never resent
+        # The old receipt stays unknown (counted, never settled); the new round is its own request.
+        assert db.execute('SELECT status FROM studio_job_calls WHERE job_id=? AND call_key=?',
+                          (first.job['id'], row[0])).fetchone()[0] == 'unknown'
+        assert db.execute('SELECT status FROM studio_job_calls WHERE job_id=? AND call_key=?',
+                          (second.job['id'], row[0])).fetchone()[0] == 'completed'
     assert research_sources(pipeline.store, pid, 'patent')['total'] == 3

@@ -17,7 +17,7 @@ from project_watch.studio.runtime_health import projection, tick
 def setup(tmp_path):
     service, pid = make_service(tmp_path / 'watch.sqlite3')
     store = service.store
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'public_profile')
     job = store.claim()
     return store, pid, job
 
@@ -114,7 +114,7 @@ def test_live_transport_has_deadline_and_late_reply_cannot_publish(tmp_path):
     assert len(errors) == 1 and 'lease' in str(errors[0])
     with closing(store._connect()) as db:
         assert db.execute('SELECT response_body FROM studio_job_calls').fetchone()[0] is None
-        assert projection(db, row(store, job))['state'] == 'needs_confirmation'
+        assert projection(db, row(store, job))['state'] == 'failed'  # unclear, recorded, never resent
 
 
 def test_unknown_search_held_not_just_model_calls(tmp_path):
@@ -127,7 +127,7 @@ def test_unknown_search_held_not_just_model_calls(tmp_path):
     assert tick(store, job) == 'held'
     from project_watch.studio.taskboard import board
     result = board(store, worker_state='running', model_ready=True)
-    assert result['jobs'][0]['advice']['action'] == 'recover'
+    assert result['jobs'][0]['advice']['action'] == 'none'  # no resend action
 
 
 def test_only_changed_stage_or_checkpoint_is_progress(tmp_path):
@@ -213,12 +213,6 @@ def test_worker_detects_stall_and_transient_loop_error(tmp_path, monkeypatch):
     assert worker.health()['restart_required'] is True
 
 
-def test_superseded_unknown_call_is_not_active_deadline(tmp_path):
-    store, _, job = setup(tmp_path)
-    with closing(store._connect()) as db, db:
-        db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,deadline_at) VALUES (?,'old','model','hash','started','2000-01-01','2000-01-01')", (job['id'],))
-        db.execute("INSERT INTO studio_call_recoveries VALUES (?,'base','old','next','2000-01-01','2000-01-02')", (job['id'],))
-    assert tick(store, job) == 'alive'
 
 
 def test_expired_lease_is_reported_as_recovery_not_running(tmp_path):
@@ -229,25 +223,6 @@ def test_expired_lease_is_reported_as_recovery_not_running(tmp_path):
         assert projection(db, row(store, job))['state'] == 'recovering'
 
 
-def test_external_followup_yields_once_per_saved_phase(tmp_path, monkeypatch):
-    from test_studio_external_round import first, followup
-    from test_studio_external_round import setup as setup_external
-
-    pipeline, _pid, calls = setup_external(tmp_path, monkeypatch)
-    first(pipeline)
-    job = followup(pipeline)
-    monkeypatch.setattr(JobExecution, 'yield_if_due', lambda _: (_ for _ in ()).throw(JobYield()))
-    for expected in ('external_collected', 'followup_bodies_done', 'followup_events_done'):
-        with pytest.raises(JobYield):
-            pipeline.run(job)
-        assert JobExecution(pipeline.store, job).read_checkpoint(expected) is not None
-        pipeline.store.yield_job(job)
-        job = pipeline.store.claim()
-        assert job['kind'] == 'external_followup'
-    before = list(calls)
-    pipeline.run(job)
-    assert JobExecution(pipeline.store, job).read_checkpoint('dispatch_completed')
-    assert not [c for c in calls[len(before):] if c[0] in ('bing', 'paper', 'filing', 'site')]
 
 
 def test_worker_heartbeat_really_fences_hung_dispatch(tmp_path, monkeypatch):
@@ -258,7 +233,7 @@ def test_worker_heartbeat_really_fences_hung_dispatch(tmp_path, monkeypatch):
     pipeline = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
     pid = pipeline.repository.create_project('Synthetic Stall').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'public_profile')
     worker = StudioWorker(pipeline, heartbeat_seconds=.01)
     released, fenced = threading.Event(), threading.Event()
     monkeypatch.setattr(worker, 'schedule', lambda: None)

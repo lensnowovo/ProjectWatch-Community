@@ -272,7 +272,6 @@ export interface InsightAnalysis {
 export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] }
 export interface InsightView {
   generation_available?: boolean;
-  saved_analysis?: {snapshot_id: string; materials: number; created_at: string; can_analyze: boolean; parent_attempt_id: string | null; status: string} | null;
   record: { id?: string; status?: string; section_versions?: Record<string, {version_id: string; generated_at: string; status: string}>; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
   history: { generated_at: string; headline: string; position: string; maturity: string; consensus: string; industry: string }[];
   job: { id: string; status: Job["status"]; error: string | null; created_at: string } | null;
@@ -294,16 +293,6 @@ export interface PlanItem {
   scope_kind?: "" | "relation" | "question"; relation_type?: string; relation_target?: string; relation_aliases?: string[];
   /** Display module and its parameters (see plan_templates.MODULES). */
   view: string; view_params: Record<string, unknown>;
-}
-export interface TopicResearchView {
-  job: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
-  assessment_job?: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
-  question: { text: string; exit_rule: string; lifecycle_version: string } | null;
-  scope_changed: boolean;
-  result: { status: 'partial' | 'complete' | 'pending'; collection_status: 'partial' | 'complete' | null;
-    answer_status: 'answered' | 'insufficient' | 'unresolved'; text: string; gaps: string[];
-    knowledge_state?: 'answered' | 'unresolved' | 'unknown' | 'needs_recheck'; closure?: string;
-    sources: { ref: string; title: string; url: string; date: string; context: string; context_kind: string }[] } | null;
 }
 export interface ModuleHit { id?: string; title: string; url?: string; date: string; importance?: string; source?: string; planned?: boolean }
 export type PlanModule =
@@ -410,25 +399,12 @@ export interface Job {
   runtime?: JobRuntime;
   dismissed?: boolean;
   id: string;
-  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope" | "assessment";
+  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope" | "assessment" | "collect" | "analyze" | "report";
   status: "queued" | "running" | "done" | "failed";
   stage: string;
   error: string;
   created_at: string;
   finished_at: string | null;
-}
-export interface RecoveryPreview {
-  job_id: string;
-  kind: Job['kind'];
-  version: string;
-  can_recover: boolean;
-  reason: string;
-  requests: Record<string, number>;
-  requires_duplicate_cost_consent: boolean;
-  job_status: string;
-  mode: 'resume' | 'checkpoint_continuation' | 'model_continuation';
-  notice: string;
-  continuation_job_id?: string | null;
 }
 export interface Plan {
   company_queries: string[];
@@ -855,15 +831,6 @@ export interface UpdateView {
   handoff: string;
 }
 
-/** Which public-research executor the running app uses; a saved switch takes effect on restart. */
-export interface ExecutorView {
-  executor: "dsh" | "classic" | "unavailable";
-  source: "bundled" | "custom" | "environment" | "setting" | "default" | "upgrade_preserved";
-  reason: string | null; reason_text: string | null;
-  dsh_version: string; node_version: string | null;
-  configurable: boolean; saved_enabled: boolean | null;
-}
-
 export const api = {
   desktopIdentity: () => request<{ instance: string; exit_available?: boolean; exit_requested?: boolean }>("GET", "/api/desktop/identity"),
   exitDesktop: (instance: string) => request<{ instance: string; status: "exit_requested" }>("POST", "/api/desktop/exit", { instance }),
@@ -898,8 +865,6 @@ export const api = {
     entity: { legal_name: name }, consent: true, execution_mode: "agent", draft_ids: drafts,
   }),
   saveSettings: (patch: unknown) => request<SettingsView>("PUT", "/api/studio/settings", patch),
-  executor: () => request<ExecutorView>("GET", "/api/studio/settings/executor"),
-  saveExecutor: (enabled: boolean) => request<ExecutorView>("PUT", "/api/studio/settings/executor", { enabled }),
   testSettings: () =>
     request<Record<string, { ok: boolean | null; message: string }>>("POST", "/api/studio/settings/test"),
   testSetup: () =>
@@ -941,14 +906,8 @@ export const api = {
   addLink: (id: string, url: string) => request<{ source_id: string; parser_status: string; analysis_status: string }>("POST", `/api/studio/projects/${id}/links`, { url }),
   retryFile: (id: string, sourceId: string) => request("POST", `/api/studio/projects/${id}/files/${sourceId}/retry`),
   insight: (id: string) => request<InsightView>("GET", `/api/studio/projects/${id}/insight`),
-  savedAnalysis: (id: string, body: {snapshot_id: string; request_id: string; parent_attempt_id?: string | null}) =>
-    request<Job>("POST", `/api/studio/projects/${id}/saved-analysis`, body),
   eventContext: (projectId: string, eventId: string) => request<EventContext>("GET", `/api/studio/projects/${projectId}/events/${encodeURIComponent(eventId)}/context`),
   monitoringPlan: (id: string) => request<MonitoringPlanView>("GET", `/api/studio/projects/${id}/monitoring-plan`),
-  topicResearch: (id: string, watchId: string) => request<TopicResearchView>('GET',
-    `/api/studio/projects/${id}/research-topic/${encodeURIComponent(watchId)}`),
-  startTopicResearch: (id: string, watchId: string, version: string) => request<Job>('POST',
-    `/api/studio/projects/${id}/research-topic`, { watch_id: watchId, expected_version: version }),
   discoveredSources: (id: string, offset = 0) => request<DiscoveredSourcePage>('GET', `/api/studio/projects/${id}/discovered-sources?offset=${offset}`),
   projectRound: (id: string) => request<ProjectRound>('GET', `/api/studio/projects/${id}/round`),
   reanalyze: (id: string) => request<Job>('POST', `/api/studio/projects/${id}/reanalyze`, { accept_duplicate_cost: true }),
@@ -983,15 +942,6 @@ export const api = {
   restoreProject: (id: string) => request<Project>("POST", `/api/studio/projects/${id}/restore`),
   refresh: (id: string, kind: Job["kind"]) =>
     request<Job>("POST", `/api/studio/projects/${id}/refresh`, { kind }),
-  recoveryPreview: (id: string, jobId: string) =>
-    request<RecoveryPreview>('GET', `/api/studio/projects/${id}/jobs/${jobId}/recovery`),
-  recoveryProject: (id: string) =>
-    request<{ items: RecoveryPreview[] }>('GET', `/api/studio/projects/${id}/recovery`),
-  recover: (id: string, jobId: string, version: string, key: string) =>
-    request<{ job_id: string; status: string; recovery_id: string }>('POST',
-      `/api/studio/projects/${id}/jobs/${jobId}/recovery`, {
-        expected_version: version, idempotency_key: key, accept_duplicate_cost: true,
-      }),
   feedSummary: (params: Record<string, string | number | undefined>) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && query.set(k, String(v)));

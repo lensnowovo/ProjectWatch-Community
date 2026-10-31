@@ -37,7 +37,8 @@ class CollectionSources:
 
     def capabilities(self):
         ready = 'available' if self.collectors.has_search else 'not_configured'
-        return (dict.fromkeys(('search', 'patent_search', 'cn_regulatory'), ready)
+        # News needs no key: Bing News RSS always, a configured search service in addition.
+        return ({'search': 'available'} | dict.fromkeys(('patent_search', 'cn_regulatory'), ready)
                 | dict.fromkeys(('openalex_topic', 'openalex_author', 'openalex_affiliation',
                                  'clinical_sponsor', 'clinical_term', 'cninfo',
                                  'europepmc_affiliation', 'europepmc_topic', 'europepmc_patent', 'google_patent'), 'available'))
@@ -67,7 +68,7 @@ class CollectionSources:
                    'window_applied': False, 'truncated': False}
         try:
             if source == 'search':
-                items = self.collectors.web_search(unit['query'], count=10)
+                items = self.collectors.news(unit['query'], search_count=10 if self.collectors.has_search else 0)
             elif source == 'patent_search':
                 items = self.collectors.patents(unit['query'])
             elif source == 'cn_regulatory':

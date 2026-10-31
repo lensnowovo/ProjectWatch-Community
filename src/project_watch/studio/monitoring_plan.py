@@ -257,10 +257,9 @@ class MonitoringPlan:
         return merged
 
     def view(self, project_id: str, *, changes: int = 30) -> dict:
-        from project_watch.studio.collection_dsh import latest_report
         from project_watch.studio.plan_tree import tree_signals
 
-        collection = latest_report(self.monitor.store, project_id)
+        collection = None  # per-source receipts of the latest round: GET /round
         items = self.items(project_id)
         with self.monitor._db() as db:
             rows = db.execute("SELECT * FROM studio_plan_changes WHERE project_id=? ORDER BY created_at DESC LIMIT ?",
@@ -930,11 +929,8 @@ class MonitoringPlan:
 
     def coverage(self, project_id: str, *, snapshot=None) -> dict:
         """常规采集 per section: what is collected every round, how much in 30 days, and what is off or failing."""
-        from project_watch.studio.collection_dsh import latest_report
-
         plan = self.monitor.store.get_plan(project_id) or {}
         report = plan.get("last_report") or {}
-        snapshot = snapshot if snapshot is not None else latest_report(self.monitor.store, project_id)
         if snapshot is None:
             saved = plan.get('collection_report') or {}
             snapshot = saved if saved.get('job_id') == plan.get('round_id') else {}

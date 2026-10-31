@@ -3,8 +3,7 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { JobActivity, WorkIndicator, useVisiblePoll } from "../Operational";
 import { isCoverageNote, jobReason, unresolvedJobs } from "../workState";
-import { api, type Job, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
-import { RecoveryDialog } from "../RecoveryDialog";
+import { api, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
 import { Page } from "../motion";
 import PageHeader from "../PageHeader";
 import { ErrorNote, errorMessage, relTime, useAsync } from "../ui";
@@ -33,7 +32,6 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
   const [params] = useSearchParams();
   const [project, setProject] = useState(params.get("project") || "");
   const [filter, setFilter] = useState<Filter>("all");
-  const [waitingProject, setWaitingProject] = useState('');
   const { data, error, loading, reload } = useAsync<TaskBoard>(() => api.tasks(project || undefined), [project]);
   const busy = !!data && data.summary.running + data.summary.queued > 0;
   useVisiblePoll(reload, busy ? 4000 : 30000);
@@ -49,7 +47,7 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
   const stuckDocs = useMemo(() => docs.filter(docFailed), [docs]);
   const finished = useMemo(() => jobs.filter((j) => (j.status === "done" || j.status === "failed")
     && (filter === "all" || (filter === "partial" ? j.runtime?.state === "partial" : j.status === filter
-      && j.runtime?.state !== "partial" && (filter !== 'done' || j.runtime?.state !== 'needs_confirmation')))), [jobs, filter]);
+      && j.runtime?.state !== "partial"))), [jobs, filter]);
   const doneDocs = docs.filter(docDone);
   const working = active.length + activeDocs.length;
 
@@ -62,7 +60,6 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
       {data && data.worker !== "running" && <div className="note note-error">后台任务未运行：排队中的任务不会开始。重启应用后会继续。</div>}
       {data && !data.model_ready && <div className="note">尚未连接 AI 模型：资料只会识别文字，不会进入 AI 吸收。<Link to="/settings">去设置 →</Link></div>}
       <ErrorNote error={error} />
-      {waitingProject && <RecoveryDialog projectId={waitingProject} onClose={() => setWaitingProject('')} onQueued={reload} />}
       {loading && !data && <Skeleton lines={6} />}
       {data && <>
         {projects.length > 1 && <div className="filters">
@@ -84,9 +81,6 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
                 {j.status === "running" && j.stage && <span className="muted"> — {j.stage}</span>}</span>
               <span className="muted small num" title={j.runtime?.heartbeat_at ? `后台心跳：${j.runtime.heartbeat_at}` : undefined}>{j.runtime?.progress_at ? `进展 ${relTime(j.runtime.progress_at)}` : `加入于 ${relTime(j.created_at)}`}</span>
               <JobActivity job={j} stale={!!error} />
-              {j.runtime?.continuation_wait && <div className="muted small">
-                {jobReason(j)} <button className="btn btn-sm" onClick={() => setWaitingProject(j.project_id)}>查看先前请求</button>
-              </div>}
             </li>)}</ul>}
             {activeDocs.length > 0 && <ul className="doc-pipeline">{activeDocs.map((d) => <DocumentRow key={d.id} d={d} />)}</ul>}
           </>}
@@ -176,7 +170,6 @@ export function DocumentRow({ d }: { d: TaskDocument }) {
 export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [recovering, setRecovering] = useState(false);
   const [done, setDone] = useState("");
   const partial = j.runtime?.state === "partial";
   const fallback = { why: jobReason(j), todo: partial
@@ -190,7 +183,7 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
   };
   return <li className="fix-row" id={`task-${j.id}`}>
     <div className="fix-head">
-      <span className="tag tag-warn">{partial ? "部分完成" : j.runtime?.blocking_jobs?.length ? "本次未执行" : j.runtime?.state === "needs_confirmation" ? "结果待确认" : "未完成"}</span>
+      <span className="tag tag-warn">{partial ? "部分完成" : "未完成"}</span>
       <strong><Link to={`/projects/${j.project_id}`}>{j.project_name}</Link> · {j.label}</strong>
       <span className="muted small">{relTime(j.finished_at)}</span>
     </div>
@@ -199,17 +192,13 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
       <div><dt>怎么处理</dt><dd>{advice.todo}</dd></div>
     </dl>
     {done ? <p className="fix-done small">{done}</p> : <div className="fix-actions">
-      {advice.action === "recover" && <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => setRecovering(true)}>查看并重发</button>}
       {advice.action === "settings" && <Link className="btn btn-sm" to="/settings">去设置测试连接</Link>}
       {(advice.action === "rerun" || advice.action === "settings") && <button className={`btn btn-sm${advice.action === "rerun" ? " btn-primary" : ""}`} disabled={busy}
         onClick={() => act(() => api.refresh(j.project_id, j.kind), "已重新加入队列，可在上方“正在处理”里看到进度。")}>重新运行</button>}
-      {(partial || !!j.runtime?.blocking_jobs?.length) && <Link className="btn btn-sm" to={`/projects/${j.project_id}?tab=external`}>查看来源与结果</Link>}
-      {!!j.runtime?.blocking_jobs?.length && <button className="btn btn-sm" disabled={busy} onClick={() => setRecovering(true)}>查看先前请求</button>}
+      {partial && <Link className="btn btn-sm" to={`/projects/${j.project_id}?tab=external`}>查看来源与结果</Link>}
       {!j.dismissed && <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => act(() => api.dismissTask(j.id), "提醒已收起，任务结果未改变。")}>收起提醒</button>}
       {j.error && <details className="fix-raw"><summary>原始信息</summary><code>{errorMessage(j.error)}</code></details>}
     </div>}
     <ErrorNote error={error} />
-    {recovering && <RecoveryDialog projectId={j.project_id} job={j as unknown as Job} onClose={() => setRecovering(false)}
-      onQueued={() => { setDone("已确认重发，任务重新排队。"); onChanged(); }} />}
   </li>;
 }

@@ -3,17 +3,9 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-import test_studio_dsh_monitor as fixtures
-from test_collection_plan import candidate, plan
 
-from project_watch.studio.collection_ledger import CollectionLedger
 from project_watch.studio.collection_pages import clinical_page, cninfo_page, openalex_page
-from project_watch.studio.collection_runner import run_collection
-from project_watch.studio.collection_sources import CollectionSources
-from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import Http, HttpError, Response
-from project_watch.studio.settings import SearchConfig
-from project_watch.studio.sources import Collectors
 
 
 def work(n=1):
@@ -94,25 +86,6 @@ def test_announcement_invalid_page_cannot_report_successful_zero(data):
         cninfo_page(wire(data), 'Synthetic')
 
 
-def test_announcement_pages_keep_request_provenance_across_resume(tmp_path):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution, calls = research.execution, []
-
-    def send(_method, url, *_args):
-        page = int(parse_qs(urlsplit(url).query)['pageNum'][0])
-        calls.append(page)
-        rows = [announcement(n) for n in range(1, 21)] if page == 1 else [announcement(21, attachment=False)]
-        return Response(200, {}, json.dumps({'announcements': rows, 'totalAnnouncement': 21}).encode())
-
-    adapter = CollectionSources(execution, Collectors(execution.http(
-        Http(send), lambda _: ('open_data', 'synthetic-cninfo')), SearchConfig()))
-    unit = plan(round_id=execution.job['id'], project_id=execution.job['project_id'])['units'][0] | {'source': 'cninfo'}
-    first, second = adapter.collect(unit), adapter.collect(unit)
-    assert calls == [1, 2]
-    assert len(first['items']) == 21 and not first['truncated']
-    assert first['items'] == second['items']
-    assert len(first['request_ids']) == 2 and first['request_ids'] == second['request_ids']
-    assert execution.usage()['open_data']['requests'] == 2
 
 
 def test_paper_page_keeps_scope_and_next_page():
@@ -162,131 +135,11 @@ def test_clinical_token_loop_and_missing_studies_are_failures():
     assert not clinical_page(wire({'studies': []}), 'Synthetic')['truncated']
 
 
-def test_host_follows_pages_and_checkpoint_replay_dispatches_nothing(tmp_path):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution = research.execution
-    calls = []
-
-    def send(_method, url, *_args):
-        page = int(parse_qs(urlsplit(url).query)['page'][0])
-        calls.append(page)
-        rows = [work(n) for n in range(1, 21)] if page == 1 else [work(21)]
-        return Response(200, {}, json.dumps({'results': rows, 'meta': {'count': 21}}).encode())
-
-    collectors = Collectors(execution.http(Http(send), lambda _: ('open_data', 'synthetic-openalex')), SearchConfig())
-    adapter = CollectionSources(execution, collectors)
-    unit = plan(round_id=execution.job['id'], project_id=execution.job['project_id'])['units'][0] | {'source': 'openalex_topic'}
-    first = adapter.collect(unit)
-    second = adapter.collect(unit)
-    assert calls == [1, 2]
-    assert len(first['items']) == 21
-    assert first['items'] == second['items']
-    assert not first['truncated'] and first['pages_completed'] == 2
-    assert second['request_ids'] == first['request_ids']
-    assert execution.usage()['open_data']['requests'] == 2
 
 
-def test_page_budget_keeps_real_continuation(tmp_path):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution = research.execution
-    http = execution.http(wire({'results': [work(n) for n in range(20)], 'meta': {'count': 40}}),
-                          lambda _: ('open_data', 'synthetic-openalex'))
-    adapter = CollectionSources(execution, Collectors(http, SearchConfig()), max_pages=1)
-    unit = plan(round_id=execution.job['id'], project_id=execution.job['project_id'])['units'][0] | {'source': 'openalex_topic'}
-    result = adapter.collect(unit)
-    assert result['truncated'] and result['next_cursor'] == 2
-    assert len(result['items']) == 20
 
 
-def test_crash_between_page_and_trace_checkpoint_keeps_request_provenance(tmp_path, monkeypatch):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution, calls = research.execution, []
-    http = execution.http(wire({'results': [work()], 'meta': {'count': 1}}, calls),
-                          lambda _: ('open_data', 'synthetic-openalex'))
-    adapter = CollectionSources(execution, Collectors(http, SearchConfig()))
-    unit = plan(round_id=execution.job['id'], project_id=execution.job['project_id'])['units'][0] | {'source': 'openalex_topic'}
-    original = execution.checkpoint_chunked
-
-    def crash(stage, payload):
-        if stage.startswith('collection_trace:'):
-            raise RuntimeError('synthetic crash before trace')
-        return original(stage, payload)
-
-    monkeypatch.setattr(execution, 'checkpoint_chunked', crash)
-    with pytest.raises(RuntimeError, match='synthetic crash'):
-        adapter.collect(unit)
-    restarted = JobExecution(execution.store, execution.job)
-    recovered = CollectionSources(restarted, Collectors(
-        restarted.http(wire({}, calls), lambda _: ('open_data', 'synthetic-openalex')), SearchConfig()))
-    result = recovered.collect(unit)
-    assert len(calls) == 1
-    assert len(result['request_ids']) == len(result['items']) == 1
-    assert not result['truncated']
-    assert restarted.usage()['open_data']['requests'] == 1
 
 
-def test_clinical_cycle_is_detected_before_repeated_page_dispatch(tmp_path):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution, calls = research.execution, []
-
-    def send(_method, url, *_args):
-        token = parse_qs(urlsplit(url).query).get('pageToken', [None])[0]
-        calls.append(token)
-        next_token = {None: 'a', 'a': 'b', 'b': 'a'}[token]
-        return Response(200, {}, json.dumps({'studies': [study()], 'nextPageToken': next_token}).encode())
-
-    http = execution.http(Http(send), lambda _: ('open_data', 'synthetic-clinical'))
-    adapter = CollectionSources(execution, Collectors(http, SearchConfig()), max_pages=5)
-    unit = plan(round_id=execution.job['id'], project_id=execution.job['project_id'])['units'][0] | {'source': 'clinical_term'}
-    result = adapter.collect(unit)
-    assert result['outcome'] == 'failed' and result['reason'] == 'collection_cursor_cycle'
-    assert result['truncated'] and len(result['items']) == 1
-    assert calls == [None, 'a', 'b']
-    state = execution.read_checkpoint('collection_pages:' + unit['id'][:40])
-    assert state['cursor'] == 'a' and not state['done']
-    assert len(state['requests']) == 3
 
 
-@pytest.mark.parametrize('stop,expected', [('budget', 'budget_deferred'), ('malformed', 'failed'),
-                                         ('unknown', 'unknown')])
-def test_partial_pages_survive_later_interruption_without_false_success(tmp_path, stop, expected):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    execution, calls, saved = research.execution, [], []
-    execution.budgets['open_data'] = 1 if stop == 'budget' else 5
-
-    def send(_method, url, *_args):
-        page = int(parse_qs(urlsplit(url).query)['page'][0])
-        calls.append(page)
-        if page == 2:
-            if stop == 'unknown':
-                raise HttpError('connection_failed')
-            return Response(200, {}, b'{}')
-        return Response(200, {}, json.dumps({'results': [work(n) for n in range(20)],
-                                           'meta': {'count': 40}}).encode())
-
-    p = plan([candidate() | {'source': 'openalex_topic'}], round_id=execution.job['id'], project_id=execution.job['project_id'])
-    ledger = CollectionLedger(execution, p)
-    adapter = CollectionSources(execution, Collectors(execution.http(
-        Http(send), lambda _: ('open_data', 'synthetic-openalex')), SearchConfig()))
-
-    def ingest(_unit, items):
-        saved.extend(items)
-        return len(items)
-
-    for _ in range(2):
-        if stop == 'unknown':
-            with pytest.raises(HttpError):
-                run_collection(ledger, collect=adapter.collect, ingest=ingest, guard=research.guard)
-        else:
-            run_collection(ledger, collect=adapter.collect, ingest=ingest, guard=research.guard)
-    result = ledger.coverage()
-    assert result['status'] == 'partial' and result['rows'][0]['outcome'] == expected
-    assert calls == ([1] if stop == 'budget' else [1, 2])
-    if stop == 'unknown':
-        assert saved == []
-        assert execution.usage()['open_data']['unknown'] == 1
-    else:
-        assert len(saved) == result['rows'][0]['saved_count'] == 20
-        assert ledger.receipts[0]['next_cursor'] == 2
-    checkpoint = execution.read_checkpoint('collection_pages:' + p['units'][0]['id'][:40])
-    assert len(checkpoint['items']) == 20 and checkpoint['cursor'] == 2

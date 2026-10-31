@@ -1,4 +1,4 @@
-"""Bounded, evidence-bound review before a DSH judgment becomes visible.
+"""Bounded, evidence-bound review before an analysis judgment becomes visible.
 
 The model evaluates meaning; Python enforces coverage, provenance and admission.
 No company, industry or phrase-specific acceptance rules live here.
@@ -6,9 +6,6 @@ No company, industry or phrase-specific acceptance rules live here.
 from __future__ import annotations
 
 from copy import deepcopy
-
-from project_watch.studio.dsh_bootstrap import ToolValidationError, digest
-from project_watch.studio.http import HttpError
 
 VERSION = 'judgment-evidence-review-v6'
 MAX_DRAFTS = 2
@@ -244,79 +241,3 @@ def validate_review(value, payload):
     if seen != set(payload['fields']):
         raise ValueError('review_field_coverage_invalid')
     return issues
-
-
-def admission_plan(research, analysis, ctx):
-    payload = review_input(analysis, ctx)
-    batches = review_batches(payload)
-    binding = digest([VERSION, SYSTEM, CONSISTENCY_SYSTEM, SPAN_GUIDANCE, MAX_FIELDS, MAX_FIELD_CHARS,
-                      MAX_BATCHES, OUTPUT_TOKENS, research.binding, ctx['fingerprint'], payload])
-    key = 'dsh_semantic_' + binding[:40]
-    return payload, batches, binding, key
-
-
-def verify(research, analysis, ctx):
-    payload, batches, binding, key = admission_plan(research, analysis, ctx)
-    saved = research.execution.read_checkpoint(key)
-    if saved is not None and saved.get('binding') != binding:
-        raise ValueError('review_binding_mismatch')
-    if saved is None:
-        reviewer = getattr(research, 'judgment_reviewer', None)
-        if reviewer is None:
-            raise HttpError('judgment_review_unavailable')
-        attempts = research.execution.read_checkpoint('dsh_semantic_drafts') or []
-        if binding not in attempts:
-            research.execution.checkpoint('dsh_semantic_drafts', [*attempts, binding])
-        checks, issues, all_issues = [], [], []
-        for index, batch in enumerate(batches):
-            research.guard()
-            if research.frozen() != ctx:
-                raise ValueError('public inputs changed during judgment review')
-            batch_key = key + ':' + str(index)
-            receipt = research.execution.read_checkpoint(batch_key)
-            if receipt is not None and receipt.get('binding') != binding:
-                raise ValueError('review_binding_mismatch')
-            if receipt is None:
-                research.execution.checkpoint('dsh_review_progress', {
-                    'binding': binding, 'batch': index + 1, 'total': len(batches),
-                    'phase': batch['phase'], 'fields': len(batch['fields']), 'status': 'running'})
-                # Each request uses the normal journal/unknown gate, with no retry.
-                response = reviewer(batch)
-                try:
-                    issues = (validate_consistency(response, batch) if batch['phase'] == 'consistency'
-                              else validate_review(response, batch))
-                except (ValueError, TypeError) as exc:
-                    research.execution.checkpoint(key, {'passed': False, 'invalid': str(exc), 'binding': binding})
-                    research.hold('judgment_review_invalid')
-                    raise HttpError('judgment_review_invalid') from exc
-                receipt = {'binding': binding, 'issues': issues, 'response': response}
-                research.execution.checkpoint_chunked(batch_key, receipt)
-            issues = receipt['issues']
-            if issues:
-                all_issues.extend(issues)
-                if not getattr(research, 'complete_review_feedback', False):
-                    break
-            if batch['phase'] == 'fields':
-                checks.extend(receipt['response']['checks'])
-        issues = all_issues
-        if not issues:
-            # No partial plan or omitted/duplicate field may be admitted.
-            validate_review({'checks': checks}, payload)
-        saved = {'passed': not issues, 'binding': binding, 'version': VERSION,
-                 'issues': issues, 'checks': checks, 'batches': len(batches)}
-        research.execution.checkpoint_chunked(key, saved)
-        research.execution.checkpoint('dsh_review_progress', {
-            'binding': binding, 'batch': index + 1, 'total': len(batches),
-            'phase': batches[index]['phase'], 'status': 'passed' if not issues else 'rejected'})
-    if not saved.get('passed'):
-        if saved.get('invalid'):
-            research.hold('judgment_review_invalid')
-            raise HttpError('judgment_review_invalid')
-        raise ToolValidationError('judgment_evidence_review', saved['issues'], saved=False,
-                                  next_tool='pw_judge',
-                                  hint='按证据修正结论，或明确保留不确定性；不改写来源。')
-    # Recheck after the paid request and before saving against the frozen context.
-    research.guard()
-    if research.frozen() != ctx:
-        raise ValueError('public inputs changed during judgment review')
-    return {'version': VERSION, 'binding': binding, 'passed': True}

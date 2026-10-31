@@ -48,11 +48,9 @@ function judged(view: InsightView | null, q: Question): Judged | null {
   };
 }
 
-export function QuestionAnalysis({ detail, view, error, onStart, onSaved, goto }: {
-  detail: ProjectDetail; view: InsightView | null; error: unknown; onStart?: () => void; onSaved?: () => Promise<void>; goto: (tab: Tab) => void;
+export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
+  detail: ProjectDetail; view: InsightView | null; error: unknown; onStart?: () => void; goto: (tab: Tab) => void;
 }) {
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
   const analysis = view?.record?.analysis;
   const first = QUESTIONS.find((q) => judged(view, q))?.key ?? null;
   const [params, setParams] = useSearchParams();
@@ -68,7 +66,7 @@ export function QuestionAnalysis({ detail, view, error, onStart, onSaved, goto }
   const running = !!view?.job && ["queued", "running"].includes(view.job.status);
   const analysisJob = detail.jobs?.find(j => j.id === view?.job?.id);
   const analysisState = analysisJob ? jobWorkState(detail, analysisJob) : view?.job ? jobWorkState(detail, {
-    ...view.job, kind: "insight", stage: "", error: view.job.error || "", finished_at: null,
+    ...view.job, kind: "analyze", stage: "", error: view.job.error || "", finished_at: null,
   }) : "idle";
   const q = QUESTIONS.find((x) => x.key === active);
   const j = q ? judged(view, q) : null;
@@ -79,20 +77,6 @@ export function QuestionAnalysis({ detail, view, error, onStart, onSaved, goto }
   </section>;
   return (
     <section className="qa" aria-label="按问题看判断">
-      {view?.saved_analysis && <div className="op-local">
-        <span>已收录 {view.saved_analysis.materials} 份材料
-          {['queued', 'running'].includes(view.saved_analysis.status) ? ' · 分析进行中' :
-            view.saved_analysis.status === 'partial' ? ' · 本轮分析部分完成' :
-              view.saved_analysis.status === 'failed' ? ' · 本轮分析未完成，材料已保留' : ''}</span>
-        {onSaved && <button className="btn small" disabled={saving || !view.saved_analysis.can_analyze}
-          onClick={async () => {
-            if (saving) return;
-            setSaving(true); setSaveError('');
-            try { await onSaved(); } catch { setSaveError('暂未创建分析，请刷新任务状态后再试。已有结果保留。'); }
-            finally { setSaving(false); }
-          }}>{saving ? '正在提交…' : '用已保存材料重新分析'}</button>}
-        {saveError && <span role="alert">{saveError}</span>}
-      </div>}
       {(running || analysisState === "failed" || analysisState === "needs_confirmation") && <div className="op-local" role="status">
         <WorkIndicator state={analysisState} label={`综合判断 · ${analysisJob?.runtime?.label || WORK_LABEL[analysisState] || "状态待同步"}`} />
         {analysis && <span className="muted small">当前显示上次结果</span>}

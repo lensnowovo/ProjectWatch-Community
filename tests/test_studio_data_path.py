@@ -60,7 +60,7 @@ def test_prefilter_spares_body_reads_without_hiding_or_triaging_items(tmp_path):
 
 def test_prefilter_receipt_replays_same_job_without_a_second_model_call(tmp_path):
     pipeline, pid = setup(tmp_path)
-    pipeline.store.enqueue(pid, "external")
+    pipeline.store.enqueue(pid, "collect")
     job = pipeline.store.claim()
     pipeline._execution_state.current = JobExecution(pipeline.store, job)
     llm = Prefilter()

@@ -1,6 +1,7 @@
 import sqlite3
 
 import pytest
+from synthetic_providers import run_leased
 from test_studio_agent_instance import make_service
 
 
@@ -19,10 +20,9 @@ def test_expired_lease_blocks_legacy_plan_and_site_writes(tmp_path):
                       lambda: pipeline.health.record(project.id, {'company': {'checked': 1, 'added': 0, 'errors': []}})):
             with pytest.raises(RuntimeError, match='lease'):
                 write()
-    pipeline.run_external = stale
-    pipeline.store.enqueue(project.id, 'external')
-    with pytest.raises(RuntimeError, match='lease'):
-        pipeline.run(pipeline.store.claim())
+    pipeline.store.enqueue(project.id, 'public_profile')
+    job = pipeline.store.claim()
+    run_leased(pipeline, job, lambda: stale(job))  # every late write above is refused
     assert pipeline.store.get_plan(project.id) is None and monitor.pages(project.id) == []
     assert pipeline.health.read(project.id)['sources'] == []
     # User actions after a failed dispatch must not inherit its expired guard.
@@ -33,7 +33,7 @@ def test_expired_lease_blocks_legacy_plan_and_site_writes(tmp_path):
 def test_scope_fences_cursor_script_commit_and_preserves_ordinary_reads(tmp_path):
     from project_watch.studio.execution import JobExecution
     service, pid = make_service(tmp_path / 'fences.sqlite3')
-    service.store.enqueue(pid, 'external')
+    service.store.enqueue(pid, 'public_profile')
     execution = JobExecution(service.store, service.store.claim())
     with service.store.write_scope(execution._guard):
         db = service.store._connect()
@@ -104,7 +104,7 @@ def test_site_reads_replay_and_unreadable_robots_never_dispatch_page(tmp_path):
 
     service, pid = make_service(tmp_path / 'site-replay.sqlite3')
     monitor = MonitorStore(service.store)
-    service.store.enqueue(pid, 'external')
+    service.store.enqueue(pid, 'public_profile')
     execution = JobExecution(service.store, service.store.claim())
     transport = Site({'https://synthetic.example/': HOME})
     with service.store.write_scope(execution._guard):
@@ -119,7 +119,7 @@ def test_site_reads_replay_and_unreadable_robots_never_dispatch_page(tmp_path):
 
     service2, pid2 = make_service(tmp_path / 'site-unknown.sqlite3')
     monitor2 = MonitorStore(service2.store)
-    service2.store.enqueue(pid2, 'external')
+    service2.store.enqueue(pid2, 'public_profile')
     execution2 = JobExecution(service2.store, service2.store.claim())
     calls = []
     class Failed:

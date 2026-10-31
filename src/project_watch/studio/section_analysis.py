@@ -3,11 +3,10 @@ import json
 from contextlib import closing
 from copy import deepcopy
 
-from project_watch.studio import dsh_judgment_review as review
+from project_watch.studio import judgment_review as review
 from project_watch.studio import material_snapshot
-from project_watch.studio.dsh_bootstrap import digest
 from project_watch.studio.llm import ModelError
-from project_watch.studio.store import now
+from project_watch.studio.store import digest, now
 
 SECTIONS = ('position', 'technology', 'industry', 'operations', 'chain')
 PREFIX = 'snapshot-section:'

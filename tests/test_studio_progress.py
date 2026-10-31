@@ -22,7 +22,7 @@ def seed(app, name='Synthetic Monitor'):
 
 
 def complete(store, pid, report=None):
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     job = store.claim()
     store.put_plan(pid, {'last_report': report or {'company': {'checked': 1, 'added': 0, 'errors': []}}})
     store.touch(pid, 'last_external_at')
@@ -32,7 +32,7 @@ def complete(store, pid, report=None):
 @pytest.mark.parametrize('status', ['queued', 'running', 'failed'])
 def test_unfinished_external_is_not_quiet(app, status):
     store, pid = seed(app)
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     if status != 'queued':
         job = store.claim()
         if status == 'failed':
@@ -102,7 +102,7 @@ def test_failed_refresh_retains_saved_events_and_is_visible_in_digest(app):
     complete(store, pid)
     store.create_event(pid, {'title': 'Synthetic financing', 'category': 'company', 'importance': 'major',
                             'event_at': datetime.now(UTC).isoformat()}, [])
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     job = store.claim()
     store.finish(job['id'], error='synthetic failed refresh', lease_token=job['lease_token'])
     data = digest.build_digest(store)
@@ -113,7 +113,7 @@ def test_failed_refresh_retains_saved_events_and_is_visible_in_digest(app):
 
 def test_unrelated_done_job_never_masks_external_failure_and_reads_do_not_schedule(app, monkeypatch):
     store, pid = seed(app)
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
     job = store.claim()
     store.finish(job['id'], error='synthetic failed refresh', lease_token=job['lease_token'])
     store.enqueue(pid, 'details')
@@ -140,7 +140,7 @@ def test_round_number_counts_external_rounds_not_other_work(app):
     complete(store, pid)
     assert progress.read(store, pid)['round'] == 2
     # A follow-up continues its round; asking for another external round meanwhile joins it.
-    store.enqueue(pid, 'external_followup')
-    store.enqueue(pid, 'external')
+    store.enqueue(pid, 'collect')
+    store.enqueue(pid, 'collect')
     assert progress.read(store, pid)['round'] == 2
     assert progress.read(store, 'missing-project')['round'] == 0

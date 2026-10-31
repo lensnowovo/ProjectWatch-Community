@@ -26,17 +26,8 @@ def desktop_home() -> Path:
 
 
 def configure_runtime(home: Path, bundle: Path | bool | None = True) -> str:
-    """Load the executor choice before starting any workers.
-
-    Installed builds use their own DSH and Node.js by default; ``desktop-runtime.json``
-    can turn DSH off or point at a custom runtime. A missing or invalid runtime
-    starts the app as ``unavailable`` (research held, reason shown), never the
-    legacy collector. No global environment changes, downloads or credentials.
-    """
-    from project_watch.studio import public_executor
-
-    root = public_executor.bundle_root() if bundle is True else (bundle or None)
-    return public_executor.apply(public_executor.resolve(home, root))
+    """Public research always runs in the built-in pipeline; no external executor is selected."""
+    return 'pipeline'
 
 
 def local_request(url: str, body: dict | None = None) -> dict:

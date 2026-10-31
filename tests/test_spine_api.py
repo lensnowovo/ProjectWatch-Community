@@ -22,7 +22,7 @@ def test_round_progress_reanalysis_and_assumptions(env):  # noqa: F811
     assert client.post(f'/api/studio/projects/{pid}/reanalyze', json={'accept_duplicate_cost': True}).status_code == 409
     work(pipeline, 'report')
     with pipeline.store._connect() as db:
-        db.execute("UPDATE studio_jobs SET status='done' WHERE kind='brief' AND project_id=?", (pid,))
+        db.execute("UPDATE studio_jobs SET status='done' WHERE kind IN ('brief','landscape') AND project_id=?", (pid,))
     accepted = client.post(f'/api/studio/projects/{pid}/reanalyze', json={'accept_duplicate_cost': True})
     assert accepted.status_code == 202 and accepted.json()['input_version'].startswith('redo:')
     # Assumptions: listed, owner-added, edited, retired.

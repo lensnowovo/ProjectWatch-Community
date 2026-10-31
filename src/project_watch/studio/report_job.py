@@ -27,4 +27,7 @@ def run(pipeline, execution):
     execution.checkpoint(RESULT, result)
     if pipeline.settings_store.load().model.ready:
         pipeline.store.enqueue(pid, 'brief', input_version='report:' + execution.job['id'])
+        # Competition and industry views follow notable competitor, industry or policy news.
+        if pipeline.landscape_stale(pid):
+            pipeline.store.enqueue(pid, 'landscape', automatic=True)
     return result

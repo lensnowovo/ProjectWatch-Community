@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -179,10 +180,16 @@ CREATE TABLE IF NOT EXISTS studio_usage (
 );
 """
 
-JOB_KINDS = ("internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight", "scope", "assessment", "collect", "analyze", "report")
+# Retired kinds (external, external_followup, insight, scope, assessment) remain in history only.
+JOB_KINDS = ("internal", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "collect", "analyze", "report")
 LANDSCAPE_DAYS = 7  # competition / industry pages are regenerated weekly
 IMPORTANCE = ("major", "notable", "routine")
 ITEM_STATUS = ("new", "read", "starred", "dismissed")
+
+
+def digest(value) -> str:
+    """Stable hash of a JSON-serialisable value (checkpoint and snapshot bindings)."""
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
 def now() -> str:
@@ -190,10 +197,6 @@ def now() -> str:
 
 
 UNREAD_DAYS = 14
-
-
-class FollowupSuperseded(ValueError):
-    """The failed follow-up's inputs changed; recover with a fresh round, never by resuming it."""
 
 
 class StudioStore:
@@ -267,15 +270,7 @@ class StudioStore:
             from project_watch.studio.execution import SCHEMA as EXECUTION_SCHEMA
 
             db.executescript(EXECUTION_SCHEMA)
-            from project_watch.studio.acceptance_batch import SCHEMA as ACCEPTANCE_SCHEMA
-
-            db.executescript(ACCEPTANCE_SCHEMA)
-            from project_watch.studio.research_budget import SCHEMA as RESEARCH_BUDGET_SCHEMA
-
-            db.executescript(RESEARCH_BUDGET_SCHEMA)
-            from project_watch.studio.recovery import SCHEMA as RECOVERY_SCHEMA
-
-            db.executescript(RECOVERY_SCHEMA)
+            # Tables of retired admission/recovery modules stay in existing databases as history.
             # Additive accounting migration; old daily aggregates stay labelled
             # legacy rather than being counted twice with their old HTTP rows.
             call_columns = {r[1] for r in db.execute('PRAGMA table_info(studio_job_calls)')}
@@ -471,7 +466,8 @@ class StudioStore:
                     AND recovered.kind=j.kind AND recovered.status='done' AND recovered.rowid>j.rowid)
                 ORDER BY j.kind""", (project_id,)).fetchall()
             labels = {"internal": "资料分析未完成", "external": "外部更新未完成", "external_followup": "外部信息补全未完成", "brief": "项目解读未完成",
-                      "public_profile": "公开档案更新未完成", "landscape": "竞争与行业分析未完成", "insight": "深度分析未完成"}
+                      "public_profile": "公开档案更新未完成", "landscape": "竞争与行业分析未完成", "insight": "深度分析未完成",
+                      "collect": "公开信息收录未完成", "analyze": "本轮分析未完成", "report": "本轮动态整理未完成"}
             alerts.extend(labels.get(r[0], "项目更新未完成") for r in failed)
             # The optional signals store may not have been initialized yet. GET
             # must not create its tables or run a model to calculate this marker.
@@ -565,14 +561,8 @@ class StudioStore:
                 WHERE consent_at IS NOT NULL AND status='active'
                 AND NOT EXISTS (SELECT 1 FROM studio_public_profile p WHERE p.project_id=s.project_id)
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs j WHERE j.project_id=s.project_id
-                    AND (j.kind='public_profile' OR (j.kind IN ('external','external_followup')
-                        AND (j.status IN ('queued','running') OR (j.status='failed' AND j.retry_after>?
-                            AND NOT EXISTS (SELECT 1 FROM studio_acceptance_jobs a
-                                JOIN studio_acceptance_projects ap ON ap.project_id=a.project_id
-                                JOIN studio_acceptance_releases ar ON ar.batch_id=ap.batch_id WHERE a.job_id=j.id)
-                            AND NOT EXISTS (SELECT 1 FROM studio_jobs recovered
-                                WHERE recovered.project_id=j.project_id AND recovered.kind=j.kind
-                                AND recovered.status='done' AND recovered.rowid>j.rowid))))))""", (now(),)).fetchall()
+                    AND (j.kind='public_profile' OR (j.kind IN ('collect','analyze','report')
+                        AND j.status IN ('queued','running'))))""").fetchall()
         return [r[0] for r in rows]
 
     def due_external_projects(self, hours: int) -> list[str]:
@@ -583,16 +573,8 @@ class StudioStore:
                 WHERE consent_at IS NOT NULL AND status='active'
                 AND (last_external_at IS NULL OR last_external_at < ?)
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id
-                    AND (q.kind='external' AND q.status IN ('queued','running')
-                         OR q.kind='external_followup' AND (q.status IN ('queued','running')
-                             OR (q.status='failed' AND q.retry_after>?
-                                 AND NOT EXISTS (SELECT 1 FROM studio_acceptance_jobs a
-                                     JOIN studio_acceptance_projects ap ON ap.project_id=a.project_id
-                                     JOIN studio_acceptance_releases ar ON ar.batch_id=ap.batch_id WHERE a.job_id=q.id)
-                                 AND NOT EXISTS (SELECT 1 FROM studio_jobs recovered
-                                     WHERE recovered.project_id=q.project_id AND recovered.kind=q.kind
-                                     AND recovered.status='done' AND recovered.rowid>q.rowid)))))""",
-                (cutoff, now())).fetchall()
+                    AND q.kind IN ('collect','analyze','report') AND q.status IN ('queued','running'))""",
+                (cutoff,)).fetchall()
         return [r[0] for r in rows]
 
     def due_landscape_projects(self, days: int = LANDSCAPE_DAYS) -> list[str]:
@@ -607,7 +589,7 @@ class StudioStore:
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id AND q.kind='landscape'
                     AND (q.status IN ('queued','running') OR (q.status='failed' AND q.created_at >= ?)))
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id
-                    AND q.kind IN ('external','external_followup') AND q.status IN ('queued','running'))""",
+                    AND q.kind IN ('collect','analyze','report') AND q.status IN ('queued','running'))""",
                 (cutoff, retry)).fetchall()
         return [r[0] for r in rows]
 
@@ -1114,12 +1096,9 @@ class StudioStore:
             if row is None:
                 raise KeyError(event_id)
             from project_watch.studio.event_membership import after_attach, before_attach
-            from project_watch.studio.material_ownership import project_guard
 
-            if execution:
-                if execution.job['project_id'] != row['project_id']:
-                    raise ValueError('event is not in job project')
-                project_guard(db, row['project_id'], execution.job['id'])
+            if execution and execution.job['project_id'] != row['project_id']:
+                raise ValueError('event is not in job project')
             saved = before_attach(db, row['project_id'], event_id, item_ids, split_event)
             upgraded = rank.get(importance, 2) < rank.get(row["importance"], 2)
             # A more important report upgrades the event and re-surfaces it as unread.
@@ -1227,7 +1206,7 @@ class StudioStore:
             record(db, project_id, event_id)
 
     # ---------- jobs ----------
-    def enqueue(self, project_id: str, kind: str, *, automatic: bool = False, input_version: str = "", db=None, parent_job_id=None) -> dict:
+    def enqueue(self, project_id: str, kind: str, *, automatic: bool = False, input_version: str = "", db=None) -> dict:
         if kind not in JOB_KINDS or len(input_version) > 100:
             raise ValueError("invalid job kind")
         own_connection = db is None
@@ -1237,138 +1216,33 @@ class StudioStore:
             mode = db.execute('SELECT execution_mode FROM studio_projects WHERE project_id=?', (project_id,)).fetchone()
             if mode and mode[0] == 'agent':
                 return {'id': None, 'project_id': project_id, 'kind': kind, 'status': 'agent_required'}
-            if kind == 'external':
-                continuation = db.execute("SELECT * FROM studio_jobs WHERE project_id=? "
-                    "AND kind='external_followup' AND status IN ('queued','running') "
-                    "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
-                if continuation:
-                    if parent_job_id and continuation['kind'] == kind and continuation['input_version'] == input_version:
-                        from project_watch.studio.acceptance_batch import inherit
-
-                        inherit(db, continuation['id'], parent_job_id, reused=True)
-                    return dict(continuation)
             existing = db.execute(
                 "SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1",
                 (project_id, kind)).fetchone()
             if existing:
-                if parent_job_id and existing['input_version'] == input_version:
-                    from project_watch.studio.acceptance_batch import inherit
-
-                    inherit(db, existing['id'], parent_job_id, reused=True)
                 return dict(existing)
             if automatic:
+                # An automatic job that failed on the same input waits for its retry time
+                # (or for the owner) instead of spending again in a loop.
                 held = db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status='failed' "
                                   "AND retry_after>? AND (?='' OR input_version=?) ORDER BY created_at DESC LIMIT 1",
                                   (project_id, kind, now(), input_version, input_version)).fetchone()
-                released = held and db.execute('SELECT 1 FROM studio_acceptance_jobs a '
-                    'JOIN studio_acceptance_projects p ON p.project_id=a.project_id '
-                    'JOIN studio_acceptance_releases r ON r.batch_id=p.batch_id WHERE a.job_id=?', (held['id'],)).fetchone()
-                # A safely ended batch is retained history, not the retry target
-                # for a new independent periodic round. Explicit children still
-                # go through their original parent's closed fence below.
-                if held and not released:
-                    if parent_job_id and held['input_version'] == input_version:
-                        from project_watch.studio.acceptance_batch import inherit
-
-                        inherit(db, held['id'], parent_job_id, reused=True)
+                if held:
                     return dict(held)
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id, project_id, kind, status, created_at,input_version) "
                        "VALUES (?,?,?,'queued',?,?)", (job_id, project_id, kind, now(), input_version))
-            if parent_job_id:
-                from project_watch.studio.acceptance_batch import inherit
-
-                inherit(db, job_id, parent_job_id)
-            if kind in ('external', 'external_followup'):
-                # Persist intent with admission, not by guessing from a later
-                # empty input_version. Reusing an active job above never edits
-                # its frozen mode or turns a scheduled job into manual work.
-                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
-                           (job_id, 'collection_request_v1', json.dumps(dict(
-                               schema_version=1, mode='incremental' if automatic else 'refresh',
-                               origin='scheduler' if automatic else 'owner'))))
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
-    def queue_external_followup(self, job: dict, data: dict) -> dict:
-        """Atomically hand off persisted input and the brief before releasing the first lease."""
-        encoded = json.dumps(data)
-        if len(encoded) > 1_000_000:
-            raise ValueError('followup input exceeds bounds')
-        with closing(self._connect()) as db, db:
-            db.execute('BEGIN IMMEDIATE')
-            parent = db.execute("SELECT * FROM studio_jobs WHERE id=? AND project_id=? AND kind='external'",
-                                (job['id'], job['project_id'])).fetchone()
-            if (not parent or parent['status'] != 'running' or parent['lease_until'] <= now()
-                    or parent['lease_token'] != job.get('lease_token')):
-                raise RuntimeError('job lease expired or replaced')
-            saved = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='external_first_ready'",
-                               (job['id'],)).fetchone()
-            if saved:
-                child_id = json.loads(saved[0])['followup_id']
-                return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (child_id,)).fetchone())
-            # Both inserts and their receipts commit together. A crash cannot leave
-            # an orphan child with no input, or a committed handoff with no brief.
-            active = db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND kind='external_followup' "
-                                "AND status IN ('queued','running')", (job['project_id'],)).fetchone()
-            if active:
-                raise ValueError('外部信息已有补全任务')
-            brief = db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='brief' "
-                               "AND status IN ('queued','running')", (job['project_id'],)).fetchone()
-            if not brief:
-                brief_id = uuid.uuid4().hex
-                db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at) VALUES (?,?,'brief','queued',?)",
-                           (brief_id, job['project_id'], now()))
-            else:
-                brief_id = brief['id']
-            child_id = uuid.uuid4().hex
-            db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at,input_version) "
-                       "VALUES (?,?,'external_followup','queued',?,?)", (child_id, job['project_id'], now(), job['id']))
-            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)', (child_id, 'external_followup_input', encoded))
-            from project_watch.studio.acceptance_batch import inherit
-
-            inherit(db, brief_id, job['id'], reused=bool(brief))
-            inherit(db, child_id, job['id'])
-            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
-                       (job['id'], 'external_first_ready', json.dumps({'followup_id': child_id})))
-            return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (child_id,)).fetchone())
-
-    def retry_external_followup(self, project_id: str) -> dict:
-        """Explicitly resume the same known-outcome child and its saved call receipts."""
-        from project_watch.studio.recovery import UNRESOLVED
-
-        with closing(self._connect()) as db, db:
-            db.execute('BEGIN IMMEDIATE')
-            job = db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind='external_followup' "
-                             "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
-            if not job:
-                raise ValueError('没有可继续的补全任务，请重新更新项目')
-            if job['status'] in ('queued', 'running'):
-                return dict(job)
-            if job['status'] != 'failed':
-                raise ValueError('补全已完成，请重新更新项目')
-            unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED}",
-                                 (job['id'],)).fetchone()
-            if unknown:
-                raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
-            if job['retry_after'] == '9999-12-31':
-                if '监控依据已变化' in (job['error'] or ''):
-                    raise FollowupSuperseded('监控依据已变化，请按最新信息重新更新项目')
-                raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
-            db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
-                       "lease_token='',lease_until=NULL WHERE id=?", (job['id'],))
-            return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (job['id'],)).fetchone())
-
     def claim(self) -> dict | None:
-        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
-
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             expired = db.execute("SELECT * FROM studio_jobs WHERE status='running' AND (lease_until IS NULL OR lease_until<=?)", (now(),)).fetchall()
             for old in expired:
-                uncertain = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (old["id"],)).fetchone()
-                unsafe = not old["lease_token"] or uncertain or old["attempts"] >= 3
-                if unsafe:
-                    db.execute("UPDATE studio_jobs SET status='failed',error='interrupted: request outcome uncertain or recovery limit',"
+                # An interrupted job runs again on its saved checkpoints. Its requests
+                # still marked started are not resent (dispatch.check), only accounted.
+                if not old["lease_token"] or old["attempts"] >= 3:
+                    db.execute("UPDATE studio_jobs SET status='failed',error='interrupted: attempt limit',"
                                "finished_at=?,retry_after=?,lease_token='' WHERE id=?", (now(), "9999-12-31", old["id"]))
                 else:
                     db.execute("UPDATE studio_jobs SET status='queued',lease_token='',lease_until=NULL WHERE id=?", (old["id"],))
@@ -1377,56 +1251,17 @@ class StudioStore:
             # and is updated under the same lock as the lease claim.
             burst = db.execute("SELECT value FROM studio_state WHERE key='queue_brief_burst'").fetchone()
             prefer_brief = int(burst[0] if burst else 0) < 2
+            # Retired kinds are archived at startup and never claimed; internal
+            # documents keep being read while public monitoring is paused.
+            marks = ','.join('?' * len(JOB_KINDS))
             row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
-                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief','scope','assessment','collect','analyze','report')
-                    OR COALESCE(p.status,'active')='active')
-                AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints wait
-                     WHERE wait.job_id=j.id AND wait.stage='legacy_dispatch_wait') OR NOT EXISTS (
-                     SELECT 1 FROM studio_job_calls c JOIN studio_jobs owner ON owner.id=c.job_id
-                     WHERE owner.project_id=j.project_id AND (({UNRESOLVED}) OR ({_RECEIVED_MODEL_FAILURE}))))
-                AND (j.kind!='external_followup' OR EXISTS (SELECT 1 FROM studio_jobs parent
-                     WHERE parent.id=j.input_version AND parent.project_id=j.project_id AND parent.kind='external' AND parent.status='done')
-                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints link JOIN studio_jobs parent
-                       ON parent.id=json_extract(link.data,'$.job_id')
-                       JOIN studio_call_recoveries grant ON grant.job_id=parent.id
-                         AND grant.previous_key=json_extract(link.data,'$.previous_key')
-                       WHERE link.job_id=j.id AND link.stage='recovery_origin' AND parent.project_id=j.project_id
-                         AND parent.kind IN ('external','external_followup') AND parent.status='done'
-                         AND j.input_version='recovery:'||parent.id)
-                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints handoff JOIN studio_jobs parent
-                       ON parent.id=json_extract(handoff.data,'$.origin_job_id')
-                       JOIN studio_job_checkpoints successor ON successor.job_id=parent.id
-                         AND successor.stage='update_handoff_successor_v1'
-                       WHERE handoff.job_id=j.id AND handoff.stage='update_handoff_v1'
-                         AND parent.project_id=j.project_id AND parent.kind IN ('external','external_followup')
-                         AND parent.status IN ('done','failed')
-                         AND json_extract(successor.data,'$.job_id')=j.id
-                         AND j.input_version='update-handoff:'||parent.id))
-                AND (j.kind!='external' OR NOT EXISTS (SELECT 1 FROM studio_jobs material
-                     WHERE material.project_id=j.project_id AND material.kind='internal' AND material.status IN ('queued','running')))
-                AND (j.kind!='insight' OR NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c
-                     WHERE c.job_id=j.id AND c.stage='event_insight_input_v1') OR EXISTS (
-                     SELECT 1 FROM studio_job_checkpoints c JOIN studio_jobs parent
-                       ON parent.id=COALESCE(json_extract(c.data,'$.predecessor_job_id'),json_extract(c.data,'$.origin_job_id'))
-                     WHERE c.job_id=j.id AND c.stage='event_insight_input_v1' AND parent.project_id=j.project_id
-                       AND (parent.status IN ('done','failed') OR (parent.id=j.id
-                         AND json_extract(c.data,'$.budget_basis')='explicit_new_analysis_round'))))
-                AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c WHERE c.job_id=j.id AND c.stage='public_stage_input_v1')
-                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints c LEFT JOIN studio_jobs parent
-                       ON parent.id=json_extract(c.data,'$.predecessor_job_id')
-                     WHERE c.job_id=j.id AND c.stage='public_stage_input_v1' AND
-                       ((parent.project_id=j.project_id AND parent.status IN ('done','failed'))
-                        OR (json_extract(c.data,'$.predecessor_job_id') IS NULL
-                            AND json_extract(c.data,'$.budget_basis')='explicit_periodic_scope_round'))))
+                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
+                AND (j.kind='internal' OR COALESCE(p.status,'active')='active')
                 ORDER BY CASE WHEN ? AND j.kind='brief' THEN 0 ELSE 1 END,
-                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (prefer_brief,)).fetchone()
+                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (*JOB_KINDS, prefer_brief)).fetchone()
             if not row:
                 return None
-            # Admission above proved the project hold is clear. End this wait
-            # before dispatch: a later unknown needs a fresh per-request consent,
-            # and must not be trapped behind its own obsolete waiting marker.
-            db.execute("DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage='legacy_dispatch_wait'", (row['id'],))
             next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and row['kind'] == 'brief' else 0
             db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (str(next_burst),))
@@ -1460,41 +1295,24 @@ class StudioStore:
                 "lease_token='',lease_until=NULL WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
                 (job['id'], job['lease_token'], now())).rowcount)
 
-    def defer_legacy_batches(self, job: dict) -> bool:
-        """Park only a recovered frozen extractor; retain its journal and budget.
-
-        Claim skips this same job while any project request is unresolved. A
-        different task's explicit recovery can therefore run without a busy loop.
-        """
-        from project_watch.studio.recovery import legacy_recovery_completed, project_request_holds
-
-        with closing(self._connect()) as db, db:
-            db.execute('BEGIN IMMEDIATE')
-            if not legacy_recovery_completed(db, job) or any(
-                    row['job_id'] == job['id'] for row in project_request_holds(db, job['project_id'])):
-                raise ValueError('request_outcome_unknown')
-            changed = db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
-                "stage='后续批次未发送，等待先前请求处理',lease_token='',lease_until=NULL,queue_at=?,"
-                "attempts=MAX(0,attempts-1) WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
-                (now(), job['id'], job['lease_token'], now())).rowcount
-            if changed:
-                db.execute("INSERT INTO studio_job_checkpoints VALUES (?,'legacy_dispatch_wait',?) "
-                           "ON CONFLICT(job_id,stage) DO NOTHING", (job['id'], json.dumps({'version': 1})))
-            return bool(changed)
-
     def finish(self, job_id: str, *, error: str = "", lease_token: str | None = None) -> bool:
-        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
+        from project_watch.studio.dispatch import RECEIVED_FAILURE, UNRESOLVED
 
         with closing(self._connect()) as db, db:
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (job_id,)).fetchone()
-            if unknown and not error:
-                error = 'request_outcome_unknown: 已保留已有结果，等待确认未返回的请求'
-            model_failure = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job_id,)).fetchone()
-            if model_failure and not error:
-                error = 'model_http_5xx: 已保留已有结果，模型请求未取得可用回答，等待确认恢复'
+            round_job = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN ('collect','analyze','report')",
+                                   (job_id,)).fetchone()
+            if unknown and not error and not round_job:
+                # Round jobs finish with their unclear requests recorded per source/section.
+                error = 'request_outcome_unknown: 已保留已有结果，结果不明的请求不会自动重发'
+            model_failure = db.execute("SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND c.kind='model' "
+                                       f"AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE} LIMIT 1",
+                                       (job_id,)).fetchone()
             business = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN ('business','competition','details')", (job_id,)).fetchone()
-            held = bool(model_failure) or 'request_outcome_unknown' in error or '监控依据已变化' in error
-            retry_after = "9999-12-31" if error and (unknown or business or held) else (datetime.now(UTC) + timedelta(minutes=30)).isoformat() if error else None
+            # Uncertain or billing-ambiguous outcomes never turn into an automatic paid
+            # retry on the same input; definite failures retry after 30 minutes.
+            held = bool(unknown or model_failure or business) or 'request_outcome_unknown' in error
+            retry_after = ("9999-12-31" if held else (datetime.now(UTC) + timedelta(minutes=30)).isoformat()) if error else None
             return bool(db.execute("UPDATE studio_jobs SET status=?,error=?,finished_at=?,stage='',retry_after=?,lease_token='' "
                        "WHERE id=? AND (? IS NULL OR (status='running' AND lease_token=? AND lease_until>?))",
                        ("failed" if error else "done", error[:500], now(),

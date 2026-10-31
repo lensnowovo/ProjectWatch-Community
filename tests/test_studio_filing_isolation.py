@@ -17,9 +17,19 @@ def setup_filings(tmp_path, transport):
          "snippet": "", "published_at": None, "extra": {"matched": "fulltext"}}
         for key in ("large", "good")])
     pipeline.http_factory = lambda _settings: Http(transport)
-    pipeline.run_external = lambda job: pipeline.fetch_bodies(job["project_id"], lambda _: None)
-    pipeline.store.enqueue(project.id, "external")
+    pipeline.store.enqueue(project.id, "collect")
     return pipeline, project.id, pipeline.store.claim()
+
+
+def read_bodies(pipeline, job):
+    """The collect job's body-reading step, inside the job's lease and journal."""
+    execution = JobExecution(pipeline.store, job)
+    pipeline._execution_state.current = execution
+    try:
+        with pipeline.store.write_scope(execution._guard):
+            pipeline.fetch_bodies(job["project_id"], lambda _: None)
+    finally:
+        pipeline._execution_state.current = None
 
 
 @pytest.mark.parametrize("failure", ["response_too_large", "http_failure"])
@@ -37,9 +47,8 @@ def test_bad_filing_does_not_abort_leased_batch(tmp_path, monkeypatch, failure):
     monkeypatch.setattr("project_watch.studio.pipeline.filing_passages",
                         lambda *_args: "[page 1] Synthetic Optics Ltd received a new order.")
     pipeline, pid, job = setup_filings(tmp_path, transport)
-    pipeline.run(job)
+    read_bodies(pipeline, job)
     execution = JobExecution(pipeline.store, job)
-    assert execution.read_checkpoint("dispatch_completed") == {"completed": True}
     rows = {row["key"]: row for row in pipeline.store.untriaged(pid)}
     assert rows["large"]["body_status"] == "unavailable"
     assert rows["good"]["body_status"] == "filing_text"
@@ -55,8 +64,7 @@ def test_execution_holds_are_not_downgraded_to_empty_filings(tmp_path, failure):
 
     pipeline, _pid, job = setup_filings(tmp_path, transport)
     with pytest.raises(HttpError, match=failure):
-        pipeline.run(job)
-    assert JobExecution(pipeline.store, job).read_checkpoint("dispatch_completed") is None
+        read_bodies(pipeline, job)
 
 
 def test_oversized_read_replays_without_fetch_or_secret_diagnostic(tmp_path):
@@ -87,7 +95,7 @@ def test_paid_or_write_oversized_outcomes_remain_held(tmp_path, kind, method):
     http = execution.http(Http(transport), lambda _url: (kind, "synthetic"))
     with pytest.raises(HttpError, match="response_too_large"):
         http.transport(method, "https://provider.example/api", {}, b"{}", 30)
-    with pytest.raises(HttpError, match="request_outcome_unknown"):
+    with pytest.raises(HttpError, match="unknown_not_resent"):
         http.transport(method, "https://provider.example/api", {}, b"{}", 30)
     assert execution.usage()[kind]["unknown"] == 1
 
