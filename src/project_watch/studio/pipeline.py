@@ -129,7 +129,7 @@ _TRIAGE_SYSTEM = """你是投资机构的研究助理，负责筛选与被监控
 - 巨潮资讯公告：只有公告确实涉及该公司（投资/入股、合同订单、关联交易、客户或供应商披露、诉讼）才算相关，并说明是哪家上市公司、什么关系；仅字面同名或泛泛提及判为不相关。
 - 工商变更：股东/投资人、注册资本、法定代表人、名称、经营状态变更为 major；经营范围、地址、高管备案为 notable；其余 routine。
 - 国内临床登记/审评（药物临床试验登记平台、CDE、NMPA）：新登记、受理、获批、临床阶段推进为 major。
-输出 JSON：{"results":[{"id":"原样返回","relevant":true,"category":"company","relation":"","importance":"notable","summary":"","impact":""}]}"""
+输出 JSON：{"results":[{"id":"原样返回","relevant":true,"category":"company","relation":"","importance":"notable","summary":"","impact":"","source_title":"原标题","source_quote":"原文摘录"}]}"""
 
 _BODY_PREFILTER_SYSTEM = """为项目监控选择值得读取正文的公开材料，只判断相关性，不做重要性或投资判断。
 输入是标题和检索摘要，不是完整正文。明确同名不同主体、广告或无关内容可 read=false；
@@ -172,6 +172,43 @@ _EXTRACT_SYSTEM += "\n要点用简短句子；quote 最多120字符。同一指�
 _PROFILE_SYSTEM += "\n这是摘要而不是资料全集：每个 section 最多3条，highlights/risks 各最多4条，milestones 最多6条；每条最多100字。不同产品或事实尽量分句，各用自己的 refs；列举多个产品时必须引用覆盖所有产品的片段，不用单个产品的出处支撑整张目录。summary 最多300字，不要逐个列举所有指标。"
 _EXTRACT_SYSTEM += "\npoints、risks、milestones、financing 也保留支持该条的逐字 quote（最多120字），不把改写句当原文。"
 _PROFILE_SYSTEM += "\n每条 sections.points/highlights/risks/milestones 尽量保留输入提供的逐字 quote（最多120字）；没有对应原句时留空，不改写引号内内容。"
+
+
+def _canon(value) -> str:
+    """Comparison form for binding checks: same words, ignoring spacing, punctuation,
+    case, HTML entities/tags and full/half-width forms. Never used for display."""
+    import html
+    import unicodedata
+
+    text = re.sub(r"<[^>]+>", "", html.unescape(str(value or "")))
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text).casefold())
+
+
+def _title_bound(model_title, item_title) -> bool:
+    """The reply names this item: same title, or the model cut it short (>=85%)."""
+    reply, original = _canon(model_title), _canon(item_title)
+    if not reply or not original:
+        return False
+    # Patent search results store a whole result line ("name - number | dates | applicant ...");
+    # the model returns the title part before the first separator.
+    lead = _canon(str(item_title).split(" | ", 1)[0])
+    return (reply == original or (original.startswith(reply) and len(reply) >= 0.85 * len(original))
+            or (len(lead) >= 20 and reply == lead))
+
+
+def _quote_bound(quote, source, minimum) -> bool:
+    """Verbatim support: the quote, or every '……'-joined piece in order, occurs in the source."""
+    pieces = [_canon(part) for part in re.split(r"…+|\.{3,}", str(quote or ""))]
+    pieces = [part for part in pieces if part]
+    if not pieces or sum(len(part) for part in pieces) < minimum or any(len(part) < 4 for part in pieces[1:]):
+        return False
+    haystack, position = _canon(source), 0
+    for part in pieces:
+        found = haystack.find(part, position)
+        if found < 0:
+            return False
+        position = found + len(part)
+    return True
 
 
 def _norm_ref(ref) -> str:
@@ -1386,9 +1423,9 @@ class Pipeline:
                 reason = "duplicate_id"
             elif not row.get("source_title") or not quote:
                 reason = "missing_binding"
-            elif normalized(row["source_title"]) != normalized(item["title"]):
+            elif not _title_bound(row["source_title"], item["title"]):
                 reason = "title_mismatch"
-            elif len(quote) < min(12, len(normalized(item["title"]))) or quote not in source:
+            elif not _quote_bound(quote, source, min(10, len(_canon(item["title"])))):
                 reason = "quote_mismatch"
             else:
                 out.append({**row, "triage_binding": {"version": 1, "status": "bound"}})

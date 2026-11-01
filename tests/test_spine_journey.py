@@ -203,3 +203,23 @@ def test_large_rounds_are_triaged_in_bounded_chunks():
     analyze_job.triage_all(Pipeline(), 'p', None, {}, {}, lambda _t: None, ids)
     assert [len(chunk) for chunk in seen] == [200, 200, 50]
     assert set().union(*seen) == ids
+
+
+def test_triage_binding_tolerates_form_but_not_content():
+    from project_watch.studio.pipeline import _quote_bound, _title_bound
+
+    source = 'Moderna 宣布：mRNA-4157 联合疗法在 III 期试验中达到主要终点，复发风险降低 49%。公司将于 2026 年提交上市申请。'
+    # Same words, different spacing / punctuation / width / case: bound.
+    assert _quote_bound('mRNA-4157联合疗法在III期试验中达到主要终点', source, 10)
+    assert _quote_bound('ＭＯＤＥＲＮＡ 宣布 mRNA 4157', source, 10)
+    # Verbatim pieces joined by an ellipsis, in order: bound; out of order or invented: not.
+    assert _quote_bound('达到主要终点……公司将于 2026 年提交上市申请', source, 10)
+    assert not _quote_bound('公司将于 2026 年提交上市申请……达到主要终点', source, 10)
+    assert not _quote_bound('复发风险降低 60%', source, 10)
+    assert not _quote_bound('试验成功，前景广阔', source, 10)  # paraphrase
+    # Titles: equal in form, cut short (>=85%), or the lead of a patent result line.
+    assert _title_bound('Moderna Q3 results &amp; outlook', 'Moderna Q3 results & outlook')
+    assert _title_bound('Systems and methods for seizure prediction - CN115089196A (en) *',
+                        'Systems and methods for seizure prediction - CN115089196A (en) * | 2022-08-22 | Synthetic Co')
+    assert not _title_bound('Moderna Q3', 'Moderna Q3 results and full-year outlook')
+    assert not _title_bound('BioNTech Q3 results', 'Moderna Q3 results')
