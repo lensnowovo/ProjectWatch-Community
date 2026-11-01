@@ -22,9 +22,12 @@ def canonical(value) -> str:
 
 def quoted_in(quote, *texts) -> bool:
     """The quote's words occur in one of the texts; pieces joined by an ellipsis must occur in order."""
+    whole = canonical(quote)
+    if whole and any(whole in canonical(text) for text in texts):
+        return True
     pieces = [canonical(part) for part in re.split(r"…+|\.{3,}", str(quote or ""))]
     pieces = [part for part in pieces if part]
-    if not pieces or any(len(part) < 4 for part in pieces[1:]):
+    if len(pieces) < 2 or any(len(part) < 4 for part in pieces[1:]):
         return False
     for text in texts:
         haystack, position = canonical(text), 0
@@ -147,10 +150,9 @@ class ReviewFieldAliases:
                         continue
                     ident = witness['quote_id']
                     span = self.payload.get('evidence_spans', {}).get(ident) if isinstance(ident, str) else None
-                    # The program retrieves the span by ID; an echoed quote is not authoritative.
-                    if span is None or witness.get('ref') != span['ref']:
-                        raise ValueError('review_evidence_invalid')
-                    witness['quote'] = span['quote']
+                    # The program retrieves the span by ID: its source and text are authoritative.
+                    # An unknown ID is an unverifiable citation, judged per field in validate_review.
+                    witness['ref'], witness['quote'] = (span['ref'], span['quote']) if span else (witness.get('ref'), '')
                     del witness['quote_id']
         return value
 
@@ -232,7 +234,7 @@ def validate_consistency(value, payload):
 
 
 def validate_review(value, payload):
-    """Reject missing/duplicated fields, invented references and invented quotes."""
+    """Reject missing/duplicated fields; a support claim citing text not in its source is unsupported."""
     if not isinstance(value, dict) or not isinstance(value.get('checks'), list):
         raise ValueError('review_checks_required')
     seen, issues = set(), []
@@ -250,6 +252,7 @@ def validate_review(value, payload):
         witnesses = row.get('evidence')
         if not isinstance(witnesses, list) or (status == 'supported' and not witnesses):
             raise ValueError('review_evidence_required')
+        unverified = []
         for witness in witnesses:
             if not isinstance(witness, dict):
                 raise ValueError('review_evidence_invalid')
@@ -262,7 +265,12 @@ def validate_review(value, payload):
                 continue
             if (not source or not isinstance(quote, str) or not quote.strip()
                     or not quoted_in(quote, *(str(source.get(k) or '') for k in ('context', 'title')))):
-                raise ValueError('review_evidence_invalid')
+                unverified.append(witness)
+        if status == 'supported' and unverified:
+            # A support claim whose citation is not in the cited source is not support.
+            issues.append({'field': path, 'code': 'evidence_insufficient',
+                           'reason': 'citation not found in the cited source', 'evidence': unverified})
+            continue
         if status in ('contradicted', 'insufficient'):
             issues.append({'field': path, 'code': 'evidence_' + status,
                            'reason': row['reason'], 'evidence': witnesses})

@@ -198,3 +198,50 @@ def test_reviewer_quotes_are_compared_by_content():
     decoded = aliases.decode({'checks': [{'field': 'F1', 'status': 'supported', 'reason': 'r',
                                           'evidence': [{'ref': 'S1', 'quote_id': 'Q1', 'quote': 'paraphrased echo'}]}]})
     assert decoded['checks'][0]['evidence'][0]['quote'] == 'exact span'
+
+
+def test_a_whole_quote_containing_an_ellipsis_is_verbatim():
+    from project_watch.studio import judgment_review as review
+
+    source = 'Capacity reached 100GWh… with more lines planned in 2027.'
+    assert review.quoted_in('100GWh… with', source)
+    assert review.quoted_in('reached 100GWh...', 'Capacity reached 100GWh... in total.')
+
+
+def test_an_unfound_citation_makes_only_that_field_unsupported():
+    from project_watch.studio import judgment_review as review
+
+    payload = {'fields': {'a.summary': 'x', 'a.for.0.text': 'y'},
+               'evidence': {'S1': {'context': 'Enrollment is RECRUITING.', 'title': ''}}}
+    checks = [dict(field='a.summary', status='supported', reason='r', evidence=[dict(ref='S1', quote='RECRUITING')]),
+              dict(field='a.for.0.text', status='supported', reason='r',
+                   evidence=[dict(ref='S1', quote='Enrollment completed')])]
+    issues = review.validate_review({'checks': checks}, payload)
+    assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
+    checks[1]['status'] = 'insufficient'  # a bad citation on a non-support verdict adds nothing
+    assert [i['code'] for i in review.validate_review({'checks': checks}, payload)] == ['evidence_insufficient']
+
+
+def test_quote_ids_take_their_span_source_and_unknown_ids_are_unverified():
+    from project_watch.studio import judgment_review as review
+
+    payload = {'fields': {'a.summary': 'x', 'a.for.0.text': 'y'},
+               'evidence': {'S1': {'context': 'first span', 'title': ''}, 'S2': {'context': 'second span', 'title': ''}}}
+    aliases = review.ReviewFieldAliases(payload)
+    decoded = aliases.decode({'checks': [
+        {'field': 'F1', 'status': 'supported', 'reason': 'r', 'evidence': [{'ref': 'S2', 'quote_id': 'Q1'}]},
+        {'field': 'F2', 'status': 'supported', 'reason': 'r', 'evidence': [{'ref': 'S1', 'quote_id': 'Q99'}]}]})
+    assert decoded['checks'][0]['evidence'] == [{'ref': 'S1', 'quote': 'first span'}]
+    issues = review.validate_review(decoded, payload)
+    assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
+
+
+def test_an_invented_citation_drops_only_its_point(host):
+    def invented(system, payload):
+        response = judging()(system, payload)
+        for check in response.get('checks', []):
+            if check['field'] == 'operations.for.1.text':
+                check['evidence'] = [dict(ref='S1', quote='Invented unrelated quote')]
+        return response
+    result, _ = apply(host, dict(operations=two_points()), invented)
+    assert result['published'] == ['operations'] and result['sections']['operations']['dropped'] == ['合成材料显示已完成全部入组。']
