@@ -117,13 +117,26 @@ def _iso(value) -> str | None:
     return None
 
 
+def _source_name(value: str) -> str:
+    """Some search providers return the site name as UTF-8 hex (e.g. 人民网 → e4babae6b091e7bd91)."""
+    text = (value or "").strip()
+    if len(text) >= 6 and len(text) % 2 == 0 and re.fullmatch(r"[0-9a-f]+", text):
+        try:
+            decoded = bytes.fromhex(text).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return text
+        if decoded.isprintable() and not decoded.isascii():
+            return decoded
+    return text
+
+
 def _item(kind: str, title: str, url: str, *, source: str, snippet: str = "",
           published_at=None, extra: dict | None = None) -> dict:
     return {
         "kind": kind,
         "title": " ".join((title or "").split())[:300],
         "url": (url or "")[:2048],
-        "source": (source or "")[:120],
+        "source": _source_name(source)[:120],
         "snippet": " ".join((snippet or "").split())[:1200],
         "published_at": _iso(published_at),
         "extra": extra or {},
@@ -132,6 +145,15 @@ def _item(kind: str, title: str, url: str, *, source: str, snippet: str = "",
 
 
 CN_REGULATORY_HOSTS = ("chinadrugtrials.org.cn", "cde.org.cn", "nmpa.gov.cn")
+# Registration / acceptance / approval pages; other regulator pages (news, notices) are policy.
+_REGISTRATION = re.compile(r"CTR\d{4,}|临床试验|试验登记|登记信息|受理号|受理|获批|批准|上市许可|注册证|默示许可|突破性治疗|优先审评")
+
+
+def regulatory_kind(url: str, title: str, snippet: str = "") -> str:
+    """trial for the trial registry or a registration/approval page; policy for other regulator pages."""
+    if _host_in(url, ("chinadrugtrials.org.cn",)) or _REGISTRATION.search(f"{title or ''} {snippet or ''}"):
+        return "trial"
+    return "policy"
 REGISTRY_CHANGE_DAYS = 730  # older registry changes are history, not news
 
 
@@ -225,7 +247,7 @@ class Collectors:
             for r in self.web_search(f"site:{site} {name}", count=8):
                 if _host_in(r["url"], CN_REGULATORY_HOSTS) and r["key"] not in seen:
                     seen.add(r["key"])
-                    out.append(dict(r, kind="trial", source=r["source"] or site))
+                    out.append(dict(r, kind=regulatory_kind(r["url"], r["title"], r.get("snippet", "")), source=r["source"] or site))
         return out
 
     # ---------- China: business registry changes (Tianyancha key) ----------

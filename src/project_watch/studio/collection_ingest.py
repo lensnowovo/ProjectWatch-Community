@@ -181,6 +181,8 @@ class CollectionIngest:
                      else 'updated' if existing else 'added')
         if existing is None:
             category = {'chain': 'company', 'technology': 'industry'}.get(unit['category'], unit['category'])
+            if category == 'trial' and item.get('kind') == 'policy':
+                category = 'policy'  # a regulator's news or notice page is not a trial record
             db.execute('INSERT INTO studio_items (id,project_id,key,category,title,url,source,snippet,published_at,'
                        'collected_at,extra) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                        (item_id, self.project_id, key, category, item['title'], item['url'], item['source'],

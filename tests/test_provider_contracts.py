@@ -75,3 +75,19 @@ def test_google_patents_real_page():
     assert record['document_kind'] == 'A2' and record['publication_date'] == '2012-02-09'
     assert record['other_versions'] == ['WO2012019168A3']  # same application, listed by the provider
     assert google_patents.metadata(record) == record
+
+
+def test_regulator_news_is_policy_and_registrations_are_trials():
+    from project_watch.studio.sources import regulatory_kind
+
+    assert regulatory_kind('https://www.nmpa.gov.cn/yaowen/gwyyw/1.html', '国务院会议要闻') == 'policy'
+    assert regulatory_kind('https://www.cde.org.cn/main/news/1', '关于征求意见的通知') == 'policy'
+    assert regulatory_kind('https://www.nmpa.gov.cn/zhuanti/1', '首款合成器械获批上市') == 'trial'
+    assert regulatory_kind('http://www.chinadrugtrials.org.cn/1', 'CTR20990001详细信息') == 'trial'
+
+
+def test_hex_encoded_site_names_are_decoded_and_others_untouched():
+    from project_watch.studio.sources import _source_name
+
+    assert _source_name('e4babae6b091e7bd91') == '人民网'
+    assert _source_name('deadbeef') == 'deadbeef' and _source_name('Reuters') == 'Reuters'
