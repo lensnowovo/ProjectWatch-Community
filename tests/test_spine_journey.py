@@ -190,3 +190,16 @@ def test_assumptions_warning_and_exploration_feed_the_next_round(env):
     assert frozen['exploration'] == ['Synthetic Rival 新靶点']
     assert 'Synthetic Rival 新靶点' in frozen['public_plan']['industry_queries']
     assert assumptions.take_exploration(pipeline.store, pid, 'some-later-job') == []
+
+
+def test_large_rounds_are_triaged_in_bounded_chunks():
+    seen = []
+
+    class Pipeline:
+        def triage(self, pid, llm, project, plan, stage, *, item_ids):
+            seen.append(item_ids)
+
+    ids = {f'i{n:03}' for n in range(450)}
+    analyze_job.triage_all(Pipeline(), 'p', None, {}, {}, lambda _t: None, ids)
+    assert [len(chunk) for chunk in seen] == [200, 200, 50]
+    assert set().union(*seen) == ids

@@ -206,6 +206,16 @@ def follow_through(pipeline, llm, execution, collect_job_id, item_ids, stage):
     return steps
 
 
+TRIAGE_CHUNK = 200  # store.untriaged's selection bound
+
+
+def triage_all(pipeline, pid, llm, project, plan, stage, item_ids):
+    """A real round collects hundreds of items; review them in fixed, ordered chunks."""
+    ordered = sorted(item_ids)
+    for start in range(0, len(ordered), TRIAGE_CHUNK):
+        pipeline.triage(pid, llm, project, plan, stage, item_ids=set(ordered[start:start + TRIAGE_CHUNK]))
+
+
 def run(pipeline, execution):
     pid = execution.job['project_id']
     saved = execution.read_checkpoint(RESULT)
@@ -220,7 +230,7 @@ def run(pipeline, execution):
     item_ids = _batch_items(pipeline.store, pid, collect_job_id)
     # Without a model, triage keeps every item visible as "not AI-screened" and
     # events group by title only; no model request is made.
-    pipeline.triage(pid, llm, project, _plan(pipeline, execution, collect_job_id), stage, item_ids=item_ids)
+    triage_all(pipeline, pid, llm, project, _plan(pipeline, execution, collect_job_id), stage, item_ids)
     stage('整理事件')
     pipeline.cluster(pid, llm, stage)
     if not llm.ready:
