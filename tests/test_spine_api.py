@@ -13,7 +13,8 @@ def test_round_progress_reanalysis_and_assumptions(env):  # noqa: F811
     work(pipeline, 'collect')
     view = client.get(f'/api/studio/projects/{pid}/round').json()
     assert view['collect']['status'] == 'done' and view['collect']['result']['status'] in ('complete', 'partial')
-    assert view['materials']['paper'] >= 1 and view['running']  # analysis queued, materials already visible
+    assert view['materials_collected']['paper'] >= 1 and view['running']  # analysis queued, materials already visible
+    assert view['materials']['paper'] == 0  # nothing is confirmed before review
     work(pipeline, 'analyze')
     view = client.get(f'/api/studio/projects/{pid}/round').json()
     assert view['analyze']['result']['published'] and view['analyze']['result']['status'] == 'partial'

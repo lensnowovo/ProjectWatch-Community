@@ -20,3 +20,4 @@
 .research-relation { font-size: 12px; color: var(--ink-2); }
 .research-relation.relation-subject { color: var(--ok); font-weight: 600; }
 .research-relation.relation-unrelated { color: var(--muted); }
+.research-relation.relation-unreviewed { color: var(--muted); font-style: italic; }

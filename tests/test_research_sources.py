@@ -47,7 +47,7 @@ def test_pending_sources_visible_after_unknown_without_event_or_write(owner):
     assert not {'summary', 'impact', 'importance', 'source_record'} & source.keys()
     assert 'source_record' not in source['extra']
     assert pipe.store.list_events(project_id=pid) == []
-    assert research_source_counts(pipe.store, pid) == {'trial': 1, 'paper': 0, 'patent': 0}
+    assert research_source_counts(pipe.store, pid, review=None) == {'trial': 1, 'paper': 0, 'patent': 0}
     with closing(pipe.store._connect()) as db:
         assert list(db.iterdump()) == before
     assert execution.usage() == {}
@@ -85,7 +85,7 @@ def test_exclusions_and_evidence_heads_apply_before_counting(owner, boundary):
         target = ref['evidence_version_id'] if boundary == 'withdrawn' else pipe.store.item_evidence(pid, ref['item_id'])['evidence_version_id']
         pipe.evidence.dependencies.withdraw(pid, target, 'synthetic correction', actor='test')
     assert client.get(route(pid)).json()['total'] == 0
-    assert research_source_counts(pipe.store, pid)['trial'] == 0
+    assert research_source_counts(pipe.store, pid, review=None)['trial'] == 0
 
 
 def test_legacy_records_remain_and_source_updates_deduplicate(owner):
@@ -184,3 +184,17 @@ def test_one_sided_patent_versions_and_duplicate_publication_survive_pagination(
     assert all(i['family']['key'] == 'versions:US123456A1' and i['family']['basis'] == 'listed_versions'
                and i['family']['document_count'] == 3 for i in items)
     assert all(i['extra']['legal_status'] == 'unknown' for i in items)
+
+
+def test_review_state_separates_confirmed_from_unreviewed_fallbacks():
+    import json
+
+    from project_watch.studio.research_sources import review_state
+
+    bound = json.dumps({'triage_binding': {'version': 1, 'status': 'bound'}})
+    assert review_state(False, bound) == 'pending'
+    assert review_state(True, bound) == 'confirmed'
+    assert review_state(True, '{}') == 'confirmed'  # triaged before bindings existed
+    for status in ('quote_mismatch', 'title_mismatch', 'missing_binding', 'duplicate_id', 'no_model', 'model_rejected'):
+        assert review_state(True, json.dumps({'triage_binding': {'status': status}})) == 'unreviewed'
+    assert review_state(True, 'not json') == 'confirmed'

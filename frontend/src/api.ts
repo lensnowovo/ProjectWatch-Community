@@ -980,6 +980,8 @@ export interface ResearchSource {
   title: string; url: string; source: string; snippet: string;
   published_at: string | null; collected_at: string;
   extra: Record<string, unknown>; processing_status: 'organized' | 'pending';
+  /** confirmed: reviewed and bound to the source; unreviewed: kept visible, not AI-checked. */
+  review?: 'confirmed' | 'unreviewed' | 'pending';
   source_type: string | null; read_scope: string | null;
   evidence_version_id: string | null; body_evidence_version_id: string | null;
 }
@@ -1007,7 +1009,9 @@ export interface RoundStage {
 }
 export interface ProjectRound {
   collect: RoundStage | null; analyze: RoundStage | null; report: RoundStage | null;
-  materials: Partial<Record<ResearchCategory, number>>; running: boolean; can_reanalyze: boolean;
+  materials: Partial<Record<ResearchCategory, number>>; materials_unreviewed?: Partial<Record<ResearchCategory, number>>;
+  materials_collected?: Partial<Record<ResearchCategory, number>>;
+  running: boolean; can_reanalyze: boolean;
 }
 export interface Assumption {
   id: string; text: string; basis: string; status: 'active' | 'retired'; author: 'model' | 'user';

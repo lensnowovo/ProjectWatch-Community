@@ -1234,7 +1234,8 @@ class Pipeline:
             stage(f"AI 筛选信息（第 {round_no} 批）")
             if not llm.ready:
                 self.store.save_triage([{"id": b["id"], "relevant": True, "importance": "routine",
-                                         "summary": b["snippet"][:200], "impact": ""} for b in batch])
+                                         "summary": b["snippet"][:200], "impact": "",
+                                         "triage_binding": {"version": 1, "status": "no_model"}} for b in batch])
                 continue
             by_id = {b["id"]: b for b in batch}
             results = []
@@ -1246,7 +1247,8 @@ class Pipeline:
                     raise
                 self.store.save_triage([{"id": b["id"], "relevant": True, "importance": "routine",
                                          "summary": b["title"][:200],
-                                         "impact": "模型服务拒绝分析这批资料，未经 AI 筛选；原样保留供你查看"} for b in batch])
+                                         "impact": "模型服务拒绝分析这批资料，未经 AI 筛选；原样保留供你查看",
+                                         "triage_binding": {"version": 1, "status": "model_rejected"}} for b in batch])
                 continue
             for r in answered:
                 if isinstance(r, dict) and r.get("id") in by_id:

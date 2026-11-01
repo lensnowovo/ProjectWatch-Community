@@ -36,13 +36,19 @@ export function RoundProgress({ projectId, onReload }: { projectId: string; onRe
   const { data, reload } = useAsync<ProjectRound>(() => api.projectRound(projectId), [projectId]);
   useVisiblePoll(reload, data?.running ? 5000 : 30000);
   if (!data) return null;
+  // Before analysis everything is collected but unscreened; afterwards show what review confirmed.
+  const analysed = data.analyze?.status === 'done';
+  const shown = analysed ? data.materials : (data.materials_collected ?? data.materials);
   const counts = (Object.keys(CATEGORY) as (keyof typeof CATEGORY)[])
-    .filter((key) => (data.materials[key] ?? 0) > 0)
-    .map((key) => `${CATEGORY[key]} ${data.materials[key]}`);
+    .filter((key) => (shown[key] ?? 0) > 0)
+    .map((key) => `${CATEGORY[key]} ${shown[key]}`);
+  const unreviewed = analysed ? (Object.keys(CATEGORY) as (keyof typeof CATEGORY)[])
+    .reduce((sum, key) => sum + (data.materials_unreviewed?.[key] ?? 0), 0) : 0;
   const finished = data.report?.finished_at ?? data.analyze?.finished_at ?? data.collect?.finished_at;
   return <section className="round-view" aria-label="最近一次更新">
     <dl>
-      <div><dt>收录</dt><dd>{collectLine(data.collect)}{counts.length > 0 && <span className="muted"> · 已收录 {counts.join(" · ")}</span>}</dd></div>
+      <div><dt>收录</dt><dd>{collectLine(data.collect)}{counts.length > 0 && <span className="muted"> · {analysed ? "已确认" : "已收录"} {counts.join(" · ")}</span>}
+        {unreviewed > 0 && <span className="muted"> · 另 {unreviewed} 条待核实</span>}</dd></div>
       <div><dt>分析</dt><dd>{analyzeLine(data.analyze, data.collect)}</dd></div>
       {finished && !data.running && <div><dt>完成</dt><dd className="muted">{relTime(finished)}</dd></div>}
     </dl>

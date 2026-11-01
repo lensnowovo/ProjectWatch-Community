@@ -85,6 +85,7 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
         <div className="item-meta"><span className={`cat cat-${item.category}`}>{CATEGORY_LABEL[item.category]}</span>
           <span className="muted">{item.source}</span>
           {item.processing_status === 'pending' ? <span className="muted">相关性待核</span>
+            : item.review === 'unreviewed' ? <span className="research-relation relation-unreviewed" title="AI 筛选结果未能与原文对应，原样保留供你查看">待核实</span>
             : RELATION[text(x.research_relation)] && <span className={`research-relation relation-${text(x.research_relation)}`}>{RELATION[text(x.research_relation)]}</span>}
           <time className="muted item-date">{item.published_at ? relTime(item.published_at) : `发表日期未提供 · 收录于 ${relTime(item.collected_at)}`}</time>
         </div>

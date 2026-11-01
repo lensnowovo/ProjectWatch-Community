@@ -53,7 +53,10 @@ def round_view(store, pid):
         or ((analyze.get('result') or {}).get('status') in ('partial', 'failed'))))
     busy = any(j and j['status'] in ('queued', 'running') for j in jobs.values())
     return dict(collect=view['collect'], analyze=analyze, report=view['report'],
-                materials=research_source_counts(store, pid), running=busy, can_reanalyze=can_redo and not busy)
+                materials=research_source_counts(store, pid),
+                materials_unreviewed=research_source_counts(store, pid, review='unreviewed'),
+                materials_collected=research_source_counts(store, pid, review=None),
+                running=busy, can_reanalyze=can_redo and not busy)
 
 
 def attach(app, store, project_or_404):

@@ -24,6 +24,23 @@ class SourceRevisionChanged(ValueError):
     pass
 
 
+# Kept visible but not reviewed: the model's reply could not be bound to the
+# source (missing quote, title/quote mismatch, duplicate id), no model was
+# configured, or the provider refused the batch.
+UNREVIEWED = frozenset({'missing_binding', 'title_mismatch', 'quote_mismatch', 'duplicate_id', 'no_model', 'model_rejected'})
+
+
+def review_state(triaged, raw_extra):
+    """confirmed | unreviewed | pending. Items triaged before bindings existed count as confirmed."""
+    if not triaged:
+        return 'pending'
+    try:
+        binding = (json.loads(raw_extra or '{}') or {}).get('triage_binding') or {}
+    except (ValueError, TypeError, AttributeError):
+        binding = {}
+    return 'unreviewed' if isinstance(binding, dict) and binding.get('status') in UNREVIEWED else 'confirmed'
+
+
 def _extra(raw):
     try:
         value = json.loads(raw or '{}')
@@ -92,9 +109,11 @@ def _rows(db, project_id):
     result = []
     for row in rows:
         item = dict(row)
-        item['extra'] = _extra(item['extra'])
+        item['raw_extra'], item['extra'] = item['extra'], _extra(item['extra'])
         item['url'] = _url(item['url'])
-        item['processing_status'] = 'organized' if item.pop('triaged') else 'pending'
+        triaged = item.pop('triaged')
+        item['processing_status'] = 'organized' if triaged else 'pending'
+        item['review'] = review_state(triaged, item.pop('raw_extra'))
         quality = json.loads(item.pop('quality_record') or '{}')
         item['source_type'] = quality.get('source_type')
         item['read_scope'] = quality.get('read_scope')
@@ -168,8 +187,10 @@ def research_sources(store, project_id, category, *, limit=40, offset=0, revisio
                     items=items[offset:offset + limit])
 
 
-def research_source_counts(store, project_id):
+def research_source_counts(store, project_id, *, review='confirmed'):
+    """Items per category in one review state (confirmed by default; None counts every visible item)."""
     with closing(store._connect()) as db:
         db.execute('BEGIN')
         rows = _rows(db, project_id)
-        return {category: sum(r['category'] == category for r in rows) for category in CATEGORIES}
+        return {category: sum(r['category'] == category and (review is None or r['review'] == review) for r in rows)
+                for category in CATEGORIES}
