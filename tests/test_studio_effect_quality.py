@@ -71,3 +71,15 @@ def test_explicit_intent_scenario_is_not_blocked():
 
 
 
+
+
+def test_an_unbounded_comparison_in_one_point_does_not_erase_the_summary():
+    numbered = {'N1': {'kind': 'public', 'text': '同行获全球挑战赛第一。公司完成种子轮。', 'context': '同行获全球挑战赛第一。公司完成种子轮。',
+                       'context_kind': '原文摘录', 'url': 'https://example.invalid/a'}}
+    raw = {'position': {'verdict': 'behind', 'confidence': 'medium', 'summary': '公司刚完成种子轮，规模落后于同行',
+                        'for': [{'text': '公司完成种子轮', 'refs': ['N1']},
+                                {'text': '同行获全球挑战赛第一', 'refs': ['N1']}], 'against': []}}
+    out = gen.normalize(raw, numbered)['position']
+    assert out['summary'] == '公司刚完成种子轮，规模落后于同行'
+    assert out['verdict'] == 'behind' and out['confidence'] == 'low'
+    assert [p['text'] for p in out['for']] == ['公司完成种子轮']

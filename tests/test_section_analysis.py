@@ -245,3 +245,12 @@ def test_an_invented_citation_drops_only_its_point(host):
         return response
     result, _ = apply(host, dict(operations=two_points()), invented)
     assert result['published'] == ['operations'] and result['sections']['operations']['dropped'] == ['合成材料显示已完成全部入组。']
+
+
+def test_a_point_omitted_by_the_normalizer_is_recorded_and_the_section_published(host):
+    raw = dict(operations=two_points())
+    raw['operations']['for'][1]['text'] = '合成材料显示公司获批进度全球领先。'
+    result, view = apply(host, raw)
+    assert result['published'] == ['operations']
+    assert result['sections']['operations']['dropped'] == ['合成材料显示公司获批进度全球领先。']
+    assert [p['text'] for p in view['analysis']['operations']['for']] == ['合成材料记录招募状态。']

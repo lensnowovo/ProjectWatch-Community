@@ -318,6 +318,11 @@ def _confidence(value, points: list[dict]) -> str:
 
 _CLAUSE_BREAK = r"[，,。；;\n、]"
 _RECOGNITION = re.compile(r"(?:营业收入|收入|营收)(?:仍|尚)?未确认|(?:尚未|仍未|未能|未)确认(?:营业)?收入")
+# A summary that restates a dropped point's claim rests on it and goes with it.
+_PREMISE = {
+    'recognition_not_supported': re.compile(r"(?:没有|尚未|仍未|未能|未|无)[^，,。；;]{0,6}(?:收入|营收)|(?:收入|营收)[^，,。；;]{0,4}(?:为零|未确认)"),
+    'order_scope_ambiguous': re.compile(r"订单"),
+}
 _ORDERS = re.compile(
     r"(?P<qual>在手(?:及|和|与)?意向|意向|已签约|已签署|已签|确定|在手)?订单\s*"
     r"(?:合计|总计|累计)?\s*(?P<relation>超过|超|不少于|至少|约|近)?\s*"
@@ -596,11 +601,12 @@ def normalize(data: dict, numbered: dict) -> dict:
     consistency_checks = [{'path': i['field'], 'reason': i['code'], 'action': 'omitted'} for i in scope_issues]
     uncertain_sections = set()
     rejected_sections = set()
+    dropped_sections = set()
 
     def qualify(text, entries, path):
         corrected, checks = _qualifier_text(str(text or ''), entries)
         qualifier_checks.extend({'path': path, **check} for check in checks)
-        return corrected, any(c['action'] == 'uncertain' for c in checks)
+        return corrected, {c['reason'] for c in checks if c['action'] == 'uncertain'}
 
     def section(name: str, lists: tuple[str, ...]) -> dict:
         raw = data.get(name) if isinstance(data.get(name), dict) else {}
@@ -614,8 +620,12 @@ def normalize(data: dict, numbered: dict) -> dict:
                 text, uncertain = qualify(point['text'], {r['code']: numbered[r['code']] for r in point['refs']},
                                           f'{name}.{key}.{index}')
                 if uncertain:
-                    uncertain_sections.add(name)
-                    rejected_sections.add(name)
+                    # The unsafe point is dropped; the section falls with it only if the summary rests on it.
+                    dropped_sections.add(name)
+                    if any(_PREMISE[reason].search(str(raw.get('summary') or '')) for reason in uncertain
+                           if reason in _PREMISE):
+                        uncertain_sections.add(name)
+                        rejected_sections.add(name)
                 else:
                     out[key].append({**point, 'text': text})
         evidence = [p for key in lists for p in out[key]]
@@ -657,6 +667,8 @@ def normalize(data: dict, numbered: dict) -> dict:
         if not any(isinstance(v, list) and v and isinstance(v[0], dict) for v in part.values()):
             part["confidence"] = "low"
     for name, part in (("position", position), ("technology", technology), ("industry", industry), *rings.items()):
+        if name in dropped_sections:
+            part['confidence'] = 'low'
         if name in uncertain_sections:
             part['confidence'] = 'low'
             for key in ('verdict', 'maturity', 'consensus'):
@@ -696,13 +708,17 @@ def normalize(data: dict, numbered: dict) -> dict:
     if any(c['reason'] == 'financial_period_missing' for c in consistency_checks):
         gaps = ['标题已省略缺少报告期的财务概括；分期依据保留，不据报道日期推定当前表现。', *gaps][:8]
     sections = {'position': position, 'technology': technology, 'industry': industry, **rings}
-    for name in {i['field'].split('.')[0] for i in scope_issues}:
-        if name in sections:
-            sections[name]['confidence'] = 'low'
-            for key in ('verdict', 'maturity', 'consensus'):
-                if key in sections[name]:
-                    sections[name][key] = 'unclear'
-            sections[name]['summary'] = ''
+    for issue in scope_issues:
+        name, *rest = issue['field'].split('.')
+        if name not in sections:
+            continue
+        sections[name]['confidence'] = 'low'
+        if len(rest) == 3 and rest[1].isdigit():
+            continue  # one point was omitted above; the summary is checked on its own
+        for key in ('verdict', 'maturity', 'consensus'):
+            if key in sections[name]:
+                sections[name][key] = 'unclear'
+        sections[name]['summary'] = ''
     if any(i['code'] not in ('financial_series_trend_conflict', 'financial_comparison_period_mismatch')
            for i in scope_issues):
         gaps = ['部分判断缺少可比范围或收入推演条件，未采用；保留事实与反证待核查。', *gaps][:8]

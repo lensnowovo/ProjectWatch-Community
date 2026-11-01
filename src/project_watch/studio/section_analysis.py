@@ -239,10 +239,22 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
         if result['status'] != 'approved':
             continue
         try:
-            normalized = generator.normalize({name: raw[name]}, sources)[name]
+            full = generator.normalize({name: raw[name]}, sources)
+            normalized = full[name]
             if not normalized.get('summary'):
                 raise ValueError('section has no supported summary')
             accepted[name] = normalized
+            # Points the normalizer's guards omitted are recorded like review-trimmed ones.
+            omitted = [c['path'] for c in (*full.get('consistency_checks', ()), *full.get('qualifier_checks', ()))
+                       if c.get('action') in ('omitted', 'uncertain') and str(c.get('path', '')).startswith(name + '.')]
+            for path in dict.fromkeys(omitted):
+                parts = path.split('.')
+                if len(parts) >= 3 and parts[2].isdigit():
+                    points = raw[name].get(parts[1]) if isinstance(raw[name], dict) else None
+                    kept = {p.get('text') for p in normalized.get(parts[1]) or () if isinstance(p, dict)}
+                    if isinstance(points, list) and int(parts[2]) < len(points) and isinstance(points[int(parts[2])], dict) \
+                            and points[int(parts[2])].get('text') not in kept:
+                        result.setdefault('dropped', []).append(points[int(parts[2])].get('text'))
         except (ValueError, TypeError, KeyError, AttributeError):
             result.update(status='rejected', issues=['section_normalization_failed'])
     guard()
