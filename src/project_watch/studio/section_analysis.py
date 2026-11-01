@@ -10,6 +10,46 @@ from project_watch.studio.store import digest, now
 
 SECTIONS = ('position', 'technology', 'industry', 'operations', 'chain')
 PREFIX = 'snapshot-section:'
+# Classification labels are judgments, not quotable facts; the consistency review covers them.
+LABELS = frozenset({'verdict', 'confidence', 'maturity', 'consensus'})
+# Evidence lists: each item stands on its own refs and can be dropped without the section.
+ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'peers', 'change_if'})
+
+
+def _item(path):
+    parts = path.split('.')
+    return (parts[1], int(parts[2])) if len(parts) >= 3 and parts[1] in ITEMS and parts[2].isdigit() else None
+
+
+def _inherent(conflict):
+    """Supporting and opposing evidence of one section are expected to differ."""
+    paths = conflict.get('fields') or []
+    lists = {p.split('.')[1] for p in paths if len(p.split('.')) > 1}
+    return len({p.split('.')[0] for p in paths}) == 1 and lists == {'for', 'against'}
+
+
+def trim(part, issues):
+    """Drop the list items an issue names; any issue on the summary or route blocks the section."""
+    drop, blocking = set(), []
+    for issue in issues:
+        paths = issue.get('fields') or [issue.get('field')] if isinstance(issue, dict) else [None]
+        for path in paths:
+            if not isinstance(path, str):
+                blocking.append(issue)
+            elif _item(path):
+                drop.add(_item(path))
+            elif path.split('.')[-1] not in LABELS:
+                blocking.append(issue)
+    if blocking:
+        return None, [], blocking
+    trimmed, dropped = deepcopy(part), []
+    for key in {k for k, _ in drop}:
+        values = trimmed.get(key) or []
+        dropped.extend(v.get('text') if isinstance(v, dict) else v for i, v in enumerate(values) if (key, i) in drop)
+        trimmed[key] = [v for i, v in enumerate(values) if (key, i) not in drop]
+    if dropped:
+        trimmed['confidence'] = 'low'
+    return trimmed, dropped, []
 
 
 def _review(reviewer, system, payload):
@@ -58,8 +98,44 @@ def _refs(value, sources):
     return found
 
 
+def _checked(execution, reviewer, guard, batch, refs, sources, *, split=True):
+    """Issues and receipts for one review batch. A malformed reply is reviewed once more in
+    two halves (new, smaller requests); a half still malformed marks its own fields."""
+    guard()
+    key = 'section-review:' + digest([review.VERSION, batch])[:40]
+    saved = execution.read_checkpoint(key)
+    if saved is None:
+        saved = _review(reviewer, review.CONSISTENCY_SYSTEM if batch['phase'] == 'consistency' else review.SYSTEM, batch)
+        execution.checkpoint_chunked(key, saved)
+    try:
+        if saved.get('response') is None:
+            raise ValueError(saved.get('error') or 'review_unavailable')
+        if batch['phase'] == 'consistency':
+            found = [c for c in review.validate_consistency(saved['response'], batch) if not _inherent(c)]
+        else:
+            found = review.validate_review(saved['response'], batch)
+            for check in saved['response'].get('checks', []):
+                refs.update(witness['ref'] for witness in check.get('evidence', []) if witness.get('ref') in sources)
+        return found, [key]
+    except ValueError:
+        fields = list(batch['fields'])
+        if split and batch['phase'] == 'fields' and len(fields) > 1:
+            half = len(fields) // 2
+            issues, receipts = [], [key]
+            for chunk in (fields[:half], fields[half:]):
+                sub = {**batch, 'fields': {path: batch['fields'][path] for path in chunk}}
+                found, keys = _checked(execution, reviewer, guard, sub, refs, sources, split=False)
+                issues.extend(found)
+                receipts.extend(keys)
+            return issues, receipts
+        return [dict(code='invalid_review', field=fields[0] if len(fields) == 1 else None, fields=fields)], [key]
+
+
 def evaluate(execution, raw, sources, reviewer, guard, retained=None):
-    """Review fixed fields and cross-section dependencies; no auto repair loop."""
+    """Review fixed fields and cross-section dependencies; unsupported items are dropped.
+
+    raw is updated in place with the trimmed sections that publish() will use.
+    """
     outcomes, valid = {}, {}
     for name in SECTIONS:
         part = raw.get(name)
@@ -71,30 +147,25 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
             if not refs:
                 raise ValueError('section has no evidence')
             payload = review.review_input({name: part}, {'numbered': sources})
+            payload['fields'] = {path: text for path, text in payload['fields'].items()
+                                 if path.split('.')[-1] not in LABELS}
             batches = review.review_batches(payload)
         except (ValueError, TypeError, KeyError):
             outcomes[name] = dict(status='rejected', issues=['invalid_section_or_reference'])
             continue
         issues, receipts = [], []
         for batch in batches:
-            guard()
-            key = 'section-review:' + digest([review.VERSION, batch])[:40]
-            saved = execution.read_checkpoint(key)
-            if saved is None:
-                saved = _review(reviewer, review.CONSISTENCY_SYSTEM if batch['phase'] == 'consistency' else review.SYSTEM, batch)
-                execution.checkpoint_chunked(key, saved)
-            try:
-                issues.extend(review.validate_consistency(saved['response'], batch) if batch['phase'] == 'consistency'
-                              else review.validate_review(saved['response'], batch))
-                for check in saved['response'].get('checks', []):
-                    refs.update(witness['ref'] for witness in check.get('evidence', []) if witness.get('ref') in sources)
-            except ValueError:
-                issues.append(dict(code='invalid_review', field=name))
-            receipts.append(key)
-        outcomes[name] = dict(status='rejected' if issues else 'approved', issues=issues,
-                              refs=sorted(refs), review_receipts=receipts)
-        if not issues:
-            valid[name] = part
+            found, keys = _checked(execution, reviewer, guard, batch, refs, sources)
+            issues.extend(found)
+            receipts.extend(keys)
+        trimmed, dropped, blocking = trim(part, issues)
+        if trimmed is not None and not _refs(trimmed, sources):
+            trimmed, blocking = None, [dict(code='section_without_supported_items', field=name)]
+        outcomes[name] = dict(status='approved' if trimmed is not None else 'rejected', issues=issues,
+                              refs=sorted(_refs(trimmed, sources) if trimmed is not None else refs),
+                              review_receipts=receipts, dropped=dropped, blocking=blocking)
+        if trimmed is not None:
+            valid[name] = raw[name] = trimmed
     combined, evidence = deepcopy(valid), dict(sources)
     for name, record in (retained or {}).items():
         if name in combined:
@@ -116,12 +187,24 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
             saved = _review(reviewer, review.CONSISTENCY_SYSTEM, payload)
             execution.checkpoint_chunked(key, saved)
         try:
-            conflicts = review.validate_consistency(saved['response'], payload)
-            affected = {path.split('.')[0] for issue in conflicts for path in issue['fields']}
+            conflicts = [c for c in review.validate_consistency(saved['response'], payload) if not _inherent(c)]
         except ValueError:
-            conflicts, affected = [dict(code='invalid_consistency_review')], set(valid)
-        for name in affected & set(valid):
-            outcomes[name].update(status='rejected', issues=conflicts)
+            conflicts = None
+        if conflicts is None:
+            for name in valid:
+                outcomes[name].update(status='rejected', issues=[dict(code='invalid_consistency_review')])
+        for name in list(valid) if conflicts else []:
+            mine = [dict(c, fields=[p for p in c['fields'] if p.split('.')[0] == name]) for c in conflicts
+                    if any(p.split('.')[0] == name for p in c['fields'])]
+            if not mine:
+                continue
+            trimmed, dropped, blocking = trim(valid[name], mine)
+            if trimmed is None or not _refs(trimmed, sources):
+                outcomes[name].update(status='rejected', issues=outcomes[name]['issues'] + mine, blocking=blocking or mine)
+                continue
+            raw[name] = valid[name] = trimmed
+            outcomes[name].update(refs=sorted(_refs(trimmed, sources)), dropped=outcomes[name]['dropped'] + dropped,
+                                  issues=outcomes[name]['issues'] + mine)
     guard()
     return outcomes
 

@@ -175,13 +175,9 @@ _PROFILE_SYSTEM += "\n每条 sections.points/highlights/risks/milestones 尽量�
 
 
 def _canon(value) -> str:
-    """Comparison form for binding checks: same words, ignoring spacing, punctuation,
-    case, HTML entities/tags and full/half-width forms. Never used for display."""
-    import html
-    import unicodedata
+    from project_watch.studio.judgment_review import canonical
 
-    text = re.sub(r"<[^>]+>", "", html.unescape(str(value or "")))
-    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text).casefold())
+    return canonical(value)
 
 
 def _title_bound(model_title, item_title) -> bool:

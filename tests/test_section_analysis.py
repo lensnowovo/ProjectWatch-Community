@@ -125,3 +125,76 @@ def test_new_section_conflict_with_retained_baseline_preserves_old_version(host)
     after = insight.load(research.store, research.project_id)
     assert after['section_versions']['operations']['version_id'] == version
     assert after['analysis']['operations'] == old['analysis']['operations']
+
+
+def two_points():
+    return dict(verdict='steady', confidence='medium', summary='合成材料仍在招募阶段。',
+                **{'for': [dict(text='合成材料记录招募状态。', refs=['S1']),
+                           dict(text='合成材料显示已完成全部入组。', refs=['S1'])], 'against': [], 'change_if': []})
+
+
+def judging(unsupported=(), labels_seen=None, malformed_once=None):
+    """Synthetic reviewer: listed paths are insufficient, every other field supported."""
+    calls = []
+
+    def review(system, payload):
+        calls.append(sorted(payload['fields']))
+        if 'conflicts' in system:
+            return dict(consistent=True, reason='synthetic consistent', conflicts=[])
+        if labels_seen is not None:
+            labels_seen.update(p for p in payload['fields'] if p.split('.')[-1] in section_analysis.LABELS)
+        if malformed_once is not None and not malformed_once:
+            malformed_once.append(True)
+            return dict(checks=[])  # misses every field: malformed
+        return dict(checks=[dict(field=f, status='insufficient' if f in unsupported else 'supported',
+                                 reason='synthetic', evidence=[dict(ref='S1', quote='RECRUITING')])
+                            for f in payload['fields']])
+    review.calls = calls
+    return review
+
+
+def test_an_unsupported_point_is_dropped_and_the_rest_published(host):
+    result, view = apply(host, dict(operations=two_points()), judging({'operations.for.1.text'}))
+    outcome = result['sections']['operations']
+    assert result['published'] == ['operations'] and outcome['dropped'] == ['合成材料显示已完成全部入组。']
+    texts = [p['text'] for p in view['analysis']['operations']['for']]
+    assert texts == ['合成材料记录招募状态。'] and view['analysis']['operations']['confidence'] == 'low'
+
+
+def test_an_unsupported_summary_still_rejects_the_section(host):
+    result, _ = apply(host, dict(operations=two_points()), judging({'operations.summary'}))
+    assert result['published'] == [] and result['sections']['operations']['status'] == 'rejected'
+
+
+def test_labels_are_not_sent_for_quote_checking(host):
+    seen = set()
+    result, _ = apply(host, dict(operations=two_points()), judging(labels_seen=seen))
+    assert result['published'] == ['operations'] and seen == set()
+
+
+def test_a_malformed_review_is_reviewed_again_in_halves(host):
+    review = judging(malformed_once=[])
+    result, _ = apply(host, dict(operations=two_points()), review)
+    assert result['published'] == ['operations']
+    field_calls = [c for c in review.calls if c and not any('conflict' in x for x in c)]
+    assert len(field_calls[0]) > 1 and sorted(field_calls[1] + field_calls[2]) == field_calls[0]
+
+
+def test_supporting_and_opposing_points_are_not_a_conflict():
+    conflict = dict(fields=['position.for.0.text', 'position.against.1.text'], code='evidence_cross_section_conflict')
+    assert section_analysis._inherent(conflict)
+    assert not section_analysis._inherent(dict(fields=['position.summary', 'operations.summary']))
+
+
+def test_reviewer_quotes_are_compared_by_content():
+    from project_watch.studio import judgment_review as review
+
+    assert review.quoted_in('ＲＥＣＲＵＩＴＩＮＧ  status', 'Overall status: RECRUITING; status updated')
+    assert review.quoted_in('Phase 3……met its primary endpoint', 'Phase 3 trial (n=800) met its primary endpoint.')
+    assert not review.quoted_in('met its primary endpoint……Phase 3', 'Phase 3 trial (n=800) met its primary endpoint.')
+    assert not review.quoted_in('failed its primary endpoint', 'Phase 3 trial met its primary endpoint.')
+    aliases = review.ReviewFieldAliases({'fields': {'a.summary': 'x'},
+                                         'evidence': {'S1': {'context': 'exact span', 'title': ''}}})
+    decoded = aliases.decode({'checks': [{'field': 'F1', 'status': 'supported', 'reason': 'r',
+                                          'evidence': [{'ref': 'S1', 'quote_id': 'Q1', 'quote': 'paraphrased echo'}]}]})
+    assert decoded['checks'][0]['evidence'][0]['quote'] == 'exact span'

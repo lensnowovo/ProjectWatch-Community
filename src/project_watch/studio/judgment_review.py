@@ -5,9 +5,37 @@ No company, industry or phrase-specific acceptance rules live here.
 """
 from __future__ import annotations
 
+import html
+import re
+import unicodedata
 from copy import deepcopy
 
 VERSION = 'judgment-evidence-review-v6'
+
+
+def canonical(value) -> str:
+    """Comparison form for verbatim checks: same words, ignoring spacing, punctuation,
+    case, HTML entities/tags and full/half-width forms. Never used for display."""
+    text = re.sub(r"<[^>]+>", "", html.unescape(str(value or "")))
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text).casefold())
+
+
+def quoted_in(quote, *texts) -> bool:
+    """The quote's words occur in one of the texts; pieces joined by an ellipsis must occur in order."""
+    pieces = [canonical(part) for part in re.split(r"…+|\.{3,}", str(quote or ""))]
+    pieces = [part for part in pieces if part]
+    if not pieces or any(len(part) < 4 for part in pieces[1:]):
+        return False
+    for text in texts:
+        haystack, position = canonical(text), 0
+        for part in pieces:
+            found = haystack.find(part, position)
+            if found < 0:
+                break
+            position = found + len(part)
+        else:
+            return True
+    return False
 MAX_DRAFTS = 2
 MAX_FIELDS = 12
 MAX_FIELD_CHARS = 6000
@@ -119,8 +147,8 @@ class ReviewFieldAliases:
                         continue
                     ident = witness['quote_id']
                     span = self.payload.get('evidence_spans', {}).get(ident) if isinstance(ident, str) else None
-                    if (span is None or witness.get('ref') != span['ref']
-                            or ('quote' in witness and witness['quote'] != span['quote'])):
+                    # The program retrieves the span by ID; an echoed quote is not authoritative.
+                    if span is None or witness.get('ref') != span['ref']:
                         raise ValueError('review_evidence_invalid')
                     witness['quote'] = span['quote']
                     del witness['quote_id']
@@ -233,7 +261,7 @@ def validate_review(value, payload):
             if source and status == 'not_factual' and isinstance(quote, str) and not quote.strip():
                 continue
             if (not source or not isinstance(quote, str) or not quote.strip()
-                    or not any(quote in str(source.get(k) or '') for k in ('context', 'title'))):
+                    or not quoted_in(quote, *(str(source.get(k) or '') for k in ('context', 'title')))):
                 raise ValueError('review_evidence_invalid')
         if status in ('contradicted', 'insufficient'):
             issues.append({'field': path, 'code': 'evidence_' + status,
