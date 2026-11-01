@@ -1,4 +1,4 @@
-"""Bounded DSH long-document acceptance. Preview by default; built-in synthetic data only.
+"""Bounded long-document acceptance through the configured model. Preview by default; built-in synthetic data only.
 
 Run with the installed interpreter (-I) to test the installed package. No pilot DB,
 input file or service activation option exists. --run requires operator approval
@@ -27,7 +27,7 @@ from project_watch.company_state import (
     input_packets,
     validate_reading,
 )
-from project_watch.dsh_executor import DshProposalModel
+from project_watch.model_executor import DirectProposalModel
 from project_watch.model_provider import ModelProviderConfig
 from project_watch.repository import ProjectRepository
 
@@ -125,7 +125,7 @@ def load_model(stream=None):
         key = fields.pop("api_key")
         config = ModelProviderConfig(**fields)
         config.resolve_key({config.credential_env: key})
-    return DshProposalModel(config, key, max_runs=2)
+    return DirectProposalModel(config, key, max_runs=2)
 
 
 class ProbeFailed(Exception):
@@ -194,7 +194,7 @@ def exercise(model, *, document_format='text'):
         repo = ProjectRepository(db)
         try:
             with TestClient(app, base_url="http://127.0.0.1") as client:
-                project = client.post("/api/projects", json={"name": "合成光学 · DSH验收"}).json()
+                project = client.post("/api/projects", json={"name": "合成光学 · 模型验收"}).json()
                 project_id = project["id"]
                 route = f"/api/workspace/projects/{project_id}"
                 upload = f"/api/projects/{project_id}/files"

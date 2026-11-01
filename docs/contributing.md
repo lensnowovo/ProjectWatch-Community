@@ -23,9 +23,9 @@ python -m pytest -q
 
 前端在 `frontend` 目录按锁文件执行 `npm ci --ignore-scripts --no-audit --no-fund`，再运行 `npm test` 和 `npm run typecheck`。安装依赖会访问包仓库，但不是模型/搜索验收。不要在当前产品实例的数据目录内运行这些命令。
 
-本地回归必须使用合成数据，不继承真实服务凭据或生产数据库/解析器地址。官方 DSH、PostgreSQL、Docker 等可选集成测试需独立环境和显式测试变量；报告跳过原因，不把默认跳过算通过。打包与真实供应商验收另走固定候选流程。
+本地回归必须使用合成数据，不继承真实服务凭据或生产数据库/解析器地址。PostgreSQL、Docker 等可选集成测试需独立环境和显式测试变量；报告跳过原因，不把默认跳过当作通过。
 
-发布回归优先使用 `scripts/run_offline_tests.py --output <源码外全新目录>`，它会隔离数据并清除继承的提供商配置。双平台作业、官方 DSH 合成协议与独立 wheel 安装的范围及局限见 [CI 说明](release-ci.md)。不能把测试脚本的联网保护当成执行任意不可信代码的安全沙箱。
+发布回归优先使用 `scripts/run_offline_tests.py --output <源码外全新目录>`，它会隔离数据并清除继承的提供商配置。CI 作业、独立 wheel 安装的范围及局限见 [发布 CI](release-ci.md)。
 
 本版本自有代码适用根目录 ProjectWatch 社区使用许可 1.0；第三方部分保留原许可。
 请先与维护者 lensnowovo@gmail.com 确认贡献范围和授权，再合入代码。贡献者保留版权，

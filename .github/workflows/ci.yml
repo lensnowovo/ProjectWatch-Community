@@ -53,8 +53,6 @@
         "python_hash": "${{ steps.select.outputs.python_hash }}",
         "frontend": "${{ steps.select.outputs.frontend }}",
         "frontend_hash": "${{ steps.select.outputs.frontend_hash }}",
-        "native": "${{ steps.select.outputs.native }}",
-        "native_hash": "${{ steps.select.outputs.native_hash }}",
         "installed": "${{ steps.select.outputs.installed }}",
         "installed_hash": "${{ steps.select.outputs.installed_hash }}"
       },
@@ -322,103 +320,6 @@
         }
       ]
     },
-    "native": {
-      "name": "Native DSH",
-      "needs": "plan",
-      "if": "needs.plan.outputs.native == 'true'",
-      "runs-on": "windows-2022",
-      "timeout-minutes": 60,
-      "defaults": {
-        "run": {
-          "shell": "pwsh"
-        }
-      },
-      "steps": [
-        {
-          "name": "Checkout without saved credentials",
-          "uses": "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
-          "with": {
-            "persist-credentials": false,
-            "ref": "${{ github.sha }}"
-          }
-        },
-        {
-          "id": "ci_identity",
-          "name": "Confirm exact workflow commit",
-          "run": "$actual = git rev-parse HEAD\nif ($LASTEXITCODE -ne 0 -or $actual.Trim() -cne $env:GITHUB_SHA) { throw 'Checkout differs from workflow commit' }\nWrite-Output \"Testing exact source $actual\""
-        },
-        {
-          "name": "Python",
-          "uses": "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-          "with": {
-            "python-version": "3.13",
-            "architecture": "x64"
-          }
-        },
-        {
-          "name": "Node",
-          "uses": "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
-          "with": {
-            "node-version": "24.22.1",
-            "package-manager-cache": false
-          }
-        },
-        {
-          "name": "Confirm native runner",
-          "env": {
-            "EXPECTED_ARCH": "x64"
-          },
-          "run": "python -c \"import os,platform; actual=platform.machine().lower(); expected=os.environ['EXPECTED_ARCH']; assert actual in ({'amd64','x86_64'} if expected=='x64' else {'arm64','aarch64'}), actual; print(platform.platform(), actual)\""
-        },
-        {
-          "name": "Install isolated test dependencies",
-          "run": "python -m pip install .[dev,desktop,ocr,mcp,team,postgres] build ruff"
-        },
-        {
-          "name": "Prepare pinned native DSH (no install scripts)",
-          "env": {
-            "DSH_TARGET": "win32-x64"
-          },
-          "run": "python -m scripts.prepare_dsh_runtime --target $env:DSH_TARGET --approved packaging/dsh/third-party-approved.json --out \"$env:RUNNER_TEMP/dsh\""
-        },
-        {
-          "name": "Native DSH with synthetic model gateway",
-          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/native-dsh\" --dsh-runtime \"$env:RUNNER_TEMP/dsh\" tests/test_studio_dsh_runtime.py tests/test_studio_dsh_monitor.py tests/test_collection_model_continuation.py tests/test_bootstrap_collection.py::test_native_collection_role_reads_collects_and_finishes_without_record_tools 'tests/test_event_insight.py::test_worker_delivers_events_then_fresh_fixed_insight_with_no_source_tools[True]' 'tests/test_scope_maintenance.py::test_real_worker_scope_without_judgment_and_completed_receipt_replay[True]' 'tests/test_question_assessment.py::test_fresh_topic_worker_material_then_independent_question_without_judge_or_revise[True]'"
-        },
-        {
-          "id": "ci_proof",
-          "name": "Emit executed domain proof",
-          "env": {
-            "CI_EXPECTED_FINGERPRINT": "${{ needs.plan.outputs.native_hash }}"
-          },
-          "run": "python -I -X utf8 scripts/ci_scope.py proof --domain native --output \"$env:RUNNER_TEMP/ci-proof/proof.json\""
-        },
-        {
-          "id": "ci_upload",
-          "name": "Upload only synthetic test summaries",
-          "if": "always()",
-          "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
-          "with": {
-            "name": "native-summaries",
-            "path": "${{ runner.temp }}/native-dsh/pytest.xml",
-            "retention-days": 7,
-            "if-no-files-found": "warn"
-          }
-        },
-        {
-          "id": "ci_proof_upload",
-          "name": "Upload executed domain proof",
-          "if": "always()",
-          "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
-          "with": {
-            "name": "ci-proof-native-attempt-${{ github.run_attempt }}",
-            "path": "${{ runner.temp }}/ci-proof/proof.json",
-            "retention-days": 7,
-            "if-no-files-found": "warn"
-          }
-        }
-      ]
-    },
     "installed": {
       "name": "Installed wheel",
       "needs": "plan",
@@ -531,7 +432,6 @@
         "plan",
         "python",
         "frontend",
-        "native",
         "installed"
       ],
       "if": "always()",
@@ -569,7 +469,7 @@
           "env": {
             "CI_PLAN": "${{ needs.plan.outputs.plan }}",
             "CI_PLANNER_RESULT": "${{ needs.plan.result }}",
-            "CI_RESULTS": "{\"python\":\"${{ needs.python.result }}\",\"frontend\":\"${{ needs.frontend.result }}\",\"native\":\"${{ needs.native.result }}\",\"installed\":\"${{ needs.installed.result }}\"}"
+            "CI_RESULTS": "{\"python\":\"${{ needs.python.result }}\",\"frontend\":\"${{ needs.frontend.result }}\",\"installed\":\"${{ needs.installed.result }}\"}"
           },
           "run": "python -I -X utf8 scripts/ci_scope.py summary"
         }

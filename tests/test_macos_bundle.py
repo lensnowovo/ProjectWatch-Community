@@ -132,102 +132,24 @@ def test_finder_path_is_single_argument(tmp_path, monkeypatch):
     assert calls == [["/usr/bin/open", str(path)]]
 
 
-def node_tar(tmp_path, arch='arm64', bad_cpu=False, link=False, duplicate=False):
-    archive = tmp_path / 'node.tar.gz'
-    prefix = f'node-{bundle.NODE_VERSION}-darwin-{arch}'
-    header = b'\xcf\xfa\xed\xfe' + struct.pack('<I', 0x01000007 if bad_cpu else 0x0100000C)
-    with tarfile.open(archive, 'w:gz') as stream:
-        for name, payload in [(prefix + '/bin/node', header), (prefix + '/LICENSE', b'Synthetic license')]:
-            item = tarfile.TarInfo(name)
-            item.size = len(payload)
-            if link and name.endswith('/bin/node'):
-                item.type, item.linkname, item.size = tarfile.SYMTYPE, '/outside/node', 0
-            stream.addfile(item, io.BytesIO(payload) if item.isfile() else None)
-            if duplicate:
-                stream.addfile(item, io.BytesIO(payload) if item.isfile() else None)
-    return archive
 
 
-def test_mac_node_archive_pinned_architecture_and_permissions(tmp_path):
-    archive = node_tar(tmp_path)
-    out = tmp_path / 'node'
-    modes = bundle.extract_node(archive, out, 'arm64', bundle.digest(archive))
-    assert modes == {'bin/node': 0o755, 'LICENSE': 0o644}
-    assert (out / 'bin/node').is_file() and (out / 'LICENSE').is_file()
-    with pytest.raises(ValueError, match='exists'):
-        bundle.extract_node(archive, out, 'arm64', bundle.digest(archive))
 
 
-@pytest.mark.parametrize('fault', ['hash', 'architecture', 'symlink', 'duplicate'])
-def test_bad_mac_node_fails_before_writing(tmp_path, fault):
-    archive = node_tar(tmp_path, bad_cpu=fault == 'architecture',
-                       link=fault == 'symlink', duplicate=fault == 'duplicate')
-    out = tmp_path / 'node'
-    with pytest.raises(ValueError):
-        bundle.extract_node(archive, out, 'arm64', 'bad' if fault == 'hash' else bundle.digest(archive))
-    assert not out.exists()
 
 
-def prepared_mac_dsh(tmp_path, bad_cpu=False):
-    prep = bundle.dsh_preparer
-    root = tmp_path / 'prepared-dsh'
-    for name in prep.required_native_packages('darwin-arm64'):
-        package = root / 'node_modules' / name
-        package.mkdir(parents=True)
-        (package / 'package.json').write_text(json.dumps({'name': name, 'version': '1.0.0'}))
-        (package / 'addon.node').write_bytes(
-            b'\xcf\xfa\xed\xfe' + struct.pack('<I', 0x01000007 if bad_cpu else 0x0100000C))
-    manifest = {
-        'format': 'projectwatch-dsh-runtime-v1', 'target': 'darwin-arm64',
-        'dsh_version': prep.dsh_version(), 'lock_sha256': prep.digest(prep.PACKAGING / 'package-lock.json'),
-        'prune_sha256': prep.digest(prep.PACKAGING / 'prune.json'),
-        'target_prune_sha256': prep.target_prune_digest('darwin-arm64'),
-        'third_party_review_open': 0, 'files': prep.file_manifest(root),
-    }
-    (root / prep.MANIFEST).write_text(json.dumps(manifest))
-    return root
 
 
-def test_staging_mac_dsh_keeps_files_and_executable_zip_mode(tmp_path, monkeypatch):
-    root = prepared_mac_dsh(tmp_path)
-    node = node_tar(tmp_path)
-    monkeypatch.setitem(bundle.NODE_HASHES, 'arm64', bundle.digest(node))
-    app = tmp_path / 'ProjectWatch.app'
-    resources = app / 'Contents/Resources'
-    manifest, modes = bundle.stage_dsh(resources, root, node, 'arm64')
-    assert manifest['target'] == 'darwin-arm64'
-    assert bundle.dsh_preparer.file_manifest(root) == bundle.dsh_preparer.file_manifest(resources / 'dsh')
-    zip_path = tmp_path / 'app.zip'
-    bundle.archive_app(app, zip_path, {'Contents/Resources/node/' + p: m for p, m in modes.items()})
-    with zipfile.ZipFile(zip_path) as archive:
-        assert (archive.getinfo('ProjectWatch.app/Contents/Resources/node/bin/node').external_attr >> 16) & 0o777 == 0o755
 
 
-def test_wrong_native_dsh_cpu_rejected_before_staging(tmp_path, monkeypatch):
-    root = prepared_mac_dsh(tmp_path, bad_cpu=True)
-    node = node_tar(tmp_path)
-    monkeypatch.setitem(bundle.NODE_HASHES, 'arm64', bundle.digest(node))
-    resources = tmp_path / 'Resources'
-    with pytest.raises(ValueError, match='architecture'):
-        bundle.stage_dsh(resources, root, node, 'arm64')
-    assert not resources.exists()
 
 
-def test_mac_staging_never_accepts_windows_dsh_manifest(tmp_path):
-    root = prepared_mac_dsh(tmp_path)
-    path = root / bundle.dsh_preparer.MANIFEST
-    manifest = json.loads(path.read_text())
-    manifest['target'] = 'win32-x64'
-    path.write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match='target mismatch'):
-        bundle.stage_dsh(tmp_path / 'Resources', root, tmp_path / 'unused-node', 'arm64')
 
 
 @pytest.mark.parametrize('fault', [None, 'missing', 'changed', 'permission', 'extra'])
 def test_actual_zip_is_checked_against_inventory_and_execution_modes(tmp_path, fault):
     app = tmp_path / 'ProjectWatch.app'
-    names = ['Contents/MacOS/ProjectWatch', 'Contents/Resources/runtime/bin/python3.12',
-             'Contents/Resources/node/bin/node']
+    names = ['Contents/MacOS/ProjectWatch', 'Contents/Resources/runtime/bin/python3.12']
     for rel in names:
         path = app / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -235,7 +157,7 @@ def test_actual_zip_is_checked_against_inventory_and_execution_modes(tmp_path, f
     payload = app / 'Contents/Resources/payload'
     payload.write_bytes(b'synthetic')
     manifest = {'format': 'projectwatch-macos-bundle-v1', 'arch': 'arm64',
-                'files': bundle.dsh_preparer.file_manifest(app)}
+                'files': {p.relative_to(app).as_posix(): bundle.digest(p) for p in sorted(app.rglob('*')) if p.is_file()}}
     (app / 'Contents/Resources/bundle-manifest.json').write_text(json.dumps(manifest))
     modes = {name: 0o755 for name in names}
     if fault == 'missing':
@@ -249,7 +171,7 @@ def test_actual_zip_is_checked_against_inventory_and_execution_modes(tmp_path, f
     archive = tmp_path / 'app.zip'
     bundle.archive_app(app, archive, modes)
     if fault is None:
-        assert bundle.verify_archive(archive) == {'files': 5, 'arch': 'arm64', 'native_execution': False}
+        assert bundle.verify_archive(archive) == {'files': 4, 'arch': 'arm64', 'native_execution': False}
     else:
         with pytest.raises(ValueError):
             bundle.verify_archive(archive)

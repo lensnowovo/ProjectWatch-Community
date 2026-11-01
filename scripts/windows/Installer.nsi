@@ -142,18 +142,6 @@ Section "ProjectWatch（完整功能）" Core
   ; Extended paths are needed during extraction, not just in the Python helper.
   SetOutPath "\\?\$INSTDIR\.payload"
   File /r /x runtimes "${BUNDLE}\*"
-  !ifdef DSH_RUNTIME_ID
-  ${IfNot} ${FileExists} "$INSTDIR\runtimes\${DSH_RUNTIME_ID}\.complete"
-    SetOutPath "\\?\$INSTDIR\.payload\runtimes\${DSH_RUNTIME_ID}"
-    File /r "${BUNDLE}\runtimes\${DSH_RUNTIME_ID}\*"
-  ${EndIf}
-  !endif
-  !ifdef NODE_RUNTIME_ID
-  ${IfNot} ${FileExists} "$INSTDIR\runtimes\${NODE_RUNTIME_ID}\.complete"
-    SetOutPath "\\?\$INSTDIR\.payload\runtimes\${NODE_RUNTIME_ID}"
-    File /r "${BUNDLE}\runtimes\${NODE_RUNTIME_ID}\*"
-  ${EndIf}
-  !endif
   DetailPrint "校验安装文件、检查运行状态并备份资料…"
   StrCpy $0 999
   ClearErrors

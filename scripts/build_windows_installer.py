@@ -60,13 +60,6 @@ def build(args):
     shutil.copy2(helper, frozen_helper)
     artifact = out/'ProjectWatch-Setup.exe'
     settings.update(OUTPUT=str(artifact), BUNDLE=str(bundle), HELPER=str(frozen_helper), VERSION=value['version'])
-    # Shared runtimes are extracted only when the target install lacks a complete copy.
-    for kind in ('dsh', 'node'):
-        rid = (value.get('dsh') or {}).get(kind+'_runtime_id')
-        if rid:
-            if rid not in value.get('runtimes', {}):
-                raise ValueError('Runtime id missing from inventory')
-            settings[kind.upper()+'_RUNTIME_ID'] = rid
     if any('"' in v or '\n' in v for v in settings.values()):
         raise ValueError('Unsafe compiler path')
     command = [str(nsis), '/NOCONFIG', '/INPUTCHARSET', 'UTF8', '/V2', *['/D'+k+'='+v for k, v in settings.items()],

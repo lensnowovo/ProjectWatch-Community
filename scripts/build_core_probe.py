@@ -24,7 +24,6 @@ FONTS = {'newsreader-latin-wght-normal.woff2', 'noto-serif-sc-chinese-simplified
 RUNTIME_ASSETS = {
     'project_watch/static/brand-desktop.png',
     'project_watch/static/brand-tray.png',
-    'project_watch/studio/dsh_tools.mjs',
 }
 
 

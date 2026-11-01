@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from project_watch.dsh_executor import DshProposalModel
+from project_watch.model_executor import DirectProposalModel
 from project_watch.model_provider import ModelProviderConfig
 from project_watch.monitor_strategy import OUTPUT_TOKENS, Packet, digest
 
@@ -37,7 +37,7 @@ def main(argv=None):
         approved = body['approved_packet_digest']
         if body.get('consent') is not True or approved != digest(packet):
             raise ValueError('explicit packet approval required')
-        model = DshProposalModel(config, body['api_key'], max_runs=1)
+        model = DirectProposalModel(config, body['api_key'], max_runs=1)
         dispatched = False
 
         def gate(request):

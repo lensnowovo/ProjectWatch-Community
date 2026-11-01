@@ -50,7 +50,7 @@ def read(root):
     expected = json.loads((root / 'expected.json').read_text(encoding='utf-8'))
     path = root / 'watch.sqlite3'
     blocked = {'project_watch.company_state', 'project_watch.reading_jobs',
-               'project_watch.reading_worker', 'project_watch.dsh_executor'}
+               'project_watch.reading_worker', 'project_watch.model_executor'}
 
     class Block(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path=None, target=None):

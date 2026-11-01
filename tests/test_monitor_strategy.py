@@ -128,17 +128,17 @@ def test_v3_prompt_covers_generic_products_and_each_named_peer():
 
 
 def test_adapter_preserves_gate_failure_and_releases_lock(monkeypatch):
-    from project_watch.dsh_executor import DshProposalModel
     from project_watch.executors import ExecutorUnavailable
+    from project_watch.model_executor import DirectProposalModel
     from project_watch.model_provider import ModelProviderConfig
-    model = DshProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret', max_runs=1)
+    model = DirectProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret', max_runs=1)
     def denied(_):
         raise ValueError('private denial details')
     def run(evidence, **kwargs):
         kwargs['before_send']({})
         pytest.fail('must not continue after consent denial')
     monkeypatch.setattr(model, '_run', run)
-    with pytest.raises(ExecutorUnavailable, match=r'^DSH monitor strategy failed$'):
+    with pytest.raises(ExecutorUnavailable, match=r'^model monitor strategy failed$'):
         model.plan_monitoring(packet(), before_send=denied)
     assert model._lock.acquire(blocking=False)
     model._lock.release()
@@ -147,10 +147,10 @@ def test_adapter_preserves_gate_failure_and_releases_lock(monkeypatch):
 
 
 def test_adapter_requires_gate_and_freezes_source(monkeypatch):
-    from project_watch.dsh_executor import DshProposalModel
     from project_watch.executors import ExecutorUnavailable
+    from project_watch.model_executor import DirectProposalModel
     from project_watch.model_provider import ModelProviderConfig
-    model = DshProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret')
+    model = DirectProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret')
     p, calls = packet(), []
     def run(evidence, **kwargs):
         calls.append(kwargs)
@@ -168,7 +168,7 @@ def test_adapter_requires_gate_and_freezes_source(monkeypatch):
 
 def test_operator_probe_defaults_to_no_network(monkeypatch, capsys):
     from scripts import monitor_strategy_probe as probe
-    monkeypatch.setattr(probe, 'DshProposalModel', lambda *a, **kw: pytest.fail('unexpected model'))
+    monkeypatch.setattr(probe, 'DirectProposalModel', lambda *a, **kw: pytest.fail('unexpected model'))
     assert probe.main([]) == 0
     assert json.loads(capsys.readouterr().out)['mode'] == 'preview_no_network'
 

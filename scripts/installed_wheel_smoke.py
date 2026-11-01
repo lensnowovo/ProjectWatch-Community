@@ -2,7 +2,7 @@
 
 Run with that environment's python -I, never an editable install. It verifies the
 installed bytes against the wheel and tests synthetic local persistence. This is
-not desktop lifecycle, OCR model, native DSH, or real monitoring acceptance.
+not desktop lifecycle, OCR model, or real monitoring acceptance.
 The basic smoke has no worker; --full-journey also runs the synthetic worker flow.
 """
 from __future__ import annotations

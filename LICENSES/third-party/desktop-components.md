@@ -75,7 +75,7 @@ These examples are not company data or additional trained ProjectWatch models.
 
 ## Other retained notices
 
-Node, Python, DSH, frontend dependencies, React Bits and fonts keep their existing
+Python, frontend dependencies, React Bits and fonts keep their existing
 notices and boundaries. Neither this checklist nor ProjectWatch's own license
 grants additional rights to redistribute React Bits as a standalone library or
 template. The final installer/source-export review remains a separate gate.

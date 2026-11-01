@@ -89,19 +89,19 @@ def test_baseline_is_explicit_and_default_matches_measured_candidate(tmp_path):
     from test_external_analysis_compact import compact_output
     from test_external_analysis_selection import selection_output
 
-    from project_watch.dsh_executor import DshProposalModel
+    from project_watch.model_executor import DirectProposalModel
     _, _, _, packet = inputs(tmp_path)
-    assert DshProposalModel._external_analysis_prompt(packet) == probe.CompactProbeModel._external_analysis_prompt(packet)
-    expected = DshProposalModel._resolve_external_analysis(packet, compact_output(packet))
+    assert DirectProposalModel._external_analysis_prompt(packet) == probe.CompactProbeModel._external_analysis_prompt(packet)
+    expected = DirectProposalModel._resolve_external_analysis(packet, compact_output(packet))
     assert probe.SelectionProbeModel._resolve_external_analysis(packet, selection_output(packet)) == expected
-    assert probe.SelectionProbeModel._external_analysis_prompt(packet) != DshProposalModel._external_analysis_prompt(packet)
+    assert probe.SelectionProbeModel._external_analysis_prompt(packet) != DirectProposalModel._external_analysis_prompt(packet)
 
 
 def test_monitoring_candidate_changes_instruction_not_default_or_evidence(tmp_path):
     from test_external_analysis import inputs
     from test_external_analysis_compact import compact_output
 
-    from project_watch.dsh_executor import DshProposalModel
+    from project_watch.model_executor import DirectProposalModel
 
     _, _, _, packet = inputs(tmp_path)
     baseline = probe.CompactProbeModel._external_analysis_prompt(packet)
@@ -110,5 +110,5 @@ def test_monitoring_candidate_changes_instruction_not_default_or_evidence(tmp_pa
     assert 'Monitoring relevance is not verification' not in baseline
     assert candidate.split('OUTPUT_SCHEMA:\n')[1] == baseline.split('OUTPUT_SCHEMA:\n')[1]
     assert probe.MonitoringProbeModel._resolve_external_analysis(packet, compact_output(packet)) == (
-        DshProposalModel._resolve_external_analysis(packet, compact_output(packet)))
-    assert DshProposalModel._external_analysis_prompt(packet) == baseline
+        DirectProposalModel._resolve_external_analysis(packet, compact_output(packet)))
+    assert DirectProposalModel._external_analysis_prompt(packet) == baseline

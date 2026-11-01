@@ -1,6 +1,5 @@
 """Model configuration is explicit, secret-free and protocol-specific."""
 
-import json
 
 import pytest
 
@@ -50,48 +49,11 @@ def test_config_does_not_accept_arbitrary_protocol_or_credentials_as_reference()
         ModelProviderConfig("https://example.test", "openai-completions", "test", "secret-key")
 
 
-def test_patch_cannot_escape_yaml_and_only_points_at_local_proxy():
-    model = 'model:!!js-"injected"'
-    config = ModelProviderConfig("https://example.test", "anthropic-messages", model)
-    patch = config.dsh_proxy_patch(12345)
-    route = json.loads(patch.split("      config: ")[1])["providers"]["project-watch-model"]
-    assert route["models"][0]["id"] == model
-    assert route["apiKeyEnv"] == "PROJECT_WATCH_MODEL_PROXY_TOKEN"
-    assert route["baseURL"] == "http://127.0.0.1:12345"
-    assert route["retryPolicy"]["maxRetries"] == 0
-    assert "example.test" not in patch
-
-
-def test_key_reference_missing_key_and_child_isolation(monkeypatch):
-    from scripts.dsh_live_probe import _probe_child_environment
-
+def test_key_reference_and_missing_key():
     config = ModelProviderConfig("https://example.test", "anthropic-messages", "test", "CUSTOM_KEY")
     with pytest.raises(ValueError, match="missing"):
         config.resolve_key({})
     assert config.resolve_key({"CUSTOM_KEY": "synthetic-secret"}) == "synthetic-secret"
-    monkeypatch.setenv("PROJECT_WATCH_MODEL_KEY_ENV", "CUSTOM_KEY")
-    for name in ("CUSTOM_KEY", "PROJECT_WATCH_MODEL_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        monkeypatch.setenv(name, "synthetic-secret")
-    assert "synthetic-secret" not in _probe_child_environment().values()
-
-
-def test_subscription_mode_is_explicit_and_does_not_invent_prices(monkeypatch):
-    from scripts.dsh_tool_turn_probe import _configured_policy
-
-    config = ModelProviderConfig("https://example.test", "anthropic-messages", "test")
-    monkeypatch.setenv("PROJECT_WATCH_MODEL_BUDGET_MODE", "request_quota")
-    policy = _configured_policy(config)
-    assert policy.max_cost_cny is None
-    assert policy.max_requests == 4
-    assert policy.max_output_tokens_per_request == 300
-    monkeypatch.setenv("PROJECT_WATCH_MODEL_MAX_OUTPUT_TOKENS", "768")
-    assert _configured_policy(config).max_output_tokens_per_request == 768
-    monkeypatch.setenv("PROJECT_WATCH_MODEL_MAX_OUTPUT_TOKENS", "1025")
-    with pytest.raises(ValueError, match="1024"):
-        _configured_policy(config)
-    monkeypatch.setenv("PROJECT_WATCH_MODEL_BUDGET_MODE", "typo")
-    with pytest.raises(ValueError):
-        _configured_policy(config)
 
 
 def test_settings_require_explicit_endpoint_protocol_and_model():

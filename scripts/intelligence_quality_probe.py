@@ -1,4 +1,4 @@
-"""Bounded, real DSH evaluation using ONLY the checked-in synthetic corpus.
+"""Bounded, real model evaluation using ONLY the checked-in synthetic corpus.
 
 No project DB, file discovery, public searches or publication. Expected answers
 and reviewer boundaries are never sent to the model. Failed calls stay in the
@@ -13,12 +13,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from project_watch.analysis_failures import failure_code
-from project_watch.dsh_executor import DshProposalModel
 from project_watch.external_analysis import Packet, digest
+from project_watch.model_executor import DirectProposalModel
 from project_watch.model_provider import ModelProviderConfig
 
 
-class CompactProbeModel(DshProposalModel):
+class CompactProbeModel(DirectProposalModel):
     """Pin the compact wire even if a later release changes the default."""
 
     @staticmethod
@@ -32,7 +32,7 @@ class CompactProbeModel(DshProposalModel):
         return resolve_compact_analysis(packet, output)
 
 
-class SelectionProbeModel(DshProposalModel):
+class SelectionProbeModel(DirectProposalModel):
     """Keep the original baseline explicitly selectable for controlled comparison."""
 
     @staticmethod

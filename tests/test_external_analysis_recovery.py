@@ -139,9 +139,9 @@ def test_retry_api_protects_consent_project_and_replays(tmp_path, monkeypatch):
 def test_dsh_validation_is_classified_without_retaining_output(tmp_path, monkeypatch):
     from test_external_analysis_compact import compact_output as selection_output
 
-    from project_watch.dsh_executor import DshProposalModel, parse_proposal_stream
+    from project_watch.model_executor import DirectProposalModel, parse_proposal_stream
     s = sample(tmp_path)
-    model = DshProposalModel(s[4].config, 'synthetic-key')
+    model = DirectProposalModel(s[4].config, 'synthetic-key')
     packet = s[3]
     for raw, code in [({}, 'output_schema'), (selection_output(packet), 'citation_mismatch')]:
         if raw:

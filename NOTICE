@@ -32,12 +32,10 @@ Third-party material retains its original terms. In particular:
   source installations obtain them separately. Supplemental upstream texts
   and the desktop component/source checklist are in LICENSES/third-party/.
   ProjectWatch does not purport to relicense any of these components.
-- Desktop installers bundle DSH (@deepseek-ai/dsh, MIT, DeepSeek) and its
-  lock-pinned npm dependencies. Windows stores these in runtimes/<dsh-id>/,
-  with THIRD-PARTY-NOTICES.txt and LICENSES/ below that directory. Node.js
-  is in runtimes/<node-id>/ with its LICENSE, including built-in components.
-  The bundle manifest identifies the exact runtime IDs. Older bundles and
-  macOS layouts may use dsh/ and node/ directly.
+- Current desktop installers bundle no agent runtime or Node.js. Earlier
+  installers bundled DSH (@deepseek-ai/dsh, MIT, DeepSeek) with its npm
+  dependencies and Node.js; an existing Windows install keeps those, with
+  their notices, under runtimes/ until uninstall.
 - LGPL-covered libraries retain their original rights, including replacement
   and reverse engineering for debugging modifications to those libraries.
   The ProjectWatch license does not restrict those rights. See the desktop

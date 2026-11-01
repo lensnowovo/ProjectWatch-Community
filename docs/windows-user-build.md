@@ -14,28 +14,18 @@
 - 数据目录为 `%LOCALAPPDATA%/ProjectWatch-Desktop`，与程序、原开发者版数据目录分离。已有资料没有自动迁移；迁移必须另行备份并验证。
 - 重复启动先验证本机实例身份，再打开已有实例。退出沿用完整任务排空机制，不强杀付费请求或其他进程。
 - 电脑休眠或关机期间不继续监控；本地用户版不等于云端常驻服务。
-- 安装包自带 DSH 研究引擎与 Node.js，安装到程序根目录的 `runtimes/<内容标识>`，不同版本可共用未改变的运行时。全新安装默认启用 DSH；旧版升级保留此前执行方式，不因缺少设置文件就静默切换。
-  设置 → 研究引擎可以关闭，重启后生效。自带运行时缺失、损坏或版本不符时程序照常启动，
-  显示“不可用”与原因，自动研究暂停，不悄悄改用经典流程。数据目录中的
-  `desktop-runtime.json` 仍可指定自定义 DSH 与 Node 路径，升级不会覆盖它。
+- 安装包不再附带 DSH 研究引擎与 Node.js：监控与分析直接调用你配置的模型。旧版安装在 `runtimes/` 下留下的运行时不再使用，卸载时一并移除。
 
 ## 维护者构建
 
-维护者需要 Python 构建环境、Node 和 Windows C# 编译器；这些不是最终用户的前置条件。
+维护者需要 Python 构建环境、Node（只用于构建前端）和 Windows C# 编译器；这些不是最终用户的前置条件。
 
 1. 在隔离源码目录安装开发依赖，运行测试和前端构建。Windows 打包环境固定 `pip==26.2.2`，其 vendored distlib 必须为 `0.4.2`；构建器校验版本并随包保留许可。用 `python -m build --wheel` 构建完整 wheel。
 2. 从 Python 官方下载脚本固定版本的 Windows x64 embeddable ZIP，核对 `scripts/build_windows_bundle.py` 中的 SHA-256。
 3. 准备针对 CPython 3.13 / win_amd64 的离线 wheelhouse，覆盖 `desktop,ocr,mcp,team,postgres` extras；目录内只保留本次解析出的各一个版本，包含与 `--wheel` 完全相同的产品 wheel。下载发生在构建机，不在用户首次启动时发生。运行 `python -m scripts.freeze_windows_dependencies --wheelhouse <依赖目录> --product <完整wheel> --out <新的依赖锁JSON>` 固定每个 wheel 的版本、目标与 SHA-256；该锁不代表安全或许可通过。
-4. 准备 DSH 运行时：在 Windows x64 上运行 `python scripts/prepare_dsh_runtime.py --out <全新目录> --approved <已审许可清单>`。
-   它按 `packaging/dsh/package-lock.json` 执行 `npm ci --ignore-scripts`（**需要联网访问 npm 官方源**），
-   按 `packaging/dsh/prune.json` 删除不会加载的部分，逐包核对锁文件版本，生成
-   `THIRD-PARTY-NOTICES.txt`、`third-party-review.json` 与文件哈希清单。审查清单中有未处理项时打包拒绝继续；
-   `--approved` 只能由维护者逐项核对后提供。`--installed <已有 npm ci 目录>` 仅用于离线复核同一锁文件的结果。
-5. 从 Node.js 官方下载 `scripts/build_windows_bundle.py` 中固定版本的 win-x64 ZIP，核对其中固定的 SHA-256
-   （首次使用前须按官方 `SHASUMS256.txt` 填入；为空时打包拒绝继续）。只提取 `node.exe` 与 `LICENSE`。
-6. 运行 `python -m scripts.build_windows_bundle --runtime <ZIP> --wheel <完整wheel> --wheelhouse <依赖目录> --dependency-lock <依赖锁JSON> --compiler <csc.exe> --dsh <上一步目录> --node-zip <Node ZIP> --out <全新输出目录>`。构建用 `pip --isolated --no-index --require-hashes`，缺件、额外文件、重复版本或哈希变化均拒绝继续；安装后的依赖版本集合必须与锁一致。随包保存相对文件清单及哈希锁，不包含构建机路径。
-7. 构建拒绝覆盖旧目录；安装后的产品内容必须逐文件等于指定 wheel，DSH 目录必须逐文件等于其清单。依赖命令保留完整入口：仅将已识别 distlib 启动器的构建机解释器路径改为相对包内 Python，脚本使用中性 shebang；原可执行前缀和 ZIP 入口不变，逐项校验并更新 RECORD。未知格式、内容不符或归属不明时拒绝构建。输出清单包含文件哈希、运行时、产品输入哈希及改写命令名，不代表发布授权。
-8. 用包内 `runtime/python.exe -I -B` 运行 `scripts/installed_wheel_smoke.py --wheel <本次wheel> --output <全新回执目录>`，再运行 `tests/windows_desktop_smoke.py --home <全新合成目录>`；`--tray` 可验证真实托盘的定时安全退出。测试不能指向用户数据。
+4. 运行 `python -m scripts.build_windows_bundle --runtime <ZIP> --wheel <完整wheel> --wheelhouse <依赖目录> --dependency-lock <依赖锁JSON> --compiler <csc.exe> --out <全新输出目录>`。构建用 `pip --isolated --no-index --require-hashes`，缺件、额外文件、重复版本或哈希变化均拒绝继续；安装后的依赖版本集合必须与锁一致。随包保存相对文件清单及哈希锁，不包含构建机路径。
+5. 构建拒绝覆盖旧目录；安装后的产品内容必须逐文件等于指定 wheel。依赖命令保留完整入口：仅将已识别 distlib 启动器的构建机解释器路径改为相对包内 Python，脚本使用中性 shebang；原可执行前缀和 ZIP 入口不变，逐项校验并更新 RECORD。未知格式、内容不符或归属不明时拒绝构建。输出清单包含文件哈希、运行时、产品输入哈希及改写命令名，不代表发布授权。
+6. 用包内 `runtime/python.exe -I -B` 运行 `scripts/installed_wheel_smoke.py --wheel <本次wheel> --output <全新回执目录>`，再运行 `tests/windows_desktop_smoke.py --home <全新合成目录>`；`--tray` 可验证真实托盘的定时安全退出。测试不能指向用户数据。
 
 ## 发布前仍需完成
 

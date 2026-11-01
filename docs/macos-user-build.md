@@ -8,7 +8,7 @@
 
 当前后端的材料解析、监控调度、存储及分析由 Python 实现，所以本实现运行时需要解释器。
 这不等于必须让使用者安装 Python：解释器、原生依赖和所有分析模块一起放入 `.app`。
-前端已经构建为静态文件。DSH 研究引擎需要 Node，当前打包器会把固定 Node 和对应芯片的 DSH 依赖放进 `.app`，不使用系统 Node；npm 仅在维护者构建时使用。
+前端已经构建为静态文件；运行时不需要 Node，也不附带 DSH 研究引擎（监控与分析直接调用你配置的模型）。
 重写成另一种语言并不是解决安装门槛的必要条件。
 
 ## 包型与边界
@@ -17,7 +17,7 @@
 - Intel：保留构建代码，首发暂缓；历史 Intel 候选不是本轮正式资产。
 - plist 目前声明 macOS 13.0；最终支持下限须经内置运行时及实机共同核对，尚不宣称全部 13+ 已验收。不混用两种芯片的 Python 扩展，不宣称 Universal2 单包。
 - 使用已核验哈希的 Astral python-build-standalone CPython 3.12.15，完整功能 wheel、OCR/MCP/team/PostgreSQL 客户端及预构建页面。
-- 内置固定 Node v24.13.1、DSH 0.2.1-rc.2，默认启用 DSH；已有显式关闭/自定义路径设置保留。损坏时显示不可用，不静默退回经典流程。当前只完成跨平台组装检查，原生协议与实机验收另行记录。
+- 不内置 Node 或 DSH。当前只完成跨平台组装检查，实机验收另行记录。
 - 数据独立保存于 `~/Library/Application Support/ProjectWatch-Desktop`；不自动搬入已有开发者实例的数据。
 - 删除或替换 `.app` 不删除此目录；替换前从菜单栏正常退出并备份，不能在运行中覆盖应用。
 - 保留项目暂停状态及未知付费结果保护。启动时未暂停的项目按已有配置运行，可能调用用户服务。
@@ -35,27 +35,20 @@ Windows 可以组装 Mac 目标文件、检查 Mach-O 架构/Python ABI、校验
 ## 维护者构建
 
 用独立工作区准备完整 wheel（已有分析和 `web/assets` 不可缺少）。下载 builder 中锁定的上游 runtime，核对 GitHub release 提供的 SHA-256。
-构建工具需 Python 3.12、uv、支持 `--os`/`--cpu` 的 npm（本轮 npm 11）；依赖安装只发生在新输出目录，没有修改全局环境。
-先按锁文件准备目标 DSH，不可复用 Windows `node_modules`。Node 从 `scripts/build_macos_bundle.py` 指定的官方 URL 下载并核对固定哈希；仅装入执行文件与 LICENSE，不附 npm。
+构建工具需 Python 3.12 与 uv；依赖安装只发生在新输出目录，没有修改全局环境。
 
 ```bash
 python -m build --wheel
-python -m scripts.prepare_dsh_runtime \
-  --target darwin-arm64 \
-  --approved packaging/dsh/third-party-approved.json \
-  --out /absolute/new/path/dsh-darwin-arm64
 python -m scripts.build_macos_bundle \
   --arch arm64 \
   --runtime /absolute/path/python-arm64.tar.gz \
   --wheel /absolute/path/projectwatch_local-0.2.0a1-py3-none-any.whl \
-  --dsh /absolute/new/path/dsh-darwin-arm64 \
-  --node-archive /absolute/path/node-v24.13.1-darwin-arm64.tar.gz \
   --out /absolute/new/path/arm64-candidate
 ```
 
-上例 wheel 文件名仅示意，不是最终 RC 版本号；正式候选须从同一冻结源码重建两平台及唯一版本。Intel 若后续恢复，需要 `darwin-x64` DSH、对应 Node/Python 和独立许可/实机验收，本轮不交付。
+上例 wheel 文件名仅示意，不是最终 RC 版本号；正式候选须从同一冻结源码重建两平台及唯一版本。Intel 若后续恢复，需要对应 Python 和独立许可/实机验收，本轮不交付。
 输出必须全新且在源码外；部分失败产物留作排查，不能当成功包交付。
-构建器不下载 Python/Node、不扫描用户 Key/数据库，显式供应归档；npm 准备步骤会下载锁定依赖，uv 仍会解析/下载目标 Python 依赖，最终 RC 的 Python 依赖冻结尚需收口。
+构建器不下载 Python、不扫描用户 Key/数据库，显式供应归档；uv 仍会解析/下载目标 Python 依赖，最终 RC 的 Python 依赖冻结尚需收口。
 Python 本体与第三方原有许可均保留；每个候选记录 runtime/wheel/file 哈希及 `publication_authorized: false`。
 审核后发布必须携带对应源码和适用的第三方许可/源码材料，已有许可待核事项不因新包自动关闭。
 
@@ -68,7 +61,6 @@ Python 本体与第三方原有许可均保留；每个候选记录 runtime/whee
 
 1. 解压并复制到“应用程序”，双击打开。记录系统安全提示，不能假定未签名候选可直接运行。
 2. 菜单栏出现图标，浏览器显示首次配置页；系统环境无需添加 Python/Node。
-   设置页研究引擎应显示包内 DSH 与 Node 版本；另用合成网关验证真实 DSH 协议，不把 Windows 上的 Mach-O 检查算作已执行。
 3. 用自己的账号显式测试连接；确认费用后，名字建项目与合成 BP 上传各一次。真实 BP 须另有披露授权。
 4. 暂停项目、保留一份合成原件，从菜单栏退出后重新打开；配置、原件和暂停状态不变。
 5. 再次双击只重开现有页面，不开第二个后台任务进程。
@@ -84,4 +76,3 @@ Python 本体与第三方原有许可均保留；每个候选记录 runtime/whee
 - [pystray 主线程与平台要求](https://pystray.readthedocs.io/en/latest/usage.html)
 - [源码开发者入口](macos-developer.md)
 - [npm 目标平台配置](https://docs.npmjs.com/cli/v11/using-npm/config/)：`os`/`cpu` 只选择原生依赖，不能在 Windows 上执行 Darwin。
-- [固定 Node 官方校验清单](https://nodejs.org/dist/v24.13.1/SHASUMS256.txt)：本轮核验 HTTPS SHA-256，尚未验证其 GPG 签名。

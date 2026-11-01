@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DOMAINS = ('python', 'frontend', 'native', 'installed')
+DOMAINS = ('python', 'frontend', 'installed')
 WORKFLOW = '.github/workflows/ci.yml'
 FORMAT = 'projectwatch-ci-domain-v1'
 TTL = timedelta(days=7)
@@ -47,6 +47,7 @@ LEGACY = {
 }
 LEGACY_COMMON = ('Checkout without saved credentials', 'Python', 'Node',
                  'Confirm native runner', 'Install isolated test dependencies')
+# Step names of the reviewed legacy run (including its retired native DSH domain).
 LEGACY_STEPS = {
     'python': (*LEGACY_COMMON, 'Lint', 'Architecture boundaries', 'Offline Python suite'),
     'frontend': (*LEGACY_COMMON, 'Frontend dependencies', 'Frontend tests', 'Frontend types',
@@ -101,10 +102,8 @@ def domains_for(path):
         # Public Python fixtures exercise shared backend behavior. Avoid a speculative import graph.
         return set(DOMAINS)
     if path.startswith('tests/'):
-        # Native/installed harnesses import test helpers; all non-UI fixtures are shared.
+        # Installed harnesses import test helpers; all non-UI fixtures are shared.
         return set(DOMAINS)
-    if path.startswith('packaging/dsh/') or path == 'scripts/prepare_dsh_runtime.py':
-        return {'python', 'native', 'installed'}
     if path == 'scripts/run_offline_tests.py':
         return set(DOMAINS)
     # Licenses, package rules, scripts, dependency declarations, and unknown paths fail full.

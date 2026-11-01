@@ -24,7 +24,7 @@ def main():
                    'monitor_profile_store', 'company_reading_view', 'literal_metrics', 'evidence_proposals',
                    'holding_input', 'identity_input', 'followup_records'):
         assert (package / (module + '.py')).is_file(), 'Base intake contract must remain available'
-    for module in ('dsh_executor', 'model_settings', 'external_analysis', 'monitor_briefing',
+    for module in ('model_executor', 'model_settings', 'external_analysis', 'monitor_briefing',
                    'monitor_profile', 'company_state', 'reading_jobs', 'candidate_metrics', 'tasks',
                    'holding_snapshots', 'identity_review', 'watch_items'):
         assert not (package / (module + '.py')).exists(), 'Unused legacy executor chain must be absent'

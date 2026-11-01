@@ -116,7 +116,6 @@ const CODE_MESSAGE: Record<string, string> = {
   model_output_truncated: "模型输出不完整，请在设置中提高单次回复上限后重试。",
   model_http_failure: "模型服务返回错误，请稍后重试。",
   model_access_denied: "模型服务拒绝访问，请检查密钥。",
-  dsh_unavailable: "DSH 研究引擎不可用，自动研究已暂停，已有结果保留。请到设置 → 研究引擎查看。",
   commercial: "专业来源暂时无法读取，已保留上次结果。",
 };
 

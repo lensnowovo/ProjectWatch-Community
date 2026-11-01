@@ -16,9 +16,9 @@ def test_actual_profile_removes_classic_but_preserves_all_core_contract_app():
     config = json.loads((ROOT / 'scripts/layer_map.json').read_text(encoding='utf-8'))
     full = inventory(ROOT)
     studio = inventory(ROOT, profile='studio')
-    assert len(full['retained_legacy_modules']) == 71
+    assert len(full['retained_legacy_modules']) == 70  # dsh_executor, dsh_profile -> model_executor
     assert 'project_watch.api' in studio['excluded_legacy_modules']
-    for module in ('model_settings', 'dsh_executor', 'external_analysis', 'monitor_briefing',
+    for module in ('model_settings', 'model_executor', 'external_analysis', 'monitor_briefing',
                    'monitor_profile', 'company_state', 'reading_jobs', 'candidate_metrics', 'tasks',
                    'holding_snapshots', 'identity_review', 'watch_items'):
         assert 'project_watch.' + module in studio['excluded_legacy_modules']

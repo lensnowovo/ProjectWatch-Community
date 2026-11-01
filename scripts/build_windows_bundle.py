@@ -1,9 +1,8 @@
 """Build a local-only Windows bundle from reviewed runtime and offline wheels.
 
 Never discovers user settings or downloads providers. A caller supplies the
-runtime ZIP (official SHA-256 pinned here), wheelhouse, complete product wheel,
-the DSH runtime made by ``prepare_dsh_runtime.py`` and the official Node.js ZIP
-(SHA-256 pinned here). DSH and Node ship beside the Python runtime and are used by default.
+runtime ZIP (official SHA-256 pinned here), wheelhouse and complete product wheel.
+No agent runtime or Node.js is shipped: the app calls the configured model directly.
 Output must be new and outside the repository; publication is a separate action.
 """
 from __future__ import annotations
@@ -21,10 +20,6 @@ from pathlib import Path, PurePosixPath
 PYTHON_VERSION = '3.13.17'
 RUNTIME_URL = 'https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip'
 RUNTIME_SHA256 = '9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38'
-NODE_VERSION = 'v24.22.1'
-NODE_URL = f'https://nodejs.org/dist/{NODE_VERSION}/node-{NODE_VERSION}-win-x64.zip'
-# From the official SHASUMS256.txt of this release (fetched over HTTPS; signature not verified).
-NODE_SHA256 = 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5'
 
 
 def runtime_digest(files):
@@ -63,33 +58,6 @@ def extract_runtime(archive: Path, dest: Path, expected: str):
             seen.add(name.casefold())
         dest.mkdir()
         z.extractall(dest)
-
-
-def extract_node(archive: Path, dest: Path, expected: str):
-    """Only node.exe and its license; npm/corepack are not shipped."""
-    if not expected:
-        raise ValueError('Node.js archive hash is not pinned')
-    if digest(archive) != expected:
-        raise ValueError('Node.js hash mismatch')
-    if dest.exists():
-        raise ValueError('Node destination exists')
-    prefix = f'node-{NODE_VERSION}-win-x64/'
-    with zipfile.ZipFile(archive) as z:
-        wanted = {prefix + 'node.exe': 'node.exe', prefix + 'LICENSE': 'LICENSE'}
-        if not set(wanted) <= set(z.namelist()):
-            raise ValueError('Unexpected Node.js archive layout')
-        dest.mkdir()
-        for member, name in wanted.items():
-            (dest/name).write_bytes(z.read(member))
-
-
-def load_dsh_preparer(repo: Path):
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location('prepare_dsh_runtime', repo/'scripts/prepare_dsh_runtime.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def verify_product(wheel: Path, site: Path):
@@ -132,12 +100,6 @@ def build(args):
     # Validate every input before creating a partial output.
     if digest(args.runtime) != RUNTIME_SHA256:
         raise ValueError('Runtime hash mismatch')
-    if not NODE_SHA256:
-        raise ValueError('Node.js archive hash is not pinned')
-    if digest(args.node_zip) != NODE_SHA256:
-        raise ValueError('Node.js hash mismatch')
-    preparer = load_dsh_preparer(repo)
-    dsh_manifest = preparer.verify_prepared(args.dsh.resolve(), target='win32-x64')
     from email.parser import BytesParser
     with zipfile.ZipFile(wheel) as z:
         meta, = [n for n in z.namelist() if n.endswith('.dist-info/METADATA')]
@@ -178,20 +140,9 @@ def build(args):
         shutil.copyfile(repo/name, dest/name)
     shutil.copytree(repo/'LICENSES', dest/'LICENSES')
     shutil.copyfile(launcher_license, dest/'LICENSES/third-party/Distlib-0.4.2.txt')
-    # DSH and Node are shared runtimes: installed once under runtimes/<content id> and
-    # reused by later versions that carry identical content. The prepared DSH tree keeps
-    # its own notices and manifest; Node keeps its LICENSE.
-    staged = dest/'runtimes'
-    staged.mkdir()
-    shutil.copytree(args.dsh.resolve(), staged/'dsh.tmp')
-    extract_node(args.node_zip, staged/'node.tmp', NODE_SHA256)
-    runtimes, runtime_ids = {}, {}
-    for kind, label in (('dsh', dsh_manifest['dsh_version']), ('node', NODE_VERSION.lstrip('v'))):
-        folder = staged/(kind+'.tmp')
-        files = {p.relative_to(folder).as_posix(): digest(p) for p in sorted(folder.rglob('*')) if p.is_file()}
-        rid = f'{kind}-{label}-' + runtime_digest(files)[:16]
-        folder.rename(staged/rid)
-        runtimes[rid], runtime_ids[kind] = {'files': files}, rid
+    # The shared-runtime area stays in the manifest format (empty); maintain.py
+    # retires runtimes that no installed version references any more.
+    runtimes = {}
     inventory = {}
     for path in sorted(dest.rglob('*')):
         if path.is_file() and not path.relative_to(dest).as_posix().startswith('runtimes/'):
@@ -202,10 +153,6 @@ def build(args):
         'product_wheel_sha256': digest(wheel),
         'dependency_lock_sha256': digest(dest/'dependency-lock.json'),
         'portable_dependency_scripts': portable_scripts,
-        'dsh': {'version': dsh_manifest['dsh_version'], 'lock_sha256': dsh_manifest['lock_sha256'],
-                'runtime_manifest_sha256': digest(staged/runtime_ids['dsh']/preparer.MANIFEST),
-                'dsh_runtime_id': runtime_ids['dsh'], 'node_runtime_id': runtime_ids['node'],
-                'node_version': NODE_VERSION, 'node_url': NODE_URL, 'node_sha256': NODE_SHA256},
         'files': inventory, 'runtimes': runtimes, 'publication_authorized': False}
     (dest/'bundle-manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     print(json.dumps({'files': len(inventory), 'runtime_files': {k: len(v['files']) for k, v in runtimes.items()},
@@ -214,7 +161,7 @@ def build(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('runtime', 'wheel', 'wheelhouse', 'dependency-lock', 'compiler', 'dsh', 'node-zip', 'out'):
+    for name in ('runtime', 'wheel', 'wheelhouse', 'dependency-lock', 'compiler', 'out'):
         parser.add_argument('--'+name, type=Path, required=True)
     build(parser.parse_args())
 

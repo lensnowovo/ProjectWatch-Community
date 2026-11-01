@@ -138,11 +138,11 @@ def test_material_bounds_rejected_not_silently_clipped(tmp_path, field, value):
 def test_dsh_external_adapter_preserves_budget_gate_and_validates(monkeypatch, tmp_path):
     from test_external_analysis_compact import compact_output as selection_output
 
-    from project_watch.dsh_executor import DshProposalModel
     from project_watch.executors import ExecutorUnavailable
+    from project_watch.model_executor import DirectProposalModel
     from project_watch.model_provider import ModelProviderConfig
     _, _, _, packet = inputs(tmp_path)
-    model = DshProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret', max_runs=1)
+    model = DirectProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret', max_runs=1)
     captured = []
     monkeypatch.setattr(model, '_run', lambda evidence, **kw: captured.append(kw) or selection_output(packet))
     def gate(body):
@@ -190,12 +190,12 @@ def test_prompt_is_data_only_and_never_contains_local_metadata(tmp_path):
 def test_changed_caller_input_cannot_rebind_model_result(monkeypatch, tmp_path):
     from test_external_analysis_compact import compact_output as selection_output
 
-    from project_watch.dsh_executor import DshProposalModel
     from project_watch.external_analysis import digest
+    from project_watch.model_executor import DirectProposalModel
     from project_watch.model_provider import ModelProviderConfig
     _, _, _, packet = inputs(tmp_path)
     original = deepcopy(packet)
-    model = DshProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret')
+    model = DirectProposalModel(ModelProviderConfig('https://example.test', 'anthropic-messages', 'test'), 'secret')
 
     def run(evidence, **kw):
         packet['references'][-1]['text'] = '调用方已改成另一份内容。'

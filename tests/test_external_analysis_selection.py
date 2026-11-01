@@ -120,11 +120,11 @@ def test_model_wire_selection_is_published_and_revalidated_without_a_second_call
     from test_external_analysis_compact import compact_output
     from test_external_analysis_jobs import allow, sample
 
-    from project_watch.dsh_executor import DshProposalModel
+    from project_watch.model_executor import DirectProposalModel
     s = sample(tmp_path)
     allow(s)
     calls = []
-    model = DshProposalModel(s[4].config, 'synthetic-key')
+    model = DirectProposalModel(s[4].config, 'synthetic-key')
     # Test fixture consent already uses this receiver identity.
     monkeypatch.setattr(model, 'authorization_id', s[4].authorization_id)
     s[5].get = lambda: model

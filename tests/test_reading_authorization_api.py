@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from project_watch.api import create_app
-from project_watch.dsh_executor import DshProposalModel
+from project_watch.model_executor import DirectProposalModel
 from project_watch.model_provider import ModelProviderConfig
 from project_watch.repository import ProjectRepository
 
@@ -14,7 +14,7 @@ def client_setup(tmp_path, monkeypatch):
     repo = ProjectRepository(tmp_path / "watch.sqlite3")
     project = repo.create_project("Synthetic reading")
     source = repo.add_source(project.id, kind="document", reference="bp.txt", content_sha256="a" * 64)
-    model = DshProposalModel(ModelProviderConfig("https://example.test", "anthropic-messages", "fake"), "never-return")
+    model = DirectProposalModel(ModelProviderConfig("https://example.test", "anthropic-messages", "fake"), "never-return")
     client = TestClient(create_app(repo.db_path, proposal_model=model), base_url="http://127.0.0.1")
     return repo, project, source, model, client
 
@@ -57,10 +57,10 @@ def test_explicit_consent_and_restart(tmp_path, monkeypatch):
 
 def test_credential_or_receiver_change_invalidates_fingerprint():
     config = ModelProviderConfig("https://example.test", "anthropic-messages", "fake")
-    original = DshProposalModel(config, "key1")
-    assert original.authorization_id() == DshProposalModel(config, "key1").authorization_id()
-    assert original.authorization_id() != DshProposalModel(config, "key2").authorization_id()
-    assert original.authorization_id() != DshProposalModel(
+    original = DirectProposalModel(config, "key1")
+    assert original.authorization_id() == DirectProposalModel(config, "key1").authorization_id()
+    assert original.authorization_id() != DirectProposalModel(config, "key2").authorization_id()
+    assert original.authorization_id() != DirectProposalModel(
         ModelProviderConfig("https://other.test", "anthropic-messages", "fake"), "key1").authorization_id()
 
 

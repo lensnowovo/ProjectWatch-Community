@@ -2275,8 +2275,8 @@ def create_local_app() -> FastAPI:
     configured = os.environ.get("PROJECT_WATCH_DB_PATH")
     if not configured:
         raise RuntimeError("PROJECT_WATCH_DB_PATH must name an explicit local SQLite file")
-    from project_watch.dsh_executor import configured_local_model
     from project_watch.feeds import parse_fixed_feed_targets
+    from project_watch.model_executor import configured_local_model
 
     return create_app(
         Path(configured),

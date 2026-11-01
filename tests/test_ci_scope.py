@@ -71,8 +71,8 @@ def test_ci_grouping_names_and_time_budgets_do_not_change_execution_inputs():
 @pytest.mark.parametrize('mutation', ['command', 'env', 'if', 'continue-on-error', 'runner', 'python', 'node'])
 def test_execution_semantics_invalidate_the_affected_domain(mutation):
     flow = copy.deepcopy(FLOW)
-    job = flow['jobs']['native']
-    step = next(s for s in job['steps'] if s['name'] == 'Native DSH with synthetic model gateway')
+    job = flow['jobs']['installed']
+    step = next(s for s in job['steps'] if s['name'] == 'Fresh installed-wheel smoke')
     if mutation == 'command':
         step['run'] += ' tests/test_new_contract.py'
     elif mutation in {'env', 'if', 'continue-on-error'}:
@@ -82,8 +82,8 @@ def test_execution_semantics_invalidate_the_affected_domain(mutation):
     else:
         setup = next(s for s in job['steps'] if s['name'].lower() == mutation)
         setup['with'][mutation + '-version'] = 'different'
-    assert fingerprints(flow=flow)['native'] != fingerprints()['native']
-    assert all(fingerprints(flow=flow)[d] == fingerprints()[d] for d in ci.DOMAINS if d != 'native')
+    assert fingerprints(flow=flow)['installed'] != fingerprints()['installed']
+    assert all(fingerprints(flow=flow)[d] == fingerprints()[d] for d in ci.DOMAINS if d != 'installed')
 
 
 @pytest.mark.parametrize('key', ['env', 'defaults'])
@@ -244,7 +244,7 @@ def test_first_or_full_or_unavailable_evidence_runs_all():
 def test_summary_rejects_any_selected_domain_that_did_not_succeed(status):
     plan = selected(Evidence(), force_full=True)
     results = dict.fromkeys(ci.DOMAINS, 'success')
-    results['native'] = status
+    results['installed'] = status
     with pytest.raises(ValueError):
         ci.summarize(plan, results, 'success')
 
@@ -254,7 +254,7 @@ def test_summary_requires_planner_and_original_proof_for_every_reuse():
     results = dict.fromkeys(ci.DOMAINS, 'skipped')
     with pytest.raises(ValueError):
         ci.summarize(plan, results, 'failure')
-    plan['domains']['native']['origin'] = None
+    plan['domains']['installed']['origin'] = None
     with pytest.raises(ValueError):
         ci.summarize(plan, results, 'success')
 
@@ -315,7 +315,13 @@ class LegacyEvidence(Evidence):
         names['Checkout without saved credentials']['with'].pop('ref')
         names['Python']['with'] = {'python-version': '${{ matrix.python }}', 'architecture': '${{ matrix.arch }}'}
         names['Confirm native runner']['env'] = {'EXPECTED_ARCH': '${{ matrix.arch }}'}
-        names['Prepare pinned native DSH (no install scripts)']['env'] = {'DSH_TARGET': '${{ matrix.dsh }}'}
+        # The legacy run also had the since-retired native DSH domain.
+        names['Prepare pinned native DSH (no install scripts)'] = {
+            'name': 'Prepare pinned native DSH (no install scripts)', 'env': {'DSH_TARGET': '${{ matrix.dsh }}'},
+            'run': 'python -m scripts.prepare_dsh_runtime --target $env:DSH_TARGET --out "$env:RUNNER_TEMP/dsh"'}
+        names['Native DSH with synthetic model gateway'] = {
+            'name': 'Native DSH with synthetic model gateway',
+            'run': 'python -I -X utf8 scripts/run_offline_tests.py --output "$env:RUNNER_TEMP/native-dsh"'}
         self.old = {'jobs': {'offline': {'runs-on': '${{ matrix.os }}', 'defaults': {'run': {'shell': 'pwsh'}}, 'steps': list(names.values())}}}
         self.job = {'id': ci.LEGACY['job'], 'run_id': ci.LEGACY['run'], 'run_attempt': 1,
                     'status': 'completed', 'conclusion': 'success', 'steps': [
