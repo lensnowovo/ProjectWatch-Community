@@ -24,6 +24,11 @@ from project_watch.host_network import configured_model_opener
 from project_watch.model_gateway import BudgetGate, BudgetPolicy, BudgetProxy
 from project_watch.model_provider import ModelProviderConfig
 
+# Reasoning models (e.g. GLM, DeepSeek-R) spend output tokens on hidden reasoning
+# before the answer; without headroom a 768-token cap ends mid-reasoning. The
+# visible answer stays bounded by parse_proposal_stream (12,000 characters).
+REASONING_HEADROOM = 8192
+
 
 def parse_proposal_stream(body: bytes, protocol: str) -> dict:
     text: list[str] = []
@@ -214,6 +219,7 @@ class DirectProposalModel:
 
     def _run(self, evidence: EvidencePacket | None, *, before_send=None,
              prompt_override=None, max_output_tokens=768) -> dict:
+        max_output_tokens += REASONING_HEADROOM
         gate = BudgetGate(BudgetPolicy(self.config.model, 1, 150_000, max_output_tokens, None, None, None))
         failures: list[str] = []
         proxy = BudgetProxy(
