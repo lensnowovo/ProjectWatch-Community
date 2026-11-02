@@ -265,3 +265,19 @@ def test_the_chain_outline_is_published_without_quote_checking(host):
     assert not any('outline' in field for call in review.calls for field in call)
     assert view['analysis']['chain']['outline']['upstream'] == [{'stage': '抗体与连接子原料', 'players': ['合成供应商']}]
     assert view['analysis']['chain']['outline']['downstream'][0]['stage'] == '医院与患者'
+
+
+def test_a_wrong_industry_point_drops_only_that_point(host):
+    raw = dict(industry=dict(verdict='growing', confidence='medium', summary='合成材料仍在招募阶段。',
+                             drivers=[dict(text='合成材料记录招募状态。', refs=['S1'])],
+                             headwinds=[dict(text='合成材料显示五款产品均已纳入医保。', refs=['S1'])]))
+    def contradicted(system, payload):
+        response = judging()(system, payload)
+        for check in response.get('checks', []):
+            if check['field'] == 'industry.headwinds.0.text':
+                check['status'] = 'contradicted'
+        return response
+    result, view = apply(host, raw, contradicted)
+    assert result['published'] == ['industry']
+    assert result['sections']['industry']['dropped'] == ['合成材料显示五款产品均已纳入医保。']
+    assert not view['analysis']['industry']['headwinds']
