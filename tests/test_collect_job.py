@@ -159,7 +159,7 @@ def test_old_paper_topics_are_rewritten_once_and_kept_for_audit(env):
     run_collect(pipeline, pid)
     plan = pipeline.store.get_plan(pid)
     assert plan['paper_queries'] == ['virtual cell perturbation model']  # what fails the topic rules is dropped
-    assert plan['paper_queries_previous'] == ['STATE', '合成生物平台'] and plan['paper_topics_version'] == 2
+    assert plan['paper_queries_previous'] == ['STATE', '合成生物平台'] and plan['paper_topics_version'] == collect_job.PAPER_TOPICS_VERSION
     assert 'virtual cell perturbation model' in ' '.join(queries(sent, 'api.openalex.org'))
     assert not any('STATE' in q for q in queries(sent, 'api.openalex.org'))
     with pipeline.store._connect() as db:
@@ -175,5 +175,14 @@ def test_topics_that_already_pass_are_kept_without_a_model_request(env):
     calls = _model_answers(pipeline, {'paper_queries': ['should not be used']})
     run_collect(pipeline, pid)
     plan = pipeline.store.get_plan(pid)
-    assert plan['paper_queries'] == ['synthetic antibody conjugate'] and plan['paper_topics_version'] == 2
+    assert plan['paper_queries'] == ['synthetic antibody conjugate'] and plan['paper_topics_version'] == collect_job.PAPER_TOPICS_VERSION
     assert not calls
+
+
+def test_a_plan_without_research_topics_gets_some(env):
+    pipeline, pid, sent, _ = env
+    pipeline.store.put_plan(pid, {'competitors': []})
+    _model_answers(pipeline, {'paper_queries': ['synthetic antibody conjugate']})
+    run_collect(pipeline, pid)
+    assert pipeline.store.get_plan(pid)['paper_queries'] == ['synthetic antibody conjugate']
+    assert 'synthetic antibody conjugate' in ' '.join(queries(sent, 'api.openalex.org'))
