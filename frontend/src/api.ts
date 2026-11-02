@@ -1020,7 +1020,7 @@ export interface ProjectRound {
 export interface RoundFigures {
   collect_job_id: string; analyze_job_id: string | null; finished_at: string | null; items: number;
   date_coverage: number | null; screened: number; relevant_share: number | null; matched_share: number | null;
-  sections: { published: number; considered: number; dropped_points: number; rejected: string[] } | null;
+  sections: { published: number; considered: number; dropped_points: number; rejected: string[]; unchanged?: string[] } | null;
   requests: number; unclear_requests: number; model_input_tokens: number;
 }
 export interface RoundQuality {

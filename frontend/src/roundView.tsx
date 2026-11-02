@@ -63,7 +63,7 @@ const ROWS: [string, (f: RoundFigures) => string][] = [
   ["新闻有发布日期", (f) => pct(f.date_coverage)],
   ["已初筛 / 判为相关", (f) => f.screened ? `${f.screened} / ${pct(f.relevant_share)}` : "—"],
   ["初筛结果能对应原文", (f) => pct(f.matched_share)],
-  ["分析板块发布", (f) => f.sections ? `${f.sections.published} / ${f.sections.considered}` : "—"],
+  ["分析板块发布", (f) => f.sections ? `${f.sections.published} / ${f.sections.considered}${f.sections.unchanged?.length ? `（另 ${f.sections.unchanged.length} 个无新材料，沿用）` : ""}` : "—"],
   ["删去的论点", (f) => f.sections ? String(f.sections.dropped_points) : "—"],
   ["请求 · 结果不明", (f) => `${f.requests} · ${f.unclear_requests}`],
   ["模型输入 token", (f) => f.model_input_tokens.toLocaleString()],

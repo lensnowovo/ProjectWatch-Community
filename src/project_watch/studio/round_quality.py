@@ -78,8 +78,9 @@ def _round(store, db, collect):
     if analysis:
         publication = JobExecution(store, {'id': analysis}).read_checkpoint(analyze_job.PUBLICATION) or {}
         outcomes = publication.get('sections') or {}
-        considered = {k: o for k, o in outcomes.items() if o.get('status') != 'missing'}
+        considered = {k: o for k, o in outcomes.items() if o.get('status') not in ('missing', 'unchanged')}
         sections = {'published': len(publication.get('published') or []), 'considered': len(considered),
+                    'unchanged': sorted(k for k, o in outcomes.items() if o.get('status') == 'unchanged'),
                     'dropped_points': sum(len(o.get('dropped') or []) for o in considered.values()),
                     'rejected': sorted(k for k, o in considered.items() if o.get('status') == 'rejected')}
     jobs = [collect['id'], *([analysis] if analysis else [])]

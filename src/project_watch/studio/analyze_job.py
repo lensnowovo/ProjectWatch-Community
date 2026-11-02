@@ -114,8 +114,40 @@ def _reviewer(pipeline, execution, llm, guard):
     return reviewer
 
 
-def sections(pipeline, execution, llm, context):
-    """Draft over the selected material, review each section, publish the approved ones."""
+# Which sections a relevant report of each category can change.
+AFFECTS = {
+    'company': ('operations', 'position', 'chain'),
+    'competitor': ('position',),
+    'industry': ('industry',),
+    'policy': ('industry',),
+    'paper': ('technology',),
+    'patent': ('technology', 'position'),
+    'trial': ('technology', 'position', 'operations'),
+}
+
+
+def affected_sections(store, pid, collect_job_id):
+    """Sections that this collection's new or changed relevant reports can change.
+
+    Reports the collection only saw again are not new material. Categories
+    outside AFFECTS change every section.
+    """
+    from project_watch.studio.section_analysis import SECTIONS
+
+    with closing(store._connect()) as db:
+        categories = {r[0] for r in db.execute(
+            "SELECT DISTINCT i.category FROM studio_collection_observations o JOIN studio_items i ON i.id=o.item_id "
+            "WHERE o.job_id=? AND o.operation IN ('added','updated') AND i.project_id=? AND i.triaged=1 AND i.relevant=1",
+            (collect_job_id, pid))}
+    return {s for c in categories for s in AFFECTS.get(c, SECTIONS)}
+
+
+def sections(pipeline, execution, llm, context, affected=None):
+    """Draft over the selected material, review each section, publish the approved ones.
+
+    With ``affected`` (an automatic round) only those sections, and any without a
+    current published version, are redrafted; the rest keep their version.
+    """
     from project_watch.studio import section_analysis
 
     generator = pipeline.insight_generator
@@ -133,21 +165,31 @@ def sections(pipeline, execution, llm, context):
     if not selected['materials']:
         return dict(status='no_material', reason='no_relevant_material')
     sources = section_analysis.numbered(selected)
+    retained = section_analysis.retained_sections(execution.store, pid, selected)
+    targets = [s for s in section_analysis.SECTIONS if affected is None or s in affected or s not in retained]
+    if not targets:
+        publication = dict(status='completed', targets=[], published=[],
+                           sections={s: dict(status='unchanged', reason='no new relevant material for this section')
+                                     for s in section_analysis.SECTIONS})
+        execution.checkpoint_chunked(PUBLICATION, publication)
+        return publication
     draft = execution.read_checkpoint(DRAFT)
     if draft is None:
         project = pipeline.store.get_project(pid) or {}
         company = {k: project.get(k) for k in ('name', 'legal_name', 'short_name', 'industry', 'description')}
         draft = llm.json(generator.SYSTEM + GUIDANCE,
                          json.dumps(dict(company=company, materials=sources, snapshot_id=context['id'],
-                                         requested_sections=list(section_analysis.SECTIONS)), ensure_ascii=False),
+                                         requested_sections=targets), ensure_ascii=False),
                          repair_invalid=False)
         execution.checkpoint_chunked(DRAFT, draft)
-    raw = {name: part for name, part in (draft or {}).items() if name in section_analysis.SECTIONS}
-    retained = section_analysis.retained_sections(execution.store, pid, selected)
+    raw = {name: part for name, part in (draft or {}).items() if name in targets}
     reviewer = _reviewer(pipeline, execution, llm, guard)
     outcomes = section_analysis.evaluate(execution, raw, sources, reviewer, guard, retained)
     outcomes = repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer, guard, retained)
-    publication = section_analysis.publish(pipeline, execution, selected, raw, sources, outcomes, guard)
+    for name in section_analysis.SECTIONS:
+        if name not in targets:
+            outcomes[name] = dict(status='unchanged', reason='no new relevant material for this section')
+    publication = section_analysis.publish(pipeline, execution, selected, raw, sources, outcomes, guard, targets=targets)
     execution.checkpoint_chunked(PUBLICATION, publication)
     return publication
 
@@ -353,7 +395,11 @@ def run(pipeline, execution):
         snapshot = {'id': snapshot['id']}
     context = material_snapshot.read(pipeline.store, pid, snapshot['id'])
     stage('分栏分析')
-    publication = sections(pipeline, execution, llm, context)
+    # A round the schedule or a collection started redoes only what its new material touches;
+    # a re-analysis or analysis the owner asked for redoes everything.
+    automatic = str(execution.job.get('input_version') or '').startswith('collect:')
+    publication = sections(pipeline, execution, llm, context,
+                           affected=affected_sections(pipeline.store, pid, collect_job_id) if automatic else None)
     follow = follow_through(pipeline, llm, execution, collect_job_id, item_ids, stage)
     published = publication.get('published', [])
     status = ('complete' if publication.get('status') == 'completed'

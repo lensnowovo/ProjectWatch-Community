@@ -235,8 +235,7 @@ def test_a_round_reports_its_own_quality(env):
     quality = spine_api.round_view(pipeline.store, pid)['quality']
     current = quality['current']
     assert current['items'] > 0 and current['screened'] == current['items']
-    assert current['sections'] == {'published': 2, 'considered': current['sections']['considered'],
-                                   'dropped_points': current['sections']['dropped_points'], 'rejected': current['sections']['rejected']}
+    assert current['sections']['published'] == 2 and current['sections']['unchanged'] == []  # a first round redoes all
     assert current['unclear_requests'] == 0 and quality['previous'] is None
     yields = round_quality.unit_yield(pipeline.store, current['collect_job_id'])
     assert sum(u['collected'] for u in yields) >= current['items'] and all(u['source'] and 'query' in u for u in yields)
@@ -268,3 +267,26 @@ def test_verdicts_that_do_not_match_their_source_are_screened_again(env):
                     for r in db.execute('SELECT extra FROM studio_items WHERE project_id=? AND triaged=1', (pid,))]
     assert statuses and all(s == 'bound' for s in statuses)  # the misaligned batch was screened again
     assert state['triage_calls'] >= 2
+
+
+
+def test_an_automatic_round_redoes_only_the_sections_its_new_material_touches(env):
+    from project_watch.studio import analyze_job
+
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    work(pipeline, 'analyze')
+    work(pipeline, 'report')
+    # This collection's new relevant material was papers and patents only.
+    assert analyze_job.affected_sections(pipeline.store, pid, collect.job['id']) <= {'technology', 'position'}
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE kind IN ('brief','landscape') AND project_id=?", (pid,))
+    # A second automatic round brings nothing new: published sections are kept, not redrafted.
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    drafts = _state['drafts']
+    second = work(pipeline, 'analyze')
+    outcomes = second.read_checkpoint(analyze_job.PUBLICATION)['sections']
+    assert outcomes['operations']['status'] == 'unchanged' and outcomes['chain']['status'] == 'unchanged'
+    assert _state['drafts'] in (drafts, drafts + 1)  # only never-published sections may be drafted
