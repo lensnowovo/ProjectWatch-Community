@@ -144,10 +144,81 @@ def sections(pipeline, execution, llm, context):
         execution.checkpoint_chunked(DRAFT, draft)
     raw = {name: part for name, part in (draft or {}).items() if name in section_analysis.SECTIONS}
     retained = section_analysis.retained_sections(execution.store, pid, selected)
-    outcomes = section_analysis.evaluate(execution, raw, sources, _reviewer(pipeline, execution, llm, guard), guard, retained)
+    reviewer = _reviewer(pipeline, execution, llm, guard)
+    outcomes = section_analysis.evaluate(execution, raw, sources, reviewer, guard, retained)
+    outcomes = repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer, guard, retained)
     publication = section_analysis.publish(pipeline, execution, selected, raw, sources, outcomes, guard)
     execution.checkpoint_chunked(PUBLICATION, publication)
     return publication
+
+
+REPAIR_SYSTEM = """你是一级市场投资研究员。下面一个分析板块的总结句（summary）没有通过核查，原因已给出。
+请只重写这一句 summary（不超过 80 字）：只使用 kept_points 中已保留论点能直接支持的内容，
+不引入新事实，不写无范围的比较，财务表述保留其报告期；无法下结论时写明缺口。
+输出 JSON：{"summary": "重写后的总结句"}"""
+
+
+def _summary_problem(name, outcome):
+    """Why the summary failed review, when that is the only reason the section was rejected."""
+    blocking = outcome.get('blocking') or []
+    if outcome.get('status') != 'rejected' or not blocking:
+        return None
+    if all(isinstance(i, dict) and i.get('field') == f'{name}.summary' for i in blocking):
+        return '；'.join(str(i.get('reason') or i.get('code')) for i in blocking)[:600]
+    return None
+
+
+def _normalization_problem(generator, name, part, sources):
+    """Why the normalizer would blank an approved section's summary, if it would."""
+    try:
+        full = generator.normalize({name: part}, sources)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    if full[name].get('summary'):
+        return None
+    checks = [c for c in (*full.get('consistency_checks', ()), *full.get('qualifier_checks', ()))
+              if str(c.get('path', '')).startswith(name + '.summary')]
+    notes = [*(f"{c.get('reason')}" for c in checks), *(full.get('gaps') or [])]
+    return '；'.join(notes)[:600] or '总结句含未能核实的表述'
+
+
+def repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer, guard, retained):
+    """Once per section: a summary that failed review or a guard is rewritten from the kept points, then reviewed again.
+
+    Only the summary changes; the whole section goes through review again. A
+    second failure stands as a rejection. Each attempt is recorded in its outcome.
+    """
+    from project_watch.studio import section_analysis
+
+    problems = {}
+    for name, outcome in outcomes.items():
+        if name not in raw:
+            continue
+        reason = _summary_problem(name, outcome)
+        if reason is None and outcome.get('status') == 'approved':
+            reason = _normalization_problem(generator, name, raw[name], sources)
+        if reason:
+            problems[name] = reason
+    if not problems or not getattr(llm, 'ready', False):
+        return outcomes
+    repaired = {}
+    for name, reason in problems.items():
+        part = raw[name]
+        kept = {k: v for k, v in part.items() if isinstance(v, list)}
+        guard()
+        answer = llm.json(REPAIR_SYSTEM, json.dumps(dict(section=name, verdict=part.get('verdict'), summary=part.get('summary'),
+                                                         reason=reason, kept_points=kept), ensure_ascii=False))
+        summary = str((answer or {}).get('summary') or '').strip()
+        if summary and summary != part.get('summary'):
+            repaired[name] = {**part, 'summary': summary[:160]}
+    if not repaired:
+        return outcomes
+    again = section_analysis.evaluate(execution, repaired, sources, reviewer, guard, retained)
+    for name, outcome in again.items():
+        if name in repaired:
+            raw[name] = repaired[name]
+            outcomes[name] = {**outcome, 'repaired_summary': {'reason': problems[name], 'status': outcome.get('status')}}
+    return outcomes
 
 
 def follow_through(pipeline, llm, execution, collect_job_id, item_ids, stage):

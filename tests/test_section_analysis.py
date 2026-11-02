@@ -281,3 +281,54 @@ def test_a_wrong_industry_point_drops_only_that_point(host):
     assert result['published'] == ['industry']
     assert result['sections']['industry']['dropped'] == ['合成材料显示五款产品均已纳入医保。']
     assert not view['analysis']['industry']['headwinds']
+
+
+def test_a_summary_that_fails_review_is_rewritten_once_and_reviewed_again(host):
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+
+    research, context, sources = host
+    raw = dict(operations=two_points())
+    raw['operations']['summary'] = '合成材料显示公司全面领先。'
+    def review(system, payload):
+        unsupported = {'operations.summary'} if '全面领先' in json_text(payload) else set()
+        return judging(unsupported)(system, payload)
+    rewrites = []
+    llm = SimpleNamespace(ready=True, json=lambda system, user: rewrites.append(user) or {'summary': '合成材料仍在招募阶段。'})
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, review, lambda: None)
+    assert outcomes['operations']['status'] == 'rejected'
+    outcomes = analyze_job.repair_summaries(research.pipeline.insight_generator, research.execution, llm, raw, sources,
+                                            outcomes, review, lambda: None, None)
+    assert len(rewrites) == 1 and '全面领先' in rewrites[0]
+    assert outcomes['operations']['status'] == 'approved'
+    assert outcomes['operations']['repaired_summary']['status'] == 'approved'
+    assert raw['operations']['summary'] == '合成材料仍在招募阶段。'
+    result = section_analysis.publish(research.pipeline, research.execution, context, raw, sources, outcomes, lambda: None)
+    assert result['published'] == ['operations']
+
+
+def json_text(payload):
+    import json
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def test_a_summary_a_guard_would_blank_is_rewritten_before_publication(host):
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+
+    research, context, sources = host
+    raw = dict(operations=two_points())
+    raw['operations']['summary'] = '合成材料仍在招募阶段，收入为零。'
+    reasons = []
+    def rewrite(system, user):
+        reasons.append(user)
+        return {'summary': '合成材料仍在招募阶段。'}
+    llm = SimpleNamespace(ready=True, json=rewrite)
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, judging(), lambda: None)
+    outcomes = analyze_job.repair_summaries(research.pipeline.insight_generator, research.execution, llm, raw, sources,
+                                            outcomes, judging(), lambda: None, None)
+    assert len(reasons) == 1 and '收入为零' in reasons[0]
+    result = section_analysis.publish(research.pipeline, research.execution, context, raw, sources, outcomes, lambda: None)
+    assert result['published'] == ['operations']
