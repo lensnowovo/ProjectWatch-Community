@@ -342,7 +342,7 @@ def test_a_quote_that_only_partly_carries_the_claim_is_not_support():
     def check(field, inference=None):
         row = dict(field=field, status='supported', reason='r', evidence=[dict(ref='S1', quote='RECRUITING')])
         return {**row, 'inference': inference} if inference else row
-    issues = review.validate_review({'checks': [check('a.summary', 'direct'), check('a.for.0.text', 'partial'),
-                                                check('a.for.1.text')]}, payload)
+    issues = review.validate_review({'checks': [check('a.summary', 'partial'), check('a.for.0.text', 'partial'),
+                                                check('a.for.1.text')]}, payload)  # a summary is a synthesis
     assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
     assert 'partial' in issues[0]['reason']

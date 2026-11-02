@@ -1296,8 +1296,10 @@ class StudioStore:
     def claim(self, lane: str | None = None) -> dict | None:
         """The next job; lane 'round' takes only round work, lane 'side' only the rest.
 
-        The side lane never starts a job for a project whose round is running, so
-        the two lanes do not write one project's records at the same time.
+        Neither lane starts a job for a project the other lane is working on, so one
+        project's records are never written by two jobs at once (an analysis fails
+        if its section evidence changes underneath it). A round waits at most for
+        that one running side job, not for the side queue.
         """
         if lane not in (None, 'round', 'side'):
             raise ValueError('unknown worker lane')
@@ -1322,7 +1324,9 @@ class StudioStore:
             rounds = ','.join('?' * len(self.ROUND_KINDS))
             lane_filter, lane_args = {
                 None: ('', ()),
-                'round': (f' AND j.kind IN ({rounds})', self.ROUND_KINDS),
+                'round': (f" AND j.kind IN ({rounds}) AND NOT EXISTS (SELECT 1 FROM studio_jobs r WHERE "
+                          f"r.project_id=j.project_id AND r.status='running' AND r.kind NOT IN ({rounds}))",
+                          self.ROUND_KINDS + self.ROUND_KINDS),
                 'side': (f" AND j.kind NOT IN ({rounds}) AND NOT EXISTS (SELECT 1 FROM studio_jobs r WHERE "
                          f"r.project_id=j.project_id AND r.status='running' AND r.kind IN ({rounds}))",
                          self.ROUND_KINDS + self.ROUND_KINDS),

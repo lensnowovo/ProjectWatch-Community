@@ -163,3 +163,16 @@ def test_two_lanes_start_and_stop_together(tmp_path):
     finally:
         worker.stop()
     assert worker.runtime_state() == 'stopped' and worker._side.runtime_state() == 'stopped'
+
+
+
+def test_a_round_does_not_start_while_its_project_has_a_side_job_running(tmp_path):
+    store, ids = setup(tmp_path, 2)
+    store.enqueue(ids[0], 'details')
+    running = store.claim('side')
+    blocked = store.enqueue(ids[0], 'analyze', input_version='collect:a')
+    other = store.enqueue(ids[1], 'collect', input_version='manual:b')
+    assert store.claim('round')['id'] == other['id']  # another project's round goes ahead
+    assert store.claim('round') is None  # this project's analysis waits for its side job
+    store.finish(running['id'], lease_token=running['lease_token'])
+    assert store.claim('round')['id'] == blocked['id']

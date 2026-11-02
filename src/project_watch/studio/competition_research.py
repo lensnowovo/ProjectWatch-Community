@@ -526,7 +526,8 @@ class CompetitionResearch(CompanyLeads):
             if saved is not None:
                 return saved
             value = function()
-            execution.checkpoint(name, value)
+            # Reading every scoped original can exceed a plain checkpoint; chunked ones read back the same way.
+            (execution.checkpoint_chunked if len(name) <= 60 else execution.checkpoint)(name, value)
             return value
         def collect(queries):
             batches = []

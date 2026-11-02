@@ -10,7 +10,7 @@ import re
 import unicodedata
 from copy import deepcopy
 
-VERSION = 'judgment-evidence-review-v7'
+VERSION = 'judgment-evidence-review-v8'
 
 
 def canonical(value) -> str:
@@ -57,6 +57,7 @@ field 使用 fields 的给定编号；如有 field_paths，它只用于定位 an
 保留来源层级：搜索摘要不升级为完整原件，报道内容不升级为已独立核实事实。
 判 supported 时必须给出 inference：引文本身就能推出该字段的完整断言为 direct；
 只支持其中一部分、或要再加一步推理才成立为 partial；只是同一话题、不能推出断言为 related。
+summary、route、headline 是对多条依据的概括：其中每个断言都有来源直接支持（可来自不同来源）即为 direct。
 返回一个 JSON 对象：{"checks":[{"field":"F1","status":"supported|not_factual|contradicted|insufficient",
 "inference":"direct|partial|related","reason":"简短说明","evidence":[{"ref":"来源编号","quote":"该来源 context 或 title 中连续逐字片段"}]}]}。
 每个给定 field 恰好出现一次，不增删路径。supported 必须有逐字证据；存在反证时同样引用反证。
@@ -273,7 +274,10 @@ def validate_review(value, payload):
             issues.append({'field': path, 'code': 'evidence_insufficient',
                            'reason': 'citation not found in the cited source', 'evidence': unverified})
             continue
-        if status == 'supported' and row.get('inference') in ('partial', 'related'):
+        # Summaries, routes and headlines combine points that are each checked; for them the
+        # status alone decides, a partial label does not.
+        aggregate = path.split('.')[-1] in ('summary', 'route', 'headline')
+        if status == 'supported' and row.get('inference') in ('partial', 'related') and not aggregate:
             # The quote exists but does not by itself carry the claim. Older replies without
             # the field are read as direct.
             issues.append({'field': path, 'code': 'evidence_insufficient',
