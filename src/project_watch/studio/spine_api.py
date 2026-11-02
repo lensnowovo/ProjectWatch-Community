@@ -31,7 +31,7 @@ def _latest(db, pid, kind):
 
 def round_view(store, pid):
     """The latest round as the owner sees it: collected, analysing, partly done, done."""
-    from project_watch.studio import analyze_job, collect_job, report_job
+    from project_watch.studio import analyze_job, collect_job, report_job, round_quality
     from project_watch.studio.research_sources import research_source_counts
 
     with closing(store._connect()) as db:
@@ -56,7 +56,7 @@ def round_view(store, pid):
                 materials=research_source_counts(store, pid),
                 materials_unreviewed=research_source_counts(store, pid, review='unreviewed'),
                 materials_collected=research_source_counts(store, pid, review=None),
-                running=busy, can_reanalyze=can_redo and not busy)
+                running=busy, can_reanalyze=can_redo and not busy, quality=round_quality.report(store, pid))
 
 
 def attach(app, store, project_or_404):

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type ProjectRound, type RoundStage } from "./api";
+import { api, type ProjectRound, type RoundFigures, type RoundQuality, type RoundStage } from "./api";
 import { useToast } from "./motion";
 import { useVisiblePoll } from "./Operational";
 import { ErrorNote, relTime, useAsync } from "./ui";
@@ -53,7 +53,35 @@ export function RoundProgress({ projectId, onReload }: { projectId: string; onRe
       {finished && !data.running && <div><dt>完成</dt><dd className="muted">{relTime(finished)}</dd></div>}
     </dl>
     {data.can_reanalyze && <Reanalyze projectId={projectId} onQueued={() => { reload(); onReload(); }} />}
+    {data.quality && <QualityReport quality={data.quality} />}
   </section>;
+}
+
+const pct = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v * 100)}%`;
+const ROWS: [string, (f: RoundFigures) => string][] = [
+  ["新收录条目", (f) => String(f.items)],
+  ["新闻有发布日期", (f) => pct(f.date_coverage)],
+  ["已初筛 / 判为相关", (f) => f.screened ? `${f.screened} / ${pct(f.relevant_share)}` : "—"],
+  ["初筛结果能对应原文", (f) => pct(f.matched_share)],
+  ["分析板块发布", (f) => f.sections ? `${f.sections.published} / ${f.sections.considered}` : "—"],
+  ["删去的论点", (f) => f.sections ? String(f.sections.dropped_points) : "—"],
+  ["请求 · 结果不明", (f) => `${f.requests} · ${f.unclear_requests}`],
+  ["模型输入 token", (f) => f.model_input_tokens.toLocaleString()],
+];
+const SOURCE: Record<string, string> = { openalex_topic: "论文主题检索", europepmc_topic: "论文主题检索（Europe PMC）", search: "网页检索" };
+
+/** Counts over this round's own records, against the round before; no judgment of the facts. */
+function QualityReport({ quality }: { quality: RoundQuality }) {
+  const { current, previous, warnings, stale_queries: stale } = quality;
+  return <details className="round-quality" open={warnings.length > 0 || stale.length > 0}>
+    <summary className="small">本轮质量{warnings.length ? ` · ${warnings.length} 项需注意` : ""}</summary>
+    {warnings.length > 0 && <ul className="round-quality-notes">{warnings.map((w) => <li key={w}>{w}</li>)}</ul>}
+    <table className="round-quality-table"><thead><tr><th scope="col">指标</th><th scope="col">本轮</th><th scope="col">上一轮</th></tr></thead>
+      <tbody>{ROWS.map(([label, value]) => <tr key={label}><th scope="row">{label}</th><td>{value(current)}</td><td className="muted">{previous ? value(previous) : "—"}</td></tr>)}</tbody>
+    </table>
+    {stale.length > 0 && <div className="round-quality-stale"><p className="small">最近 {stale[0].rounds} 轮没有带来相关内容的检索词（论文主题会暂停一轮后再试）：</p>
+      <ul>{stale.map((s) => <li key={s.source + s.query} className="small">{SOURCE[s.source] ?? s.source} · {s.query.replace(/^"|"$/g, "")} <span className="muted">已初筛 {s.screened} 条，相关 0</span></li>)}</ul></div>}
+  </details>;
 }
 
 function Reanalyze({ projectId, onQueued }: { projectId: string; onQueued: () => void }) {

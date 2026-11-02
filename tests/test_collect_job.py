@@ -186,3 +186,18 @@ def test_a_plan_without_research_topics_gets_some(env):
     run_collect(pipeline, pid)
     assert pipeline.store.get_plan(pid)['paper_queries'] == ['synthetic antibody conjugate']
     assert 'synthetic antibody conjugate' in ' '.join(queries(sent, 'api.openalex.org'))
+
+
+def test_a_stale_paper_topic_sits_a_round_out(env, monkeypatch):
+    from project_watch.studio import round_quality
+
+    pipeline, pid, sent, _ = env
+    pipeline.store.put_plan(pid, {'competitors': [], 'paper_queries': ['synthetic antibody conjugate', 'synthetic noisy topic'],
+                                  'paper_topics_version': collect_job.PAPER_TOPICS_VERSION})
+    monkeypatch.setattr(round_quality, 'stale_queries', lambda store, project: [
+        {'source': 'openalex_topic', 'query': 'synthetic noisy topic', 'category': 'paper', 'collected': 9, 'screened': 9, 'rounds': 3}])
+    execution = run_collect(pipeline, pid)
+    frozen = execution.read_checkpoint(collect_job.INPUT)
+    assert frozen['public_plan']['resting_paper_queries'] == ['synthetic noisy topic']
+    sent_topics = ' '.join(queries(sent, 'api.openalex.org'))
+    assert 'synthetic antibody conjugate' in sent_topics and 'synthetic noisy topic' not in sent_topics

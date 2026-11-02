@@ -22,3 +22,10 @@
 .research-relation.relation-unrelated { color: var(--muted); }
 .research-relation.relation-unreviewed { color: var(--muted); font-style: italic; }
 .research-snippet-clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.round-quality { margin-top: 12px; }
+.round-quality summary { cursor: pointer; color: var(--ink-2); }
+.round-quality-notes { margin: 8px 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.round-quality-table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.round-quality-table th, .round-quality-table td { padding: 4px 16px 4px 0; text-align: left; font-weight: 400; }
+.round-quality-table thead th { color: var(--muted); font-size: 12px; }
+.round-quality-stale ul { margin: 4px 0; padding-left: 18px; }

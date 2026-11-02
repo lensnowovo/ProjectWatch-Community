@@ -162,6 +162,17 @@ def freeze(pipeline, execution, *, mode):
                         ('policy', 'policy_queries')):
         public_plan[field] = [q for w in relation if w['relation_type'] == kind for q in w['queries'] or []]
     _merge_stored_plan(public_plan, _stored_plan(pipeline, pid, project))
+    # A paper topic that brought only irrelevant papers over the last rounds sits this round out.
+    # It leaves the measured window that way and is tried again later.
+    from project_watch.studio.openalex_query import topic_terms
+    from project_watch.studio.round_quality import stale_queries
+
+    stale = {q.strip('"') for s in stale_queries(pipeline.store, pid)
+             if s['source'] in ('openalex_topic', 'europepmc_topic') for q in [s['query']]}
+    resting = [q for q in public_plan['paper_queries'] if (topic_terms(q) or '').strip('"') in stale]
+    if resting:
+        public_plan['paper_queries'] = [q for q in public_plan['paper_queries'] if q not in resting]
+        public_plan['resting_paper_queries'] = resting
     # Exploration quota: queries the last early-warning check proposed, used once.
     from project_watch.studio.assumptions import take_exploration
     exploration = take_exploration(pipeline.store, pid, execution.job['id'])

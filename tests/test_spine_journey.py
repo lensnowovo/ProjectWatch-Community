@@ -223,3 +223,35 @@ def test_triage_binding_tolerates_form_but_not_content():
                         'Systems and methods for seizure prediction - CN115089196A (en) * | 2022-08-22 | Synthetic Co')
     assert not _title_bound('Moderna Q3', 'Moderna Q3 results and full-year outlook')
     assert not _title_bound('BioNTech Q3 results', 'Moderna Q3 results')
+
+
+def test_a_round_reports_its_own_quality(env):
+    from project_watch.studio import round_quality, spine_api
+
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    work(pipeline, 'analyze')
+    quality = spine_api.round_view(pipeline.store, pid)['quality']
+    current = quality['current']
+    assert current['items'] > 0 and current['screened'] == current['items']
+    assert current['sections'] == {'published': 2, 'considered': current['sections']['considered'],
+                                   'dropped_points': current['sections']['dropped_points'], 'rejected': current['sections']['rejected']}
+    assert current['unclear_requests'] == 0 and quality['previous'] is None
+    yields = round_quality.unit_yield(pipeline.store, current['collect_job_id'])
+    assert sum(u['collected'] for u in yields) >= current['items'] and all(u['source'] and 'query' in u for u in yields)
+
+
+def test_a_query_that_never_brings_anything_relevant_is_named(monkeypatch):
+    from project_watch.studio import round_quality
+
+    monkeypatch.setattr(round_quality, '_collect_jobs', lambda db, pid, limit: [
+        {'id': f'c{i}', 'created_at': f'2026-10-0{i}', 'finished_at': ''} for i in range(1, 4)])
+    rows = {'openalex_topic': dict(source='openalex_topic', category='paper', query='"Synthetic Tool"', collected=3, screened=3, relevant=0),
+            'search': dict(source='search', category='company', query='合成公司', collected=3, screened=3, relevant=1)}
+    monkeypatch.setattr(round_quality, 'unit_yield', lambda store, job: list(rows.values()))
+    store = type('S', (), {'_connect': lambda self: __import__('sqlite3').connect(':memory:')})()
+    stale = round_quality.stale_queries(store, 'p')
+    assert [(s['source'], s['query'], s['screened']) for s in stale] == [('openalex_topic', '"Synthetic Tool"', 9)]
+    rows['openalex_topic']['collected'] = rows['openalex_topic']['screened'] = 1  # 3 screened over 3 rounds: too few to judge
+    assert round_quality.stale_queries(store, 'p') == []

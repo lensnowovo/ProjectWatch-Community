@@ -1015,6 +1015,17 @@ export interface ProjectRound {
   materials: Partial<Record<ResearchCategory, number>>; materials_unreviewed?: Partial<Record<ResearchCategory, number>>;
   materials_collected?: Partial<Record<ResearchCategory, number>>;
   running: boolean; can_reanalyze: boolean;
+  quality?: RoundQuality | null;
+}
+export interface RoundFigures {
+  collect_job_id: string; analyze_job_id: string | null; finished_at: string | null; items: number;
+  date_coverage: number | null; screened: number; relevant_share: number | null; matched_share: number | null;
+  sections: { published: number; considered: number; dropped_points: number; rejected: string[] } | null;
+  requests: number; unclear_requests: number; model_input_tokens: number;
+}
+export interface RoundQuality {
+  current: RoundFigures; previous: RoundFigures | null; warnings: string[];
+  stale_queries: { source: string; query: string; category: string; collected: number; screened: number; rounds: number }[];
 }
 export interface Assumption {
   id: string; text: string; basis: string; status: 'active' | 'retired'; author: 'model' | 'user';
