@@ -105,7 +105,7 @@ _PLAN_SYSTEM = """你是投资机构的研究助理，要为一家公司制定�
  "competitors":[{"name":"竞品公司名","reason":"为什么是竞品","query":"竞品名加一个领域词的新闻检索词，避免同名人物或公司"}],
  "industry_queries":["赛道/技术动态检索词，2-4 个"],
  "policy_queries":["相关监管/产业政策检索词，1-3 个"],
- "paper_queries":["论文检索词（英文），技术型公司 1-3 个，否则空"],
+ "paper_queries":["论文检索词：英文研究主题 2-6 个词（如 B7-H3 antibody-drug conjugate），技术型公司 1-3 个，否则空；不要产品名、团队/部门名或业务名，产品代号只写代号本身（如 DB-1303）"],
  "affiliation_names":["公司或其科学创始人所在机构在论文署名中的英文名（如 Peking University），未知则空"],
  "paper_authors":["科学创始人/核心科学家在论文中的英文署名（如 Hongkui Deng），技术型公司填写，否则空"],
  "trial_terms":["ClinicalTrials 检索词（英文干预或适应症，如 chemically induced pluripotent stem cell islet），仅生物医药公司"],

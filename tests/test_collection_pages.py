@@ -143,3 +143,21 @@ def test_clinical_token_loop_and_missing_studies_are_failures():
 
 
 
+
+
+def test_topic_searches_need_a_specific_research_topic():
+    from project_watch.studio.openalex_query import topic_terms
+    assert topic_terms('solid-state battery') == 'solid-state battery'
+    assert topic_terms('DB-1305') == '"DB-1305"' and topic_terms('DB- 1312/BG- C9074') == '"DB-1312"'
+    for vague in ('STATE', 'X-Suite', '软件及服务', '动力电池', ''):
+        assert topic_terms(vague) is None
+
+
+def test_topic_results_must_be_about_the_topic():
+    from project_watch.studio.openalex_query import topic_match
+    assert topic_match('solid-state battery', 'Sulfide electrolytes for solid state batteries')
+    assert not topic_match('solid-state battery', 'State of the art in nursing education')  # a common word alone
+    assert topic_match('"DB-1305"', 'DB-1305/BNT325 in ovarian cancer') and not topic_match('"DB-1305"', 'DB 1306 results')
+    unrelated = dict(work(2), display_name='Soil microbes after a forest fire', abstract_inverted_index={'Soil': [0]})
+    result = openalex_page(wire({'results': [work(), unrelated], 'meta': {'count': 2}}), 'Synthetic optics')
+    assert [i['title'] for i in result['items']] == ['Synthetic paper 1'] and result['dropped_records'] == 1

@@ -3,6 +3,50 @@ import re
 
 from project_watch.studio.http import HttpError
 
+_WORD = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{3,}(?![A-Za-z0-9])")
+_CODE = re.compile(r"[A-Za-z]+\s*-?\s*\d+[A-Za-z0-9]*")
+
+
+def topic_terms(query):
+    """A research topic an English index can match, or None.
+
+    At least two words of three or more letters; otherwise a product code
+    (DB-1305, BNT323) as an exact phrase. A single word (STATE) or a
+    Chinese-only business phrase matches unrelated papers across every field.
+    """
+    text = " ".join(str(query or "").split())
+    if not text or len(text) > 300:
+        return None
+    if len(_WORD.findall(text)) >= 2:
+        return text
+    code = _CODE.search(text)
+    return '"' + re.sub(r"\s*-\s*", "-", code.group(0)) + '"' if code else None
+
+
+def _plain_words(text):
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower())
+
+
+# Words that appear in papers of every field; they never make a paper about the topic by themselves.
+_GENERIC = frozenset({'state', 'system', 'systems', 'material', 'materials', 'high', 'fast', 'based', 'method',
+                      'analysis', 'service', 'services', 'software', 'application', 'new', 'novel', 'data',
+                      'model', 'study', 'technology', 'platform'})
+
+
+def topic_match(search, *texts):
+    """The exact code phrase, or one specific word of the topic, appears in the title or abstract.
+
+    Words match on their stem, so "battery" finds "batteries". Measured on saved
+    rounds, this keeps most papers the screening found relevant while dropping
+    full-text hits on a common word.
+    """
+    body = " " + _plain_words(" ".join(texts)) + " "
+    if search.startswith('"'):
+        return " " + _plain_words(search).strip() + " " in body
+    words = [w for w in _plain_words(search).split() if len(w) >= 3 and not w.isdigit()]
+    specific = [w for w in words if w not in _GENERIC] or words
+    return any(" " + w[:max(4, len(w) - 2)] in body for w in specific)
+
 
 def scope_params(query, mode):
     if (mode not in ('topic', 'author', 'affiliation') or not isinstance(query, str)

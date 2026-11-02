@@ -4,7 +4,7 @@ from datetime import date
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from project_watch.studio.http import HttpError
-from project_watch.studio.openalex_query import get_results, scope_params
+from project_watch.studio.openalex_query import get_results, scope_params, topic_match
 from project_watch.studio.sources import _item, _openalex_abstract, _plain
 
 
@@ -63,10 +63,14 @@ def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None,
         raise HttpError('invalid_collection_response')
     if len(rows) > per_page or (not rows and (page - 1) * per_page < count):
         raise HttpError('inconsistent_collection_page')
-    items = []
+    items, unmatched = [], 0
     for work in rows:
         if not work.get('id') or not work.get('display_name'):
             raise HttpError('invalid_collection_response')
+        if mode == 'topic' and not topic_match(query, work['display_name'],
+                                               _openalex_abstract(work.get('abstract_inverted_index'))['text']):
+            unmatched += 1  # a full-text hit on a common word, not a paper about the topic
+            continue
         location = work.get('primary_location') or {}
         authorships = [a for a in (work.get('authorships') or []) if isinstance(a, dict)]
         authors = [a.get('author', {}).get('display_name', '') for a in authorships]
@@ -83,7 +87,7 @@ def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None,
                                   'source_record': work, 'date_basis': 'publication_date'}))
     more = page * per_page < count
     return {'items': items, 'next_cursor': page + 1 if more and (page + 1) * per_page <= 10000 else None,
-            'truncated': more, 'total_reported': count, 'date_basis': 'publication_date',
+            'truncated': more, 'total_reported': count, 'date_basis': 'publication_date', 'dropped_records': unmatched,
             'window_applied': True, 'coverage_kind': 'structured_pages', 'per_request_limit': per_page}
 
 

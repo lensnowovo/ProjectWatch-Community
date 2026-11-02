@@ -7,6 +7,7 @@ clinical scope is not inferred to be inapplicable from an industry label.
 from datetime import datetime, timedelta
 
 from project_watch.studio.collection_plan import CAPABILITIES, MODES, make_plan
+from project_watch.studio.openalex_query import topic_terms
 
 BASE_DIRECTIONS = ('company', 'competitor', 'chain', 'industry', 'policy', 'technology')
 
@@ -119,13 +120,16 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         add('site', 'company', [project.get('website')], historical=True)
         add('cninfo', 'company', [name])
         add('openalex_affiliation', 'paper', public_plan.get('affiliation_names') or [name], historical=True)
-        add('openalex_topic', 'paper', public_plan.get('paper_queries') or directions['technology'])
+        # Topic searches only for terms an English index can match (see openalex_query.topic_terms).
+        topics = [t for q in public_plan.get('paper_queries') or directions['technology'] if (t := topic_terms(q))]
+        add('openalex_topic', 'paper', topics)
         # Biomedical index does not infer that the company is a drug developer.
         # Only existing public institution/topic scope is sent; zero is a query
         # result, not a claim of non-applicability or lack of research.
         add('europepmc_affiliation', 'paper', public_plan.get('affiliation_names') or [name], historical=True)
         if public_plan.get('paper_queries') or 'europepmc_topic' in scoped_sources:
-            add('europepmc_topic', 'paper', public_plan.get('paper_queries') or [])
+            # Europe PMC quotes every term itself.
+            add('europepmc_topic', 'paper', [t.strip('"') for q in public_plan.get('paper_queries') or [] if (t := topic_terms(q))])
         if public_plan.get('paper_authors') or 'openalex_author' in scoped_sources:
             add('openalex_author', 'paper', public_plan.get('paper_authors') or [])
         add('patent_search', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
