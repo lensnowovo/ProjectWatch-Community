@@ -269,7 +269,10 @@ export interface InsightAnalysis {
   gaps: string[];
   cited: InsightRef[];
 }
-export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] }
+export interface ChainStage { stage: string; players: string[] }
+export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[];
+  /** chain only: general up/downstream stages written from industry knowledge, not sourced facts. */
+  outline?: { upstream: ChainStage[]; downstream: ChainStage[] } }
 export interface InsightView {
   generation_available?: boolean;
   record: { id?: string; status?: string; section_versions?: Record<string, {version_id: string; generated_at: string; status: string}>; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;

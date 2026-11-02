@@ -293,6 +293,9 @@ class StudioStore:
             from project_watch.studio.direct_operations import SCHEMA as DIRECT_SCHEMA
 
             db.executescript(DIRECT_SCHEMA)
+            if not db.execute("SELECT 1 FROM studio_state WHERE key='item_dates_v2'").fetchone():
+                self._backfill_item_dates(db)
+                db.execute("INSERT OR REPLACE INTO studio_state VALUES ('item_dates_v2',?)", (now(),))
             # Opening a store (including read-only adapters) must not steal a
             # live worker. Recovery happens under claim's write transaction.
         from project_watch.studio.evidence_store import EvidenceStore
@@ -320,6 +323,30 @@ class StudioStore:
             yield
         finally:
             self._write_context.guard = previous
+
+    @staticmethod
+    def _backfill_item_dates(db: sqlite3.Connection) -> None:
+        """Once: dates and site names for search results stored before they were derived at collection."""
+        from project_watch.studio import publication_dates
+        from project_watch.studio.sources import _source_name
+
+        rows = db.execute("SELECT id,url,source,snippet,published_at,extra FROM studio_items "
+                          "WHERE COALESCE(published_at,'')='' OR source GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*'").fetchall()
+        for row in rows:
+            try:
+                extra = json.loads(row['extra'] or '{}')
+            except ValueError:
+                continue
+            extra = extra if isinstance(extra, dict) else {}
+            published, source = row['published_at'], _source_name(row['source'])
+            if not published:
+                head = extra.get('search_content') or row['snippet'] or ''
+                published, origin = publication_dates.derive(row['url'], head, extra.get('provider_date'))
+                if origin:
+                    extra['date_source'] = origin
+            if published != row['published_at'] or source != row['source']:
+                db.execute("UPDATE studio_items SET published_at=?,source=?,extra=? WHERE id=?",
+                           (published, source, json.dumps(extra, ensure_ascii=False), row['id']))
 
     @staticmethod
     def _migrate_events(db: sqlite3.Connection) -> None:
@@ -791,7 +818,7 @@ class StudioStore:
                     db.execute("UPDATE studio_items SET extra=json_set(COALESCE(extra,'{}'),"
                                "'$.importance_assessment',json(?)) WHERE id=?",
                                (json.dumps(r["importance_assessment"], ensure_ascii=False), r["id"]))
-                if r.get("relation") in ("subject", "competitor", "field", "unrelated"):
+                if r.get("relation") in ("subject", "competitor", "route", "field", "unrelated"):
                     db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
                                "'$.research_relation',?) WHERE id=? AND category IN ('paper','patent')", (r["relation"], r["id"]))
                 if isinstance(r.get("triage_binding"), dict):
@@ -1246,7 +1273,7 @@ class StudioStore:
                                "finished_at=?,retry_after=?,lease_token='' WHERE id=?", (now(), "9999-12-31", old["id"]))
                 else:
                     db.execute("UPDATE studio_jobs SET status='queued',lease_token='',lease_until=NULL WHERE id=?", (old["id"],))
-            # Prefer the round a user asked for (collect, analyze, report) and briefs over side jobs,
+            # Prefer briefs and reports, then the round or job a user asked for, over background side jobs,
             # but reserve every third selection for
             # oldest eligible work. The persisted counter survives worker restarts
             # and is updated under the same lock as the lease claim.
@@ -1260,11 +1287,12 @@ class StudioStore:
                 WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
                 AND (j.kind='internal' OR COALESCE(p.status,'active')='active')
                 ORDER BY CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
-                              WHEN j.kind IN ('collect','analyze') THEN 1 ELSE 2 END,
+                              WHEN j.kind IN ('collect','analyze') OR j.input_version LIKE 'manual:%' THEN 1 ELSE 2 END,
                          COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (*JOB_KINDS, prefer_brief)).fetchone()
             if not row:
                 return None
-            next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and row['kind'] in ('collect', 'analyze', 'report', 'brief') else 0
+            preferred = row['kind'] in ('collect', 'analyze', 'report', 'brief') or str(row['input_version']).startswith('manual:')
+            next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and preferred else 0
             db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (str(next_burst),))
             db.execute("UPDATE studio_jobs SET status='running',started_at=COALESCE(started_at,?),lease_token=?,"

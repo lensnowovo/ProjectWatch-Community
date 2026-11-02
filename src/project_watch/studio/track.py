@@ -28,6 +28,9 @@ _PRICE_UP = re.compile(r"涨价|提价|价格上调|上调价格|价格上涨")
 _POLICY_UP = re.compile(r"支持|鼓励|试点|补贴|扩围|扩大|放开|加快|促进|推动|规划|行动方案|指导意见|准入")
 _POLICY_DOWN = re.compile(r"限制|收紧|整顿|禁止|叫停|暂停|约谈|加强监管|从严")
 _PCT = re.compile(r"[-−]?\d+(?:\.\d+)?\s*%")
+# Licensing / BD deals are the capital signal of drug and platform sectors, alongside funding rounds.
+_DEAL = re.compile(r"首付|里程碑|授权|许可协议|license", re.I)
+_DEAL_AMOUNT = re.compile(r"\d+(?:\.\d+)?\s*(?:亿|万)\s*(?:美元|元|欧元|人民币)")
 
 
 def _quarter(day: str) -> str:
@@ -124,6 +127,13 @@ def capital(industry: dict | None, records: list[dict], reports: list[dict], tod
         company = re.split(r"完成|获|宣布|再获|拿下", e["raw"])[0][:20]
         key = (race._core(company), found["round"])
         deals.setdefault(key, {"title": e["title"], "url": e["url"], "source": e["source"], "date": e["date"], "grade": e["grade"]})
+    for e in reports:
+        amount = _DEAL_AMOUNT.search(e["raw"])
+        if race._funding_from_title(e["raw"]) or not _DEAL.search(e["raw"]) or not amount:
+            continue
+        company = re.split(r"与|和|携手|宣布|达成|获|再度", e["raw"])[0][:20]
+        deals.setdefault((race._core(company), "deal:" + amount.group(0).replace(" ", "")), {
+            "title": e["title"], "url": e["url"], "source": e["source"], "date": e["date"], "grade": e["grade"]})
     rows = list(deals.values())
     recent = [d for d in rows if race._within(d["date"], today, 90)]
     before = [d for d in rows if not race._within(d["date"], today, 90) and race._within(d["date"], today, 180)]
@@ -135,14 +145,14 @@ def capital(industry: dict | None, records: list[dict], reports: list[dict], tod
             cell["sub"] = "事件太少，暂不判断方向"
         return cell
     if len(recent) >= max(2, len(before) * 1.5):
-        direction, tone, note = "升温", "good", "赛道融资活跃，下一轮估值环境有利；竞对也在补充资金。"
+        direction, tone, note = "升温", "good", "赛道融资与授权交易活跃，下一轮估值环境有利；竞对也在补充资金。"
     elif len(recent) <= len(before) * 0.6:
-        direction, tone, note = "降温", "bad", "赛道融资放缓，下一轮可能需要更长时间。"
+        direction, tone, note = "降温", "bad", "赛道融资与授权交易放缓，下一轮可能需要更长时间。"
     else:
-        direction, tone, note = "平稳", "neutral", "赛道融资节奏与此前持平。"
+        direction, tone, note = "平稳", "neutral", "赛道融资与授权交易节奏与此前持平。"
     return _cell("capital", "资本", direction, tone, f"近 90 天 {len(recent)} 起",
                  _series([d["date"] for d in rows], today), _evidence(recent or rows), note,
-                 len({d["source"] for d in rows if d["source"]}), sub=f"此前 90 天 {len(before)} 起")
+                 len({d["source"] for d in rows if d["source"]}), sub=f"此前 90 天 {len(before)} 起 · 含融资与授权交易")
 
 
 def price(reports: list[dict], today: date, company: str) -> dict:

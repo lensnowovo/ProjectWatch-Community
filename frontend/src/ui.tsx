@@ -35,6 +35,11 @@ export function relTime(iso?: string | null): string {
 
 /** When an item can count as news: its date, but never later than when it was collected (a paper's
  * scheduled issue date or a planned milestone is not "the latest"). */
+/** Hover note for a date that did not come from the page itself. */
+export function dateNote(extra?: Record<string, unknown> | null): string | undefined {
+  return extra?.date_source === 'search' ? '日期来自搜索服务提供的页面信息，未在原文中核对' : undefined;
+}
+
 export function seenAt(item: { published_at?: string | null; collected_at: string }): string {
   const published = item.published_at ?? item.collected_at;
   return published > item.collected_at ? item.collected_at : published;

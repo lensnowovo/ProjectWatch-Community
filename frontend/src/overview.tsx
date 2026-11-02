@@ -99,7 +99,7 @@ function collectChanges(detail: ProjectDetail, events: Item[]): Change[] {
     .filter((e) => OWN_CATEGORIES.has(e.category) && e.importance !== "routine")
     .map((e) => ({
       key: e.id, origin: "公开", tag: `${CATEGORY_LABEL[e.category]}·${IMPORTANCE_LABEL[e.importance]}`, text: e.summary || e.title,
-      meaning: e.impact, date: e.published_at ?? e.collected_at, importance: e.importance, url: e.url,
+      meaning: e.impact, date: e.published_at ?? '', importance: e.importance, url: e.url,
       source: (e.source_count ?? 1) > 1 ? `${e.source} 等 ${e.source_count} 家` : e.source,
     }));
   const majors = external.filter((c) => c.importance === "major");

@@ -188,9 +188,10 @@ def research_sources(store, project_id, category, *, limit=40, offset=0, revisio
 
 
 def research_source_counts(store, project_id, *, review='confirmed'):
-    """Items per category in one review state (confirmed by default; None counts every visible item)."""
+    """Items per category in the given review state(s) (confirmed by default; None counts every visible item)."""
     with closing(store._connect()) as db:
         db.execute('BEGIN')
         rows = _rows(db, project_id)
-        return {category: sum(r['category'] == category and (review is None or r['review'] == review) for r in rows)
+        states = {review} if isinstance(review, str) else set(review) if review is not None else None
+        return {category: sum(r['category'] == category and (states is None or r['review'] in states) for r in rows)
                 for category in CATEGORIES}

@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
+from project_watch.studio import publication_dates
 from project_watch.studio.http import Http, HttpError
 from project_watch.studio.settings import RegistryConfig, SearchConfig
 
@@ -125,13 +126,20 @@ def _source_name(value: str) -> str:
             decoded = bytes.fromhex(text).decode("utf-8")
         except (ValueError, UnicodeDecodeError):
             return text
-        if decoded.isprintable() and not decoded.isascii():
+        # Non-ASCII text, or plain words (e.g. "ASCO Publications"), not binary noise.
+        if decoded.isprintable() and (not decoded.isascii() or re.fullmatch(r"[A-Za-z][\w .,&'()-]*[A-Za-z.)]", decoded)):
             return decoded
     return text
 
 
 def _item(kind: str, title: str, url: str, *, source: str, snippet: str = "",
           published_at=None, extra: dict | None = None) -> dict:
+    extra = dict(extra or {})
+    if _iso(published_at) is None:
+        head = extra.get("search_content") or snippet or ""
+        published_at, origin = publication_dates.derive(url, head, extra.get("provider_date"))
+        if origin:
+            extra["date_source"] = origin
     return {
         "kind": kind,
         "title": " ".join((title or "").split())[:300],
@@ -139,7 +147,7 @@ def _item(kind: str, title: str, url: str, *, source: str, snippet: str = "",
         "source": _source_name(source)[:120],
         "snippet": " ".join((snippet or "").split())[:1200],
         "published_at": _iso(published_at),
-        "extra": extra or {},
+        "extra": extra,
         "key": item_key(url, title),
     }
 

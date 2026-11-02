@@ -6,7 +6,7 @@ import { api, type Item } from "./api";
 import { newsDate, newsImportance } from './newsFacts';
 import { EASE } from "./motion";
 import { FeedbackMenu } from "./monitor";
-import { CATEGORY_LABEL, IMPORTANCE_LABEL, ImportanceDot, dayLabel, seenAt, relTime } from "./ui";
+import { CATEGORY_LABEL, IMPORTANCE_LABEL, ImportanceDot, dayLabel, seenAt, relTime, dateNote } from "./ui";
 
 export function ItemRow({ item, showProject, onChange, index = 0, watch, also = [] }: {
   item: Item;
@@ -58,7 +58,7 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
               共 {item.source_count} 篇报道 {open ? "▴" : "▾"}
             </button>
           )}
-          <time className="muted item-date" dateTime={when || undefined}>· {when ? relTime(when) : `日期待确认 · 收录于 ${relTime(item.collected_at)}`}</time>
+          <time className="muted item-date" dateTime={when || undefined} title={dateNote(item.extra)}>· {when ? relTime(when) : '日期未知'}</time>
         </div>
         <a className="item-title" href={item.url} target="_blank" rel="noreferrer noopener"
           onClick={markRead}>
@@ -82,7 +82,7 @@ export function ItemRow({ item, showProject, onChange, index = 0, watch, also = 
               {item.sources.map((s) => (
                 <li key={s.id}>
                   <a href={s.url} target="_blank" rel="noreferrer noopener">{s.title}</a>
-                  <span className="muted small">{s.source} · {relTime(s.published_at ?? s.collected_at)}
+                  <span className="muted small">{s.source} · {s.published_at ? relTime(s.published_at) : '日期未知'}
                     {s.body_status === "article_body" || s.body_status === "partial_body" ? " · 已读正文" : ""}</span>
                 </li>
               ))}

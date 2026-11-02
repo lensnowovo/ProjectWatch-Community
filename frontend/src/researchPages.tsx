@@ -2,7 +2,7 @@ import { motion } from "motion/react";
 import { useState } from "react";
 import { type ResearchSource as Item, type ProjectDetail } from "./api";
 import { Block, Figure, Skeleton, VerdictBand } from "./frame";
-import { ResearchSourceList, ResearchMore, useResearchSources } from './researchSources';
+import { RELATION, ResearchSourceList, ResearchMore, useResearchSources } from './researchSources';
 import { EASE } from "./motion";
 import { Empty, ErrorNote, byNewest } from "./ui";
 import { externalCollection } from './externalCollection';
@@ -107,7 +107,13 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
   const [all, setAll] = useState(false);
   if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的论文信息</button></div>;
   if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="论文"/>;
-  const items = (data ?? []).slice().sort(byNewest);
+  // A verdict that could not be matched to its source may belong to another paper: list it apart, count nothing from it.
+  const unreviewed = (data ?? []).filter((item) => item.review === 'unreviewed').sort(byNewest);
+  const items = (data ?? []).filter((item) => item.review !== 'unreviewed').sort(byNewest);
+  const relationOf = (item: Item) => { const r = item.extra?.research_relation; return typeof r === 'string' && RELATION[r] && r !== 'unrelated' ? r : 'other'; };
+  const ORDER = ['subject', 'competitor', 'route', 'field', 'other'];
+  const LABEL: Record<string, string> = { ...RELATION, subject: '公司署名', other: '关系未标注' };
+  const byRelation = ORDER.map((key) => ({ key, items: items.filter((item) => relationOf(item) === key) })).filter((g) => g.items.length);
   const papers: Paper[] = items.map((item) => {
     const x = extras(item).find((e) => e.openalex_id) ?? {};
     const when = item.published_at && Date.parse(item.published_at) <= Date.now() ? item.published_at : "";
@@ -125,13 +131,17 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
   const maxQ = Math.max(1, ...perQ.map((x) => x.n));
   return <div className="tab-frame research-view">
     <VerdictBand eyebrow="论文" meta={note}
-      title={loading && !data ? "正在读取论文…" : papers.length ? `近一年 ${year} 篇相关论文${topInst[0] ? `，发文最多的是 ${topInst[0][0]}` : ""}` : "还没有收录到相关论文"}
+      title={loading && !data ? "正在读取论文…" : papers.length ? `已收录 ${papers.length} 篇相关论文：${byRelation.map((g) => `${LABEL[g.key]} ${g.items.length} 篇`).join('、')}` : "还没有收录到相关论文"}
       figures={<>
         <Figure label="已收录论文" value={papers.length} unit="篇" note={`${structured.length} 篇有作者与机构`} />
         <Figure label="近一年" value={year} unit="篇" note="按发表时间" />
         <Figure label="发文机构" value={inst.size} unit="家" note="来自结构化记录" />
         <Figure label="最高被引" value={cited[0]?.cited ?? "—"} unit={cited[0] ? "次" : undefined} note="OpenAlex 统计" />
       </>} />
+    {papers.length > 0 && <Block card title="与公司的关系" note="AI 按署名与内容判断，署名以原文为准">
+      <ul className="inst-bars">{byRelation.map((g) => <li key={g.key}><span>{LABEL[g.key]}</span>
+        <i><motion.b initial={{ width: 0 }} animate={{ width: `${g.items.length / Math.max(...byRelation.map((x) => x.items.length)) * 100}%` }} transition={{ duration: .5, ease: EASE }} /></i><em>{g.items.length}</em></li>)}</ul>
+    </Block>}
     {papers.length > 0 && <div className="research-pair">
       <Block card title="发文节奏" note="近 8 个季度">
         <div className="q-bars" role="img" aria-label={perQ.map((x) => `${x.q} ${x.n} 篇`).join("，")}>
@@ -153,10 +163,14 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
           <small className="muted">{[p.authors.slice(0, 3).join(", ") + (p.authors.length > 3 ? " 等" : ""), p.institutions[0], p.year].filter(Boolean).join(" · ")}</small></div>
       </li>)}</ol>
     </Block>}
-    <Block title="全部论文" note={`${papers.length} 篇`} action={papers.length > 8 ? <button className="link small" onClick={() => setAll((v) => !v)}>{all ? "收起" : `展开全部 ${papers.length} 篇`}</button> : undefined}>
-      {loading && !data ? <Skeleton lines={4} /> : items.length ? <ResearchSourceList items={all ? items : items.slice(0, 8)} />
-        : <Empty title="暂无相关论文" />}
-    </Block>
+    {loading && !data ? <Skeleton lines={4} /> : !items.length ? <Block title="全部论文"><Empty title="暂无相关论文" /></Block>
+      : byRelation.map((g) => <Block key={g.key} title={LABEL[g.key]} note={`${g.items.length} 篇`}
+          action={g.items.length > 5 ? <button className="link small" onClick={() => setAll((v) => !v)}>{all ? "收起" : `展开全部 ${g.items.length} 篇`}</button> : undefined}>
+          <ResearchSourceList items={all ? g.items : g.items.slice(0, 5)} />
+        </Block>)}
+    {unreviewed.length > 0 && <details className="item-reading-detail"><summary className="muted small">
+      另有 {unreviewed.length} 篇待核实：AI 判断未能与原文对应，未计入上方统计</summary>
+      <ResearchSourceList items={unreviewed} /></details>}
     <ResearchMore page={page} loading={loading} more={more}/>
   </div>;
 }
@@ -180,6 +194,14 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
   // Patent search returns sector news by keyword, so most records are other companies' patents. Say whose they are.
   const mine = items.filter((i) => own.some((n) => i.title.includes(n) || i.snippet.includes(n)));
   const others = items.filter((i) => !mine.includes(i));
+  // What can be read from the records themselves: relation, filing office and document kind of each number.
+  const relationOf = (item: Item) => { const r = item.extra?.research_relation; return typeof r === 'string' && RELATION[r] && r !== 'unrelated' ? r : 'other'; };
+  const LABEL: Record<string, string> = { ...RELATION, subject: '本公司申请', other: '关系未标注' };
+  const relations = ['subject', 'competitor', 'route', 'field', 'other']
+    .map((key) => ({ key, n: items.filter((i) => relationOf(i) === key).length })).filter((g) => g.n);
+  const numbers = items.map((i) => patentNumber(i)).filter((x): x is { office: string; kind: string } => !!x);
+  const offices = [...numbers.reduce((m, x) => m.set(x.office, (m.get(x.office) ?? 0) + 1), new Map<string, number>())].sort((a, b) => b[1] - a[1]);
+  const granted = numbers.filter((x) => x.kind === 'B').length;
   return <div className="tab-frame research-view">
     <VerdictBand eyebrow="专利与注册" meta={`通用网页检索 · ${note ?? ''}`}
       title={loading && !data ? "正在读取专利信息…" : !items.length ? "还没有检索到专利或注册信息"
@@ -191,6 +213,19 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
       </> : undefined}>
       <p className="tf-sub">专利只来自通用网页检索，没有接入国家知识产权局或专利数据库，<b>既不能代表本公司的专利布局，也不是完整的同行专利清单</b>。下方按是否提到本公司分开列出。</p>
     </VerdictBand>
+    {items.length > 0 && <div className="research-pair">
+      <Block card title="与公司的关系" note="AI 按申请人与内容判断，权利人以专利登记为准">
+        <ul className="inst-bars">{relations.map((g) => <li key={g.key}><span>{LABEL[g.key]}</span>
+          <i><motion.b initial={{ width: 0 }} animate={{ width: `${g.n / Math.max(...relations.map((x) => x.n)) * 100}%` }} transition={{ duration: .5, ease: EASE }} /></i><em>{g.n}</em></li>)}</ul>
+      </Block>
+      <Block card title="布局地域与状态" note={numbers.length ? `${numbers.length} 条带公开号 · 按公开号判断` : '记录中没有公开号'}>
+        {numbers.length ? <>
+          <ul className="inst-bars">{offices.slice(0, 6).map(([office, n]) => <li key={office}><span>{OFFICE[office] ?? office}</span>
+            <i><motion.b initial={{ width: 0 }} animate={{ width: `${n / offices[0][1] * 100}%` }} transition={{ duration: .5, ease: EASE }} /></i><em>{n}</em></li>)}</ul>
+          <p className="muted small">其中授权文本 {granted} 条、申请公开 {numbers.length - granted} 条（按公开号末尾 A/B 判断；法律状态以专利登记为准）。</p>
+        </> : <p className="muted small">检索到的记录没有可识别的公开号。</p>}
+      </Block>
+    </div>}
     {!items.length ? <Block title="专利与注册信息"><Empty title="暂无专利或注册信息">需要接入专利数据库才能做专利布局分析。</Empty></Block> : <>
       <Block title="提到本公司的专利动态" note={mine.length ? "仍需到专利库核实权利人与法律状态" : "检索未命中"}>
         {mine.length ? <ResearchSourceList items={mine} />
@@ -202,6 +237,15 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
     </>}
     <ResearchMore page={page} loading={loading} more={more}/>
   </div>;
+}
+
+const OFFICE: Record<string, string> = { CN: '中国', US: '美国', EP: '欧洲', WO: 'PCT 国际', JP: '日本', KR: '韩国', DE: '德国', TW: '中国台湾' };
+
+/** Publication number in the record (CN117878383B, US2024123456A1): office and A/B document kind. */
+function patentNumber(item: Item): { office: string; kind: string } | null {
+  const raw = `${str(item.extra?.patent_number)} ${item.title} ${item.url}`;
+  const m = raw.match(/(?<![A-Za-z])(CN|US|EP|WO|JP|KR|DE|TW)\s?\d{6,}\s?([AB])\d?(?![A-Za-z\d])/);
+  return m ? { office: m[1], kind: m[2] } : null;
 }
 
 /** Match saved names only. Stripping company suffixes can turn a name into an unrelated common word. */

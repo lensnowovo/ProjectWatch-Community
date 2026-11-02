@@ -12,6 +12,13 @@ SECTIONS = ('position', 'technology', 'industry', 'operations', 'chain')
 PREFIX = 'snapshot-section:'
 # Classification labels are judgments, not quotable facts; the consistency review covers them.
 LABELS = frozenset({'verdict', 'confidence', 'maturity', 'consensus'})
+# General industry outline (chain.outline): stated as AI industry knowledge, never quote-checked.
+OUTLINE = 'outline'
+
+
+def _reviewed(path: str) -> bool:
+    parts = path.split('.')
+    return parts[-1] not in LABELS and OUTLINE not in parts
 # Evidence lists: each item stands on its own refs and can be dropped without the section.
 ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'peers', 'change_if'})
 
@@ -38,7 +45,7 @@ def trim(part, issues):
                 blocking.append(issue)
             elif _item(path):
                 drop.add(_item(path))
-            elif path.split('.')[-1] not in LABELS:
+            elif _reviewed(path):
                 blocking.append(issue)
     if blocking:
         return None, [], blocking
@@ -147,8 +154,7 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
             if not refs:
                 raise ValueError('section has no evidence')
             payload = review.review_input({name: part}, {'numbered': sources})
-            payload['fields'] = {path: text for path, text in payload['fields'].items()
-                                 if path.split('.')[-1] not in LABELS}
+            payload['fields'] = {path: text for path, text in payload['fields'].items() if _reviewed(path)}
             batches = review.review_batches(payload)
         except (ValueError, TypeError, KeyError):
             outcomes[name] = dict(status='rejected', issues=['invalid_section_or_reference'])

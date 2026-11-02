@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api, ApiError, type ResearchCategory, type ResearchSource, type ResearchSourcePage } from './api';
 import { useVisiblePoll } from './Operational';
-import { CATEGORY_LABEL, relTime, useAsync } from './ui';
+import { CATEGORY_LABEL, dateNote, relTime, useAsync } from './ui';
 import './roundView.css';
 
 type Reader = typeof api.researchSources;
@@ -51,11 +51,21 @@ export function ResearchMore({page, loading, more}: {page?: ResearchSourcePage; 
 }
 
 /** The reviewed relation of a paper/patent to the monitored company: authorship/applicant is evidence, a search hit is not. */
-const RELATION: Record<string, string> = { subject: '公司署名/申请人', competitor: '竞品', field: '同领域', unrelated: '不相关' };
+export const RELATION: Record<string, string> = { subject: '公司署名/申请人', competitor: '竞品', route: '同技术路线', field: '同领域', unrelated: '不相关' };
 const strings = (value: unknown) => Array.isArray(value) ? value.filter(x => typeof x === 'string').join('、') : '';
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 const groupLabel = (item: ResearchSource, remaining = false) => item.family?.basis === 'listed_versions' ? '其他公开版本'
   : item.family?.basis === 'document' ? '相关文献' : remaining ? '同族' : '同族其他文件';
+
+/** Abstracts and search excerpts stay three lines tall until asked for. */
+function Snippet({text: body}: {text: string}) {
+  const [open, setOpen] = useState(false);
+  const long = body.length > 160;
+  return <>
+    <p className={`item-summary${long && !open ? ' research-snippet-clamp' : ''}`}>{body}</p>
+    {long && <button type="button" className="link small" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? '收起' : '展开全文摘录'}</button>}
+  </>;
+}
 
 /** Source IDs must never be sent to event read/feedback endpoints. */
 export function ResearchSourceList({items}: {items: ResearchSource[]}) {
@@ -87,12 +97,12 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
           {item.processing_status === 'pending' ? <span className="muted">相关性待核</span>
             : item.review === 'unreviewed' ? <span className="research-relation relation-unreviewed" title="AI 筛选结果未能与原文对应，原样保留供你查看">待核实</span>
             : RELATION[text(x.research_relation)] && <span className={`research-relation relation-${text(x.research_relation)}`}>{RELATION[text(x.research_relation)]}</span>}
-          <time className="muted item-date">{item.published_at ? relTime(item.published_at) : `发表日期未提供 · 收录于 ${relTime(item.collected_at)}`}</time>
+          <time className="muted item-date" title={dateNote(x)}>{item.published_at ? relTime(item.published_at) : '日期未知'}</time>
         </div>
         {href ? <a className="item-title" href={href} target="_blank" rel="noreferrer noopener">{item.title}</a> : <span className="item-title">{item.title}</span>}
-        {item.snippet && <p className="item-summary">{item.snippet}</p>}
+        {item.snippet && <Snippet text={item.snippet}/>}
         <details className="item-reading-detail"><summary className="muted small">来源与匹配信息</summary>
-          <p className="muted small">收录于 {relTime(item.collected_at)}{text(x.doi) ? ` · DOI：${text(x.doi)}` : ''}{text(x.patent_number) ? ` · 专利号：${text(x.patent_number)}` : ''}</p>
+          {(text(x.doi) || text(x.patent_number)) && <p className="muted small">{[text(x.doi) ? `DOI：${text(x.doi)}` : '', text(x.patent_number) ? `专利号：${text(x.patent_number)}` : ''].filter(Boolean).join(' · ')}</p>}
           <p className="muted small">{item.category === 'patent' ? '检索线索；权利人及法律状态以专利登记为准。' : '相关来源；不据检索命中认定公司归属。'}
             {item.read_scope === 'summary' ? ' 当前材料为搜索摘录或摘要。' : ''}</p>
           {details.map(([label, value]) => <p key={label}><span className="muted">{label}：</span>{value}</p>)}

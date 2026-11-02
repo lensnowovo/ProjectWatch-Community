@@ -708,7 +708,8 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "brief": store.get_brief(project_id),
             "plan": plan,
             "collection_report": None,  # per-source receipts now live in the round view (/round)
-            "research_source_counts": research_source_counts(store, project_id, review=None),  # matches the lists
+            # Counts what the pages count; unmatched verdicts are listed apart as 待核实.
+            "research_source_counts": research_source_counts(store, project_id, review=('confirmed', 'pending')),
             "metrics": metrics,
             "finance": finance.view(metrics),
             "landscape": _landscape_view(project_id),

@@ -31,13 +31,14 @@ def collector(handler, mode="auto"):
     return Collectors(Http(send), config), seen
 
 
-def test_deepseek_preferred_content_retained_date_not_promoted():
+def test_deepseek_preferred_content_retained_and_page_date_labelled():
     c, seen = collector(lambda *a: response({"results": [page()]}))
     hit = c.web_search("Synthetic Optics", count=10)[0]
     assert len(seen) == 1 and seen[0][0].endswith("/tools/search")
     assert seen[0][1] == {"query": "Synthetic Optics", "count": 10, "need_content": True}
     assert hit["extra"]["search_content"] == "2025年意向订单500万元。"
-    assert hit["published_at"] is None
+    # No date in the URL or the page text: the provider's page date is used and labelled as such.
+    assert hit["published_at"] == "2026-01-01T00:00:00+00:00" and hit["extra"]["date_source"] == "search"
     assert hit["extra"]["provider_date"] == "2026-01-01T00:00:00Z"
 
 

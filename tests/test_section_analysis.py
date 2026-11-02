@@ -254,3 +254,14 @@ def test_a_point_omitted_by_the_normalizer_is_recorded_and_the_section_published
     assert result['published'] == ['operations']
     assert result['sections']['operations']['dropped'] == ['合成材料显示公司获批进度全球领先。']
     assert [p['text'] for p in view['analysis']['operations']['for']] == ['合成材料记录招募状态。']
+
+
+def test_the_chain_outline_is_published_without_quote_checking(host):
+    raw = dict(chain=dict(two_points(), outline={'upstream': [{'stage': '抗体与连接子原料', 'players': ['合成供应商']}],
+                                                 'downstream': [{'stage': '医院与患者', 'players': []}]}))
+    review = judging()
+    result, view = apply(host, raw, review)
+    assert result['published'] == ['chain']
+    assert not any('outline' in field for call in review.calls for field in call)
+    assert view['analysis']['chain']['outline']['upstream'] == [{'stage': '抗体与连接子原料', 'players': ['合成供应商']}]
+    assert view['analysis']['chain']['outline']['downstream'][0]['stage'] == '医院与患者'

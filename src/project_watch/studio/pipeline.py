@@ -118,7 +118,7 @@ _TRIAGE_SYSTEM = """你是投资机构的研究助理，负责筛选与被监控
 - relevant：是否真的与该公司、它的直接竞品、所在赛道或相关政策有关，或直接涉及下方列出的跟踪事项的对象和问题（同名不同公司、广告、无关内容为 false）；
 - category：company（公司本身）| competitor（竞品）| industry（赛道/技术）| policy（政策监管）| paper（论文）| trial（临床试验）| patent（专利）；
 - importance：major（融资、并购、重大合作/订单、监管处罚、关键管线进展、核心人员变动、重大负面）| notable（值得一看）| routine（一般）；
-- relation（仅论文 paper / 专利 patent 必填）：subject（作者单位或申请人明确写着被监控公司或其已知名称）| competitor（明确是竞品的署名或申请）| field（同领域、同技术或同靶点，但不是公司署名或申请）| unrelated。检索命中、标题相似不是署名证明；没有署名或申请人证据时不得填 subject；
+- relation（仅论文 paper / 专利 patent 必填）：subject（作者单位或申请人明确写着被监控公司或其已知名称）| competitor（明确是竞品的署名或申请）| route（与公司同一技术路线：同靶点、同类分子或同一平台技术，但不是公司或竞品的署名）| field（同领域其他研究，技术路线不同或未写明）| unrelated。检索命中、标题相似不是署名证明；没有署名或申请人证据时不得填 subject；
 - summary：一句话中文摘要（20-60 字）；
 - impact：对这家公司意味着什么，一句话，major 与 notable 必须填写。优先结合“内部背景”里的计划、关键数字、客户和风险具体说明：
   是验证还是挑战了哪项计划或假设、可能影响哪个数字（例如“竞品降价 20%，BP 中 2026 年收入预测的单价假设承压”）；

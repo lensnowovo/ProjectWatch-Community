@@ -124,3 +124,11 @@ def test_a_requested_round_does_not_wait_behind_side_jobs(tmp_path):
     collect = store.enqueue(ids[0], 'collect', input_version='manual:synthetic')
     first = store.claim()
     assert first['id'] == collect['id'] and all(first['id'] != s['id'] for s in side)
+
+
+def test_a_job_the_user_started_goes_ahead_of_background_side_jobs(tmp_path):
+    store, ids = setup(tmp_path, 1)
+    side = [store.enqueue(ids[0], kind) for kind in ('details', 'business', 'landscape')]
+    asked = store.enqueue(ids[0], 'competition', input_version='manual:synthetic')
+    first = store.claim()
+    assert first['id'] == asked['id'] and all(first['id'] != s['id'] for s in side)

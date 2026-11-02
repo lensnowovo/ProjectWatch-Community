@@ -66,7 +66,9 @@ SYSTEM = """你是一级市场投资研究员。根据给定的编号素材，�
  "operations": {"verdict": "improving|steady|pressured|unclear", "confidence": "high|medium|low", "summary": "≤80字",
    "for": [{"text": "向好的依据", "refs": ["D1"]}], "against": [{"text": "承压的依据", "refs": ["M2"]}], "change_if": ["什么新信息会改变判断"]},
  "chain": {"verdict": "favorable|steady|pressured|unclear", "confidence": "high|medium|low", "summary": "≤80字",
-   "for": [{"text": "有利的依据", "refs": ["D3"]}], "against": [{"text": "不利的依据", "refs": ["N4"]}], "change_if": ["什么新信息会改变判断"]},
+   "for": [{"text": "有利的依据", "refs": ["D3"]}], "against": [{"text": "不利的依据", "refs": ["N4"]}], "change_if": ["什么新信息会改变判断"],
+   "outline": {"upstream": [{"stage": "上游环节（≤16字，如 抗体与连接子原料、CDMO 生产）", "players": ["材料中出现的该环节公司"]}],
+               "downstream": [{"stage": "下游环节（≤16字，如 授权合作方、医院与患者）", "players": []}]}},
  "gaps": ["缺少的关键信息"]}"""
 
 
@@ -583,6 +585,20 @@ def judgment_issues(data):
     return issues
 
 
+def _outline(value) -> dict:
+    """General up/downstream stages for the company's industry: AI industry knowledge, not a sourced fact."""
+    value = value if isinstance(value, dict) else {}
+    out = {}
+    for side in ('upstream', 'downstream'):
+        stages = []
+        for row in value.get(side) or []:
+            if isinstance(row, dict) and str(row.get('stage') or '').strip():
+                players = [_clip(p, 20) for p in row.get('players') or [] if isinstance(p, str) and p.strip()][:5]
+                stages.append({'stage': _clip(row['stage'], 16), 'players': players})
+        out[side] = stages[:5]
+    return out
+
+
 def normalize(data: dict, numbered: dict) -> dict:
     data = data if isinstance(data, dict) else {}
     scope_issues = judgment_issues(data)
@@ -661,6 +677,8 @@ def normalize(data: dict, numbered: dict) -> dict:
         part, raw, evidence = section(name, ("for", "against"))
         part["verdict"] = raw.get("verdict") if raw.get("verdict") in VERDICTS[name] and evidence else "unclear"
         part["change_if"] = [_clip(t, 120) for t in (raw.get("change_if") or []) if isinstance(t, str) and t.strip()][:4]
+        if name == "chain":
+            part["outline"] = _outline(raw.get("outline"))
         rings[name] = part
 
     for part in (position, technology, industry, *rings.values()):

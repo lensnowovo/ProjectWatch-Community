@@ -31,7 +31,7 @@ test('persistent change and ordinary errors never loop indefinitely',async()=>{
 });
 test('source rows are escaped, attribution stays a clue and no event mutation controls are rendered',()=>{
   const html=renderToStaticMarkup(React.createElement(ResearchSourceList,{items:[{...row('a'),url:'javascript:alert(1)'}]}));
-  assert.match(html,/检索线索/);assert.match(html,/申请人摘录/);assert.match(html,/Independent company/);assert.match(html,/发表日期未提供/);
+  assert.match(html,/检索线索/);assert.match(html,/申请人摘录/);assert.match(html,/Independent company/);assert.match(html,/日期未知/);assert.doesNotMatch(html,/收录于/);
   assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/javascript:|href=|标记重要|关联与依据 →|本公司专利布局/);
   assert.match(html,/<details/);assert.doesNotMatch(html,/<details[^>]*open/);
   assert.match(html,/相关性待核/);

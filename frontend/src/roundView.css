@@ -21,3 +21,4 @@
 .research-relation.relation-subject { color: var(--ok); font-weight: 600; }
 .research-relation.relation-unrelated { color: var(--muted); }
 .research-relation.relation-unreviewed { color: var(--muted); font-style: italic; }
+.research-snippet-clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }

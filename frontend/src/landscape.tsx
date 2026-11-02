@@ -366,7 +366,11 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
     setSaving(true);
     try {
       await api.selectCompetitor(detail.project.id, detail.project.config_version, name, decision, peerId);
-      toast(decision === "include" ? "已确认跟踪" : "已移除");
+      // A newly confirmed competitor is compared at once. A queued update reads the latest selection when it starts.
+      const queued = detail.jobs.some((j) => j.kind === "competition" && j.status === "queued");
+      const started = decision === "include" && !queued
+        && await api.refresh(detail.project.id, "competition").then(() => true, () => false);
+      toast(decision === "include" ? (started || queued ? "已确认跟踪，正在更新竞对资料" : "已确认跟踪") : "已移除");
       setPeerName(""); onReload?.();
     } catch (e) { toast(e instanceof Error ? e.message : "未保存，请重试", "error"); }
     finally { setSaving(false); }
@@ -397,7 +401,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
   const reports = [...news.filter(i => i.status !== 'dismissed').map((item) => {
     const source = item.sources?.[0];
     return { id: item.id, title: source?.title || item.title, url: source?.url || item.url,
-      date: (source?.published_at || item.published_at || item.collected_at).slice(0, 10),
+      date: (source?.published_at || item.published_at || '').slice(0, 10),
       type: "其他", topic: "其他", importance: item.importance };
   }), ...unmatchedReports(news, moves)];
   // Defense in depth for an older API/cache. Legacy peer rows have no verified
