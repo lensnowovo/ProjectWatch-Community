@@ -48,3 +48,29 @@ def test_stored_items_get_dates_and_names_once(tmp_path):
         row = db.execute("SELECT published_at,source,extra FROM studio_items WHERE id='i1'").fetchone()
     assert row['published_at'] == '2026-09-02T00:00:00+00:00' and row['source'] == '人民网'
     assert json.loads(row['extra'])['date_source'] == 'page'
+
+
+def test_events_take_their_reports_earliest_date(tmp_path):
+    from project_watch.repository import ProjectRepository
+
+    repo = ProjectRepository(tmp_path / 'events.sqlite3')
+    pid = repo.create_project('Synthetic Co').id
+    store = StudioStore(repo.db_path)
+    with closing(store._connect()) as db, db:
+        for i, published in enumerate(('2026-09-03T00:00:00+00:00', '2026-09-01T00:00:00+00:00', None)):
+            db.execute("INSERT INTO studio_items (id,project_id,key,category,title,url,source,snippet,published_at,collected_at,extra) "
+                       "VALUES (?,?,?,'company','t','https://example.invalid/a','s','',?,'2026-11-01T00:00:00+00:00','{}')",
+                       (f'i{i}', pid, f'k{i}', published))
+    event_id = store.create_event(pid, {'title': 'Synthetic event', 'category': 'company', 'importance': 'notable'}, ['i0', 'i2'])
+    with closing(store._connect()) as db:
+        assert db.execute('SELECT event_at FROM studio_events WHERE id=?', (event_id,)).fetchone()[0] == '2026-09-03T00:00:00+00:00'
+    undated = store.create_event(pid, {'title': 'Undated', 'category': 'company', 'importance': 'notable'}, ['i2'])
+    store.attach_to_event(undated, ['i1'], importance='notable')
+    with closing(store._connect()) as db:
+        assert db.execute('SELECT event_at FROM studio_events WHERE id=?', (undated,)).fetchone()[0] == '2026-09-01T00:00:00+00:00'
+        db.execute("UPDATE studio_events SET event_at=NULL WHERE id=?", (event_id,))
+        db.execute("DELETE FROM studio_state WHERE key='event_dates_v1'")
+        db.commit()
+    StudioStore(repo.db_path)  # the one-time backfill
+    with closing(store._connect()) as db:
+        assert db.execute('SELECT event_at FROM studio_events WHERE id=?', (event_id,)).fetchone()[0] == '2026-09-03T00:00:00+00:00'

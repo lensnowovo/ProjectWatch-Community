@@ -296,6 +296,9 @@ class StudioStore:
             if not db.execute("SELECT 1 FROM studio_state WHERE key='item_dates_v2'").fetchone():
                 self._backfill_item_dates(db)
                 db.execute("INSERT OR REPLACE INTO studio_state VALUES ('item_dates_v2',?)", (now(),))
+            if not db.execute("SELECT 1 FROM studio_state WHERE key='event_dates_v1'").fetchone():
+                self._backfill_event_dates(db)
+                db.execute("INSERT OR REPLACE INTO studio_state VALUES ('event_dates_v1',?)", (now(),))
             # Opening a store (including read-only adapters) must not steal a
             # live worker. Recovery happens under claim's write transaction.
         from project_watch.studio.evidence_store import EvidenceStore
@@ -323,6 +326,18 @@ class StudioStore:
             yield
         finally:
             self._write_context.guard = previous
+
+    @staticmethod
+    def _backfill_event_dates(db: sqlite3.Connection) -> None:
+        """Once: undated events take their reports' earliest publication date, as a recorded revision."""
+        from project_watch.studio.event_revisions import record
+
+        rows = db.execute("SELECT e.id, e.project_id, MIN(i.published_at) FROM studio_events e "
+                          "JOIN studio_items i ON i.event_id=e.id AND COALESCE(i.published_at,'')!='' "
+                          "WHERE COALESCE(e.event_at,'')='' GROUP BY e.id").fetchall()
+        for event_id, project_id, earliest in rows:
+            db.execute("UPDATE studio_events SET event_at=? WHERE id=?", (earliest, event_id))
+            record(db, project_id, event_id)
 
     @staticmethod
     def _backfill_item_dates(db: sqlite3.Connection) -> None:
@@ -1108,12 +1123,13 @@ class StudioStore:
         previous = previous_memberships(db, project_id, item_ids)
         ts = now()
         event_id = uuid.uuid4().hex
+        event_at = event.get("event_at") or _earliest_published(db, project_id, item_ids)
         db.execute(
             """INSERT INTO studio_events (id, project_id, title, summary, impact, category,
             importance, event_at, created_at, updated_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (event_id, project_id, event["title"][:300], event.get("summary", "")[:600],
              event.get("impact", "")[:600], event["category"], event["importance"],
-             event.get("event_at"), ts, ts, status))
+             event_at, ts, ts, status))
         db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
                        [(event_id, i, project_id) for i in item_ids])
         for old_event in previous:
@@ -1149,6 +1165,10 @@ class StudioStore:
                  now(), 1 if upgraded else 0, 1 if upgraded and importance == "major" else 0, event_id))
             db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
                            [(event_id, i, row['project_id']) for i in item_ids])
+            # An undated event takes the earliest publication date its reports now carry.
+            db.execute("UPDATE studio_events SET event_at=? WHERE id=? AND COALESCE(event_at,'')=''",
+                       (_earliest_published(db, row['project_id'], [*item_ids, *[r[0] for r in db.execute(
+                           'SELECT id FROM studio_items WHERE event_id=?', (event_id,))]]), event_id))
             return after_attach(db, row['project_id'], saved)
 
     def list_events(self, *, project_id: str | None = None, category: str | None = None,
@@ -1398,3 +1418,13 @@ class StudioStore:
         from project_watch.studio.usage import rows
 
         return rows(self, days)
+
+
+def _earliest_published(db, project_id: str, item_ids) -> str | None:
+    """The earliest publication time among these items, or None."""
+    ids = sorted(set(item_ids))
+    if not ids:
+        return None
+    row = db.execute(f"SELECT MIN(published_at) FROM studio_items WHERE project_id=? AND id IN ({','.join('?' * len(ids))}) "
+                     "AND COALESCE(published_at,'')!=''", (project_id, *ids)).fetchone()
+    return row[0] if row and row[0] else None
