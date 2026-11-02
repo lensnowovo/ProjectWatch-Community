@@ -346,3 +346,9 @@ def test_a_quote_that_only_partly_carries_the_claim_is_not_support():
                                                 check('a.for.1.text')]}, payload)  # a summary is a synthesis
     assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
     assert 'partial' in issues[0]['reason']
+
+
+def test_an_unsupported_gap_note_drops_only_that_note(host):
+    raw = dict(chain=dict(two_points(), gaps=['合成材料未披露供应商名单。', '合成材料显示全年数据已完整披露。']))
+    result, _ = apply(host, raw, judging({'chain.gaps.1'}))
+    assert result['published'] == ['chain'] and result['sections']['chain']['dropped'] == ['合成材料显示全年数据已完整披露。']

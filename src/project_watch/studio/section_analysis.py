@@ -20,7 +20,7 @@ def _reviewed(path: str) -> bool:
     parts = path.split('.')
     return parts[-1] not in LABELS and OUTLINE not in parts
 # Evidence lists: each item stands on its own refs and can be dropped without the section.
-ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds', 'peers', 'change_if'})
+ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds', 'peers', 'change_if', 'gaps'})
 
 
 def _item(path):
