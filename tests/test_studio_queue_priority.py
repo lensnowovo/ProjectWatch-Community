@@ -116,3 +116,11 @@ def test_a_round_report_does_not_wait_behind_long_side_jobs(tmp_path):
     report = store.enqueue(ids[0], 'report', input_version='analyze:synthetic')
     first = store.claim()
     assert first['id'] == report['id'] and all(first['id'] != s['id'] for s in side)
+
+
+def test_a_requested_round_does_not_wait_behind_side_jobs(tmp_path):
+    store, ids = setup(tmp_path, 1)
+    side = [store.enqueue(ids[0], kind) for kind in ('details', 'business', 'competition', 'landscape')]
+    collect = store.enqueue(ids[0], 'collect', input_version='manual:synthetic')
+    first = store.claim()
+    assert first['id'] == collect['id'] and all(first['id'] != s['id'] for s in side)

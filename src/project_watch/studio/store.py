@@ -1246,7 +1246,8 @@ class StudioStore:
                                "finished_at=?,retry_after=?,lease_token='' WHERE id=?", (now(), "9999-12-31", old["id"]))
                 else:
                     db.execute("UPDATE studio_jobs SET status='queued',lease_token='',lease_until=NULL WHERE id=?", (old["id"],))
-            # Prefer quick finishing steps (briefs, round reports), but reserve every third selection for
+            # Prefer the round a user asked for (collect, analyze, report) and briefs over side jobs,
+            # but reserve every third selection for
             # oldest eligible work. The persisted counter survives worker restarts
             # and is updated under the same lock as the lease claim.
             burst = db.execute("SELECT value FROM studio_state WHERE key='queue_brief_burst'").fetchone()
@@ -1258,11 +1259,12 @@ class StudioStore:
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
                 WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
                 AND (j.kind='internal' OR COALESCE(p.status,'active')='active')
-                ORDER BY CASE WHEN ? AND j.kind IN ('brief','report') THEN 0 ELSE 1 END,
+                ORDER BY CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
+                              WHEN j.kind IN ('collect','analyze') THEN 1 ELSE 2 END,
                          COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (*JOB_KINDS, prefer_brief)).fetchone()
             if not row:
                 return None
-            next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and row['kind'] in ('brief', 'report') else 0
+            next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and row['kind'] in ('collect', 'analyze', 'report', 'brief') else 0
             db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                        (str(next_burst),))
             db.execute("UPDATE studio_jobs SET status='running',started_at=COALESCE(started_at,?),lease_token=?,"
