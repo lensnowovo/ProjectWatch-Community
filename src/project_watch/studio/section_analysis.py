@@ -298,6 +298,21 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
                 snapshot_id=context['id'], sections=outcomes, published=list(accepted))
 
 
+def _strip_codes(value):
+    """Records published before inline codes were stripped at normalization."""
+    from project_watch.studio.citation_text import strip_inline_codes
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in ('text', 'summary') and isinstance(child, str):
+                value[key] = strip_inline_codes(child)
+            else:
+                _strip_codes(child)
+    elif isinstance(value, list):
+        for child in value:
+            _strip_codes(child)
+
+
 def project(store, pid, baseline):
     """Compose per-section dates without relabelling retained results as new."""
     with closing(store._connect()) as db:
@@ -340,11 +355,14 @@ def project(store, pid, baseline):
             if permitted:
                 analysis[name] = deepcopy(record['analysis'])
                 citations(analysis[name], record['numbered'])
+                _strip_codes(analysis[name])
             else:
                 analysis[name] = records[0]['empty_analysis'][name]
-        # Mixed-version sections do not gain a newly generated global headline.
+        # Mixed-version sections do not gain a newly generated global headline. Gaps come from the
+        # published sections only; an older whole-analysis record's gaps belong to another snapshot.
         analysis['headline'] = ''
-        analysis.setdefault('gaps', [])
+        analysis['gaps'] = list(dict.fromkeys(g for name in SECTIONS if name in meta
+                                              for g in (analysis.get(name) or {}).get('gaps') or []))
         for name in SECTIONS:
             if name not in meta and baseline and baseline.get('analysis', {}).get(name):
                 analysis[name] = deepcopy(analysis[name])

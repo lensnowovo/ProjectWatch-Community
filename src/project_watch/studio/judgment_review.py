@@ -10,7 +10,7 @@ import re
 import unicodedata
 from copy import deepcopy
 
-VERSION = 'judgment-evidence-review-v8'
+VERSION = 'judgment-evidence-review-v9'
 
 
 def canonical(value) -> str:
@@ -53,6 +53,7 @@ field 使用 fields 的给定编号；如有 field_paths，它只用于定位 an
 某指标或对象成立不能扩展到其他指标或对象。引用存在不等于支持，明确反证不能被忽略。
 原文明确的事实可判 supported；解释或推断只有在表述保留推断性质、范围及限制且依据充分时才可 supported。
 仅明确表达未知、缺口、条件问题的字段可判 not_factual，不把未经支持的肯定结论当作 not_factual。
+gaps 字段声称某信息缺少或未披露时，若 evidence 中其实已有该信息，判 contradicted 并引用该信息。
 与证据冲突判 contradicted，证据不足支持该强度的结论判 insufficient。
 保留来源层级：搜索摘要不升级为完整原件，报道内容不升级为已独立核实事实。
 判 supported 时必须给出 inference：引文本身就能推出该字段的完整断言为 direct；
