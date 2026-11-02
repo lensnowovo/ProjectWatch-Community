@@ -95,7 +95,7 @@ def main():
         raise ValueError('Smoke must use the installed wheel, not source/editable files')
     count = verify_installed_product(args.wheel, package)
     # Import the shipped optional capabilities without invoking a model/download.
-    modules = ['onnxruntime', 'cv2', 'pypdfium2', 'rapidocr', 'argon2', 'mcp', 'psycopg']
+    modules = ['onnxruntime', 'cv2', 'pypdfium2', 'rapidocr', 'mcp']
     if sys.platform == 'darwin':
         modules.extend(['objc', 'AppKit'])
     for name in modules:

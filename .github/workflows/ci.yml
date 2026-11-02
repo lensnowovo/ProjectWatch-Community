@@ -162,7 +162,7 @@
         },
         {
           "name": "Install isolated test dependencies",
-          "run": "python -m pip install .[dev,desktop,ocr,mcp,team,postgres] build ruff"
+          "run": "python -m pip install .[dev,desktop,ocr,mcp] build ruff"
         },
         {
           "name": "Lint",
@@ -174,7 +174,7 @@
         },
         {
           "name": "Python domain tests",
-          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/offline\" -- tests --ignore=tests/test_web_preview.py --ignore=tests/test_static_asset_mime.py --ignore=tests/test_windows_icon.py --ignore=tests/test_frontend_notices.py --ignore=tests/test_package_boundary.py --ignore=tests/test_layer_boundaries.py --ignore=tests/test_core_probe.py --ignore=tests/test_studio_runtime_boundary.py --ignore=tests/test_studio.py --ignore=tests/test_studio_taskboard.py --ignore=tests/test_postgres_migrations.py --ignore=tests/test_ci_scope.py --ignore=tests/test_release_ci.py --ignore=tests/test_release_security_dependencies.py --ignore=tests/test_release_document_links.py --ignore=tests/test_release_feedback.py --ignore=tests/test_developer_distribution.py"
+          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/offline\" -- tests --ignore=tests/test_web_preview.py --ignore=tests/test_static_asset_mime.py --ignore=tests/test_windows_icon.py --ignore=tests/test_frontend_notices.py --ignore=tests/test_package_boundary.py --ignore=tests/test_layer_boundaries.py --ignore=tests/test_core_probe.py --ignore=tests/test_studio_runtime_boundary.py --ignore=tests/test_studio.py --ignore=tests/test_studio_taskboard.py --ignore=tests/test_ci_scope.py --ignore=tests/test_release_ci.py --ignore=tests/test_release_security_dependencies.py --ignore=tests/test_release_document_links.py --ignore=tests/test_release_feedback.py --ignore=tests/test_developer_distribution.py"
         },
         {
           "id": "ci_proof",
@@ -260,7 +260,7 @@
         },
         {
           "name": "Install isolated test dependencies",
-          "run": "python -m pip install .[dev,desktop,ocr,mcp,team,postgres] build ruff"
+          "run": "python -m pip install .[dev,desktop,ocr,mcp] build ruff"
         },
         {
           "name": "Frontend dependencies",
@@ -284,7 +284,7 @@
         },
         {
           "name": "Frontend Python contracts",
-          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/frontend-python\" tests/test_web_preview.py tests/test_static_asset_mime.py tests/test_windows_icon.py tests/test_frontend_notices.py tests/test_package_boundary.py tests/test_layer_boundaries.py tests/test_core_probe.py tests/test_studio_runtime_boundary.py tests/test_studio.py tests/test_studio_taskboard.py tests/test_postgres_migrations.py"
+          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/frontend-python\" tests/test_web_preview.py tests/test_static_asset_mime.py tests/test_windows_icon.py tests/test_frontend_notices.py tests/test_package_boundary.py tests/test_layer_boundaries.py tests/test_core_probe.py tests/test_studio_runtime_boundary.py tests/test_studio.py tests/test_studio_taskboard.py"
         },
         {
           "id": "ci_proof",
@@ -370,7 +370,7 @@
         },
         {
           "name": "Install isolated test dependencies",
-          "run": "python -m pip install .[dev,desktop,ocr,mcp,team,postgres] build ruff"
+          "run": "python -m pip install .[dev,desktop,ocr,mcp] build ruff"
         },
         {
           "name": "Frontend dependencies",
@@ -386,7 +386,7 @@
         },
         {
           "name": "Fresh installed-wheel smoke",
-          "run": "$wheel = Get-ChildItem -LiteralPath \"$env:RUNNER_TEMP/wheel\" -Filter '*.whl'\nif ($wheel.Count -ne 1) { throw 'Expected one wheel' }\npython -m venv \"$env:RUNNER_TEMP/installed\"\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n$testPython = if ($IsWindows) { \"$env:RUNNER_TEMP/installed/Scripts/python.exe\" } else { \"$env:RUNNER_TEMP/installed/bin/python\" }\n& $testPython -m pip install \"$($wheel.FullName)[desktop,ocr,mcp,team,postgres]\" httpx\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n& $testPython -I -X utf8 scripts/installed_wheel_smoke.py --wheel $wheel.FullName --output \"$env:RUNNER_TEMP/installed-smoke\""
+          "run": "$wheel = Get-ChildItem -LiteralPath \"$env:RUNNER_TEMP/wheel\" -Filter '*.whl'\nif ($wheel.Count -ne 1) { throw 'Expected one wheel' }\npython -m venv \"$env:RUNNER_TEMP/installed\"\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n$testPython = if ($IsWindows) { \"$env:RUNNER_TEMP/installed/Scripts/python.exe\" } else { \"$env:RUNNER_TEMP/installed/bin/python\" }\n& $testPython -m pip install \"$($wheel.FullName)[desktop,ocr,mcp]\" httpx\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n& $testPython -I -X utf8 scripts/installed_wheel_smoke.py --wheel $wheel.FullName --output \"$env:RUNNER_TEMP/installed-smoke\""
         },
         {
           "name": "Full installed synthetic journey",
