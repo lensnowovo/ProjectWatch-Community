@@ -10,6 +10,7 @@ from copy import deepcopy
 from decimal import Decimal
 from itertools import pairwise
 
+from project_watch.studio.citation_text import strip_inline_codes
 from project_watch.studio.insight import SOURCE_LABEL, VERDICTS, counts
 
 CONFIDENCE = ("high", "medium", "low")
@@ -50,6 +51,8 @@ SYSTEM = """你是一级市场投资研究员。根据给定的编号素材，�
   不要出现 verdict 取值（如 unclear、ahead）等英文代号，不要提“题设”“素材”“编号”或提示词本身；出处只放在 refs 里。
 - 收入结构、亏损扩大/收窄等标题概括也须带报告期；无法对应期间时省略该概括，不借用获批或报道日期。
   summary 的整体方向须与该板块 verdict 一致；无法判断时写明缺口，不同时声称“整体向好/承压/平稳”。
+- 缺口写在对应板块里："gaps": ["本板块缺少的关键信息"]，每板块不超过 3 条。只写素材里确实没有的信息；
+  素材中已有的数据（例如已披露的半年报数字）不能写成“未披露”。
 
 输出 JSON：
 {"headline": "一句话总判断（≤60字）",
@@ -303,7 +306,7 @@ def _points(values, numbered: dict, limit: int = 6) -> list[dict]:
             continue
         refs = [r for r in (_ref(code, numbered) for code in value.get("refs") or []) if r]
         if refs:  # A judgment without a valid source is not kept.
-            out.append({"text": _clip(value["text"], 240), "refs": refs[:4]})
+            out.append({"text": _clip(strip_inline_codes(value["text"]), 240), "refs": refs[:4]})
     return out[:limit]
 
 
@@ -653,8 +656,10 @@ def normalize(data: dict, numbered: dict) -> dict:
         if _undated_zero_income(summary):
             temporal_sections.add(name)
             summary = ""
-        out["summary"] = summary
+        out["summary"] = strip_inline_codes(summary)
         out["confidence"] = _confidence(raw.get("confidence"), evidence)
+        # Reviewed with the section: a gap the evidence already answers is dropped before this point.
+        out["gaps"] = [_clip(strip_inline_codes(g), 120) for g in raw.get("gaps") or [] if isinstance(g, str) and g.strip()][:3]
         return out, raw, evidence
 
     position, raw, evidence = section("position", ("for", "against"))

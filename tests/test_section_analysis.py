@@ -352,3 +352,17 @@ def test_an_unsupported_gap_note_drops_only_that_note(host):
     raw = dict(chain=dict(two_points(), gaps=['合成材料未披露供应商名单。', '合成材料显示全年数据已完整披露。']))
     result, _ = apply(host, raw, judging({'chain.gaps.1'}))
     assert result['published'] == ['chain'] and result['sections']['chain']['dropped'] == ['合成材料显示全年数据已完整披露。']
+
+
+def test_published_text_has_no_inline_source_codes_and_gaps_come_from_sections(host):
+    raw = dict(operations=dict(two_points(), summary='合成材料仍在招募阶段（S1、S9）。',
+                               gaps=['合成材料未披露入组人数（S1）。']))
+    raw['operations']['for'][0]['text'] = '合成材料记录招募状态（S1）。'
+    research, _, _ = host
+    baseline = {'analysis': {'gaps': ['旧版整份分析的缺口，属于另一份材料快照']}}
+    result, _ = apply(host, raw)
+    assert result['published'] == ['operations']
+    view = section_analysis.project(research.store, research.project_id, baseline)
+    part = view['analysis']['operations']
+    assert part['summary'] == '合成材料仍在招募阶段。' and part['for'][0]['text'] == '合成材料记录招募状态。'
+    assert view['analysis']['gaps'] == ['合成材料未披露入组人数。']  # the older record's gaps are not carried over
