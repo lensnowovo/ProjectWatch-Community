@@ -10,7 +10,7 @@ import re
 import unicodedata
 from copy import deepcopy
 
-VERSION = 'judgment-evidence-review-v6'
+VERSION = 'judgment-evidence-review-v7'
 
 
 def canonical(value) -> str:
@@ -55,8 +55,10 @@ field 使用 fields 的给定编号；如有 field_paths，它只用于定位 an
 仅明确表达未知、缺口、条件问题的字段可判 not_factual，不把未经支持的肯定结论当作 not_factual。
 与证据冲突判 contradicted，证据不足支持该强度的结论判 insufficient。
 保留来源层级：搜索摘要不升级为完整原件，报道内容不升级为已独立核实事实。
+判 supported 时必须给出 inference：引文本身就能推出该字段的完整断言为 direct；
+只支持其中一部分、或要再加一步推理才成立为 partial；只是同一话题、不能推出断言为 related。
 返回一个 JSON 对象：{"checks":[{"field":"F1","status":"supported|not_factual|contradicted|insufficient",
-"reason":"简短说明","evidence":[{"ref":"来源编号","quote":"该来源 context 或 title 中连续逐字片段"}]}]}。
+"inference":"direct|partial|related","reason":"简短说明","evidence":[{"ref":"来源编号","quote":"该来源 context 或 title 中连续逐字片段"}]}]}。
 每个给定 field 恰好出现一次，不增删路径。supported 必须有逐字证据；存在反证时同样引用反证。
 不要重写结论，不返回 Markdown。"""
 
@@ -270,6 +272,13 @@ def validate_review(value, payload):
             # A support claim whose citation is not in the cited source is not support.
             issues.append({'field': path, 'code': 'evidence_insufficient',
                            'reason': 'citation not found in the cited source', 'evidence': unverified})
+            continue
+        if status == 'supported' and row.get('inference') in ('partial', 'related'):
+            # The quote exists but does not by itself carry the claim. Older replies without
+            # the field are read as direct.
+            issues.append({'field': path, 'code': 'evidence_insufficient',
+                           'reason': f"quote is {row['inference']} to the claim: {row['reason']}"[:600],
+                           'evidence': witnesses})
             continue
         if status in ('contradicted', 'insufficient'):
             issues.append({'field': path, 'code': 'evidence_' + status,

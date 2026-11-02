@@ -332,3 +332,17 @@ def test_a_summary_a_guard_would_blank_is_rewritten_before_publication(host):
     assert len(reasons) == 1 and '收入为零' in reasons[0]
     result = section_analysis.publish(research.pipeline, research.execution, context, raw, sources, outcomes, lambda: None)
     assert result['published'] == ['operations']
+
+
+def test_a_quote_that_only_partly_carries_the_claim_is_not_support():
+    from project_watch.studio import judgment_review as review
+
+    payload = {'fields': {'a.summary': 'x', 'a.for.0.text': 'y', 'a.for.1.text': 'z'},
+               'evidence': {'S1': {'context': 'Enrollment is RECRUITING.', 'title': ''}}}
+    def check(field, inference=None):
+        row = dict(field=field, status='supported', reason='r', evidence=[dict(ref='S1', quote='RECRUITING')])
+        return {**row, 'inference': inference} if inference else row
+    issues = review.validate_review({'checks': [check('a.summary', 'direct'), check('a.for.0.text', 'partial'),
+                                                check('a.for.1.text')]}, payload)
+    assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
+    assert 'partial' in issues[0]['reason']
