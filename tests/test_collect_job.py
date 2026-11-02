@@ -135,3 +135,45 @@ def test_an_unclear_request_in_an_earlier_round_is_kept_and_a_new_round_asks_aga
         assert db.execute('SELECT status FROM studio_job_calls WHERE job_id=? AND call_key=?',
                           (second.job['id'], row[0])).fetchone()[0] == 'completed'
     assert research_sources(pipeline.store, pid, 'patent')['total'] == 3
+
+
+def _model_answers(pipeline, answer):
+    """Route model requests to a fixed answer; every other provider keeps the fixture's behaviour."""
+    inner = pipeline.http_factory(None).transport
+    calls = []
+
+    def send(method, url, headers, body, timeout):
+        if urlsplit(url).hostname != 'model.example.invalid':
+            return inner(method, url, headers, body, timeout)
+        calls.append(json.loads(body))
+        content = json.dumps(answer)
+        return Response(200, {}, json.dumps({'choices': [{'message': {'content': content}, 'finish_reason': 'stop'}]}).encode())
+    pipeline.http_factory = lambda _: Http(send)
+    return calls
+
+
+def test_old_paper_topics_are_rewritten_once_and_kept_for_audit(env):
+    pipeline, pid, sent, _ = env
+    pipeline.store.put_plan(pid, {'competitors': [], 'paper_queries': ['STATE', '合成生物平台']})
+    calls = _model_answers(pipeline, {'paper_queries': ['virtual cell perturbation model', 'X-Suite']})
+    run_collect(pipeline, pid)
+    plan = pipeline.store.get_plan(pid)
+    assert plan['paper_queries'] == ['virtual cell perturbation model']  # what fails the topic rules is dropped
+    assert plan['paper_queries_previous'] == ['STATE', '合成生物平台'] and plan['paper_topics_version'] == 2
+    assert 'virtual cell perturbation model' in ' '.join(queries(sent, 'api.openalex.org'))
+    assert not any('STATE' in q for q in queries(sent, 'api.openalex.org'))
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE kind='analyze' AND project_id=?", (pid,))
+    before = len(calls)
+    run_collect(pipeline, pid)
+    assert len(calls) == before  # rewritten once, not every round
+
+
+def test_topics_that_already_pass_are_kept_without_a_model_request(env):
+    pipeline, pid, _sent, _ = env
+    pipeline.store.put_plan(pid, {'competitors': [], 'paper_queries': ['synthetic antibody conjugate']})
+    calls = _model_answers(pipeline, {'paper_queries': ['should not be used']})
+    run_collect(pipeline, pid)
+    plan = pipeline.store.get_plan(pid)
+    assert plan['paper_queries'] == ['synthetic antibody conjugate'] and plan['paper_topics_version'] == 2
+    assert not calls

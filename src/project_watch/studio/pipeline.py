@@ -174,6 +174,14 @@ _EXTRACT_SYSTEM += "\npoints、risks、milestones、financing 也保留支持该
 _PROFILE_SYSTEM += "\n每条 sections.points/highlights/risks/milestones 尽量保留输入提供的逐字 quote（最多120字）；没有对应原句时留空，不改写引号内内容。"
 
 
+_PAPER_TOPICS_SYSTEM = """为被监控公司重写学术论文检索主题，用于英文论文库（OpenAlex、Europe PMC）。
+输出 JSON：{"paper_queries": ["..."]}，1-3 个：
+- 每个是英文研究主题，2-6 个词，描述公司所在的技术方向，如 "B7-H3 antibody-drug conjugate"、"virtual cell perturbation model"；
+- 公司的产品代号可单独作为一个，只写代号本身，如 "DB-1303"；
+- 不要产品商品名、团队/实验室/部门名、业务或服务名，不要中文，不要单个通用词；
+- 原检索词仅作参考，能改写成研究主题的改写，不能的丢弃；技术含量低的公司输出空数组。"""
+
+
 def _canon(value) -> str:
     from project_watch.studio.judgment_review import canonical
 
@@ -1222,6 +1230,18 @@ class Pipeline:
         if not plan["company_queries"]:
             plan["company_queries"] = fallback["company_queries"]
         return self.objects.scoped_plan(project["id"], plan)
+
+    def redraft_paper_topics(self, llm: LLM, project: dict, old: list[str]) -> list[str]:
+        """Paper topics an English index can match, rewritten from the company profile and the old topics."""
+        from project_watch.studio.openalex_query import topic_terms
+
+        profile = self.model_view(llm).get_profile(project["id"]) or {}
+        context = (f"公司：{project.get('legal_name') or project.get('name')}（{project.get('short_name') or ''}）\n"
+                   f"行业：{project.get('industry')}\n简介：{project.get('description')}\n"
+                   f"内部材料概述：{str(profile.get('summary') or '')[:1500]}\n原检索词：{'、'.join(old)}")
+        data = llm.json(_PAPER_TOPICS_SYSTEM, context, max_tokens=600)
+        topics = [str(q).strip()[:120] for q in (data.get("paper_queries") or []) if isinstance(q, str)]
+        return [q for q in dict.fromkeys(topics) if topic_terms(q)][:3]
 
     def triage(self, project_id: str, llm: LLM, project: dict, plan: dict,
                stage: Callable[[str], None], *, item_ids: set[str] | None = None) -> None:

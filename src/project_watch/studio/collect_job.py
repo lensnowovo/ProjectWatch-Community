@@ -71,7 +71,7 @@ def _stored_plan(pipeline, pid, project):
 
     stored = pipeline.store.get_plan(pid) or {}
     if 'competitors' in stored:
-        return stored
+        return _current_paper_topics(pipeline, pid, project, stored)
     _, _, llm, _ = pipeline.tools()
     if not llm.ready:
         return stored
@@ -82,7 +82,38 @@ def _stored_plan(pipeline, pid, project):
         if getattr(exc, 'code', '') in ('project_paused', 'project_not_consented'):
             raise
         return stored
-    plan = {**stored, **drafted, 'drafted_at': now()}
+    plan = {**stored, **drafted, 'drafted_at': now(), 'paper_topics_version': PAPER_TOPICS_VERSION}
+    pipeline.store.put_plan(pid, plan)
+    return plan
+
+
+PAPER_TOPICS_VERSION = 2  # topics an English index can match (openalex_query.topic_terms)
+
+
+def _current_paper_topics(pipeline, pid, project, stored):
+    """Once per plan: rewrite paper topics drafted before the topic rules; the old list stays for audit."""
+    from project_watch.studio.http import HttpError
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.openalex_query import topic_terms
+
+    if stored.get('paper_topics_version') == PAPER_TOPICS_VERSION:
+        return stored
+    old = [q for q in stored.get('paper_queries') or [] if isinstance(q, str)]
+    marked = {**stored, 'paper_topics_version': PAPER_TOPICS_VERSION}
+    if all(topic_terms(q) for q in old):
+        pipeline.store.put_plan(pid, marked)  # nothing to rewrite, no model request
+        return marked
+    _, _, llm, _ = pipeline.tools()
+    if not llm.ready:
+        return stored
+    try:
+        topics = pipeline.redraft_paper_topics(llm, {**project, 'id': pid}, old)
+    except (ModelError, HttpError, ConnectionError, TimeoutError) as exc:
+        # Recorded like any request; a later round may ask again, this job never resends.
+        if getattr(exc, 'code', '') in ('project_paused', 'project_not_consented'):
+            raise
+        return stored
+    plan = {**marked, 'paper_queries': topics, 'paper_queries_previous': old, 'paper_topics_redrafted_at': now()}
     pipeline.store.put_plan(pid, plan)
     return plan
 
