@@ -106,19 +106,10 @@ def test_pause_revoke_scope_owner_and_missing_model(tmp_path, monkeypatch):
     assert client.post(route+'/preview', json=draft, headers=HEADERS).status_code == 503
 
 
-def test_team_and_nonlocal_access_disabled(tmp_path, monkeypatch):
-    from fastapi import FastAPI
-
-    from project_watch.external_analysis_api import attach_external_analysis
-
-    s, _, client, route, draft = setup(tmp_path, monkeypatch)
+def test_nonlocal_access_disabled(tmp_path, monkeypatch):
+    _, _, client, route, _ = setup(tmp_path, monkeypatch)
     # The application host middleware rejects this before route execution.
     assert client.get(route, headers={'Host': 'outside.test'}).status_code == 400
-    app = FastAPI()
-    attach_external_analysis(app, s[0], s[5], store=None, worker=None, team_mode=True)
-    team = TestClient(app, base_url='http://127.0.0.1')
-    assert team.get(route).status_code == 404
-    assert team.post(route+'/preview', json=draft, headers=HEADERS).status_code == 404
 
 
 def test_intelligence_read_survives_missing_model_without_dispatch_or_writes(tmp_path, monkeypatch):
@@ -165,13 +156,12 @@ def test_intelligence_stale_analysis_is_not_reused(tmp_path, monkeypatch):
     assert s[4].calls == 1
 
 
-def test_intelligence_team_and_direct_nonlocal_denied(tmp_path):
+def test_intelligence_direct_nonlocal_denied(tmp_path):
     from fastapi import FastAPI
 
     from project_watch.external_analysis_api import attach_external_analysis
 
-    for team, host, expected in [(True, '127.0.0.1', 404), (False, 'outside.test', 403)]:
-        app = FastAPI()
-        attach_external_analysis(app, None, None, store=None, worker=None, team_mode=team)
-        client = TestClient(app, base_url='http://'+host)
-        assert client.get('/api/workspace/projects/any/external-intelligence').status_code == expected
+    app = FastAPI()
+    attach_external_analysis(app, None, None, store=None, worker=None)
+    client = TestClient(app, base_url='http://outside.test')
+    assert client.get('/api/workspace/projects/any/external-intelligence').status_code == 403

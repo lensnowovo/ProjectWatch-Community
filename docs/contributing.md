@@ -17,13 +17,13 @@
 先新建并激活专用虚拟环境，不复用其他开发者的 editable 环境。完整测试包含团队、MCP、OCR 和桌面路径，仅安装基础包或 `[dev]` 不足以收集全部用例：
 
 ```sh
-python -m pip install -e ".[dev,desktop,ocr,mcp,team,postgres]"
+python -m pip install -e ".[dev,desktop,ocr,mcp]"
 python -m pytest -q
 ```
 
 前端在 `frontend` 目录按锁文件执行 `npm ci --ignore-scripts --no-audit --no-fund`，再运行 `npm test` 和 `npm run typecheck`。安装依赖会访问包仓库，但不是模型/搜索验收。不要在当前产品实例的数据目录内运行这些命令。
 
-本地回归必须使用合成数据，不继承真实服务凭据或生产数据库/解析器地址。PostgreSQL、Docker 等可选集成测试需独立环境和显式测试变量；报告跳过原因，不把默认跳过当作通过。
+本地回归必须使用合成数据，不继承真实服务凭据或生产数据库/解析器地址。Docker 等可选集成测试需独立环境和显式测试变量；报告跳过原因，不把默认跳过当作通过。
 
 发布回归优先使用 `scripts/run_offline_tests.py --output <源码外全新目录>`，它会隔离数据并清除继承的提供商配置。CI 作业、独立 wheel 安装的范围及局限见 [发布 CI](release-ci.md)。
 

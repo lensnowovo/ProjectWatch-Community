@@ -41,12 +41,10 @@ class ExternalRetryInput(BaseModel):
     disclosure_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
-def attach_external_analysis(app, repository, settings, *, store, worker, team_mode=False):
+def attach_external_analysis(app, repository, settings, *, store, worker):
     operator_token = os.environ.get('PROJECT_WATCH_SETTINGS_TOKEN', '')
 
     def allowed(request, project_id, *, write=False):
-        if team_mode:
-            raise HTTPException(404, '外部解读暂仅支持本机使用。')
         if request.url.hostname not in {'localhost', '127.0.0.1', '::1'}:
             raise HTTPException(403, '请从本机页面操作。')
         if write and (not operator_token

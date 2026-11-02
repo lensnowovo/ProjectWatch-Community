@@ -29,13 +29,11 @@ class ActivationStart(ActivationPreview):
     disclosure_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
-def attach_monitor_activation(app, repository, *, team_mode=False, brave_available=lambda: False):
+def attach_monitor_activation(app, repository, *, brave_available=lambda: False):
     token = os.environ.get('PROJECT_WATCH_SETTINGS_TOKEN', '')
-    store = None if team_mode else MonitorActivationStore(repository)
+    store = MonitorActivationStore(repository)
 
     def allowed(request, project_id):
-        if team_mode:
-            raise HTTPException(404, '仅供本机使用。')
         if (request.url.hostname not in {'localhost', '127.0.0.1', '::1'} or not token
                 or not hmac.compare_digest(request.headers.get('x-settings-token', ''), token)
                 or request.headers.get('origin') != str(request.base_url).rstrip('/')):

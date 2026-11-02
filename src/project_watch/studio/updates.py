@@ -342,7 +342,7 @@ def validate_candidate(stage: Path, backup: Path) -> dict:
     extras = []
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as installed_version
-    for extra, package in [('ocr', 'rapidocr'), ('mcp', 'mcp'), ('team', 'argon2-cffi'), ('postgres', 'psycopg')]:
+    for extra, package in [('ocr', 'rapidocr'), ('mcp', 'mcp')]:
         try:
             installed_version(package)
             extras.append(extra)

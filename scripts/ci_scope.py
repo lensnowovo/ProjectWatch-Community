@@ -30,7 +30,7 @@ FRONTEND_TESTS = (
     'tests/test_windows_icon.py', 'tests/test_frontend_notices.py',
     'tests/test_package_boundary.py', 'tests/test_layer_boundaries.py',
     'tests/test_core_probe.py', 'tests/test_studio_runtime_boundary.py',
-    'tests/test_studio.py', 'tests/test_studio_taskboard.py', 'tests/test_postgres_migrations.py',
+    'tests/test_studio.py', 'tests/test_studio_taskboard.py',
 )
 CONTRACT_TESTS = (
     'tests/test_ci_scope.py', 'tests/test_release_ci.py',

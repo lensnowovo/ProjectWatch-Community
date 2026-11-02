@@ -19,7 +19,7 @@ from project_watch.repository import (
     ProjectRepository,
     ReviewConflictError,
 )
-from project_watch.team_http import protect_request
+from project_watch.request_guard import protect_request
 
 
 def create_local_base(db_path: Path, *, start_worker: bool) -> FastAPI:
@@ -45,7 +45,7 @@ def create_local_base(db_path: Path, *, start_worker: bool) -> FastAPI:
 
     @app.middleware('http')
     async def security_headers(request: Request, call_next):
-        return await protect_request(request, call_next, team_auth=None, team_origin=None)
+        return await protect_request(request, call_next)
 
     async def not_found(_request, exc):
         return JSONResponse(status_code=404, content={'detail': str(exc)})

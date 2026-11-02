@@ -289,7 +289,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument("--extras", nargs="*", default=["team", "postgres", "mcp"])
+    parser.add_argument("--extras", nargs="*", default=["mcp"])
     args = parser.parse_args()
     wheel_count, wheel_findings = audit_wheel(args.wheel)
     if wheel_count == 0:

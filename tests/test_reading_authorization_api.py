@@ -84,16 +84,9 @@ def test_stale_consent_dialog_cannot_expand_egress(tmp_path, monkeypatch, seen_r
     assert model._runs == 0
 
 
-def test_no_model_readable_and_team_disabled(tmp_path):
-    from fastapi import FastAPI
-
-    from project_watch.model_settings import ModelSettings
-    from project_watch.reading_authorization_api import attach_reading_authorization
+def test_no_model_readable(tmp_path):
     repo = ProjectRepository(tmp_path / "watch.sqlite3")
     project = repo.create_project("Name only")
     route = f"/api/workspace/projects/{project.id}/reading-authorization"
     client = TestClient(create_app(repo.db_path), base_url="http://127.0.0.1")
     assert client.get(route).json()["model"] is None
-    app = FastAPI()
-    attach_reading_authorization(app, repo, ModelSettings(), team_mode=True)
-    assert TestClient(app, base_url="http://127.0.0.1").get(route).status_code == 404

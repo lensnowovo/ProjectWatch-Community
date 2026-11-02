@@ -371,7 +371,7 @@ ProjectWatch 是本机项目监控软件，输入公司名或材料，整理公�
 
 Core、Contract、Insight、Legacy 是维护层级，不是完整开发者版的功能收费墙。
 `scripts/layer_map.json` 与导入检查保留现有依赖约束；完整包包含全部现有分析实现。
-兼容功能保留源码，不代表所有 team/PostgreSQL/外部执行器部署均已获生产验收。
+兼容功能保留源码，不代表所有外部执行器部署均已获生产验收；PostgreSQL 团队版已删除。
 
 ## 数据与边界
 

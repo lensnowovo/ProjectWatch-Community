@@ -30,7 +30,7 @@ def test_target_not_host_controls_wheel_compatibility(tmp_path):
     value = verify(lock, house, product)
     assert value['target'] == 'cp313-win_amd64'
     text = requirements(value)
-    assert 'projectwatch-local[desktop,ocr,mcp,team,postgres]==1.0 --hash=sha256:' in text
+    assert 'projectwatch-local[desktop,ocr,mcp]==1.0 --hash=sha256:' in text
     assert text.count('--hash=sha256:') == 2
 
 

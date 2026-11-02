@@ -17,13 +17,13 @@ class ManualModelRequest(BaseModel):
     ticket: str = Field(min_length=16, max_length=100)
 
 
-def attach_manual_model_routes(app, repository, model, *, team_mode=False):
+def attach_manual_model_routes(app, repository, model):
     tickets = {}
     lock = threading.Lock()
 
     def enabled(request):
         selected_model = model.get() if hasattr(model, 'get') else model
-        if team_mode or selected_model is None:
+        if selected_model is None:
             raise HTTPException(503, "AI 执行尚未配置；材料仍可在本机阅读。")
         if request.url.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise HTTPException(403, "本轮 AI 执行仅供本机使用。")

@@ -34,14 +34,12 @@ class ReadingAuthorizationStatus(BaseModel):
     status: Literal["active", "paused", "revoked"]
 
 
-def attach_reading_authorization(app, repository, settings, *, team_mode=False):
-    ledger = None if team_mode else ReadingJobs(repository)
+def attach_reading_authorization(app, repository, settings):
+    ledger = ReadingJobs(repository)
     operator_token = os.environ.get("PROJECT_WATCH_SETTINGS_TOKEN", "")
     app.state.reading_jobs = ledger
 
     def allowed(request, project_id, *, write=False):
-        if team_mode:
-            raise HTTPException(404, "本机材料授权不适用于团队部署。")
         if request.url.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise HTTPException(403, "请从本机页面操作。")
         if write and (

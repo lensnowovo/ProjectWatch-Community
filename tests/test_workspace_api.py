@@ -73,20 +73,6 @@ def test_projection_pages_and_sidecar_are_separate_from_facts(tmp_path):
     assert len(repo.list_sources(project.id)) == 3
 
 
-def test_local_workspace_routes_disabled_in_team_mode(tmp_path):
-    from fastapi import FastAPI
-
-    from project_watch.repository import ProjectRepository
-    from project_watch.workspace_api import attach_workspace_routes
-
-    app = FastAPI()
-    attach_workspace_routes(app, ProjectRepository(tmp_path / "watch.sqlite3"), team_mode=True)
-    client = TestClient(app)
-    for path in ["events", "projects", "tasks", "attention", "projects/any/reading", "projects/any/profile", "projects/any/profile/history"]:
-        assert client.get("/api/workspace/" + path).status_code == 404
-    assert client.patch("/api/workspace/projects/any/profile", json={"expected_version": 0}, headers={"Origin": "http://testserver"}).status_code == 404
-
-
 def test_project_cards_hide_named_demo_before_pagination_without_deleting(tmp_path):
     from project_watch.repository import ProjectRepository
 

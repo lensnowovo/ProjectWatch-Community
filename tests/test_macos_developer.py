@@ -57,7 +57,7 @@ def test_install_full_features_and_paths(checkout, monkeypatch):
     monkeypatch.setattr(mac, "run_checked", lambda command, repo: calls.append(command))
     environment = mac.environment_path(checkout, ".venv-macos")
     mac.install(checkout, environment, {"npm": "/node path/npm", "python": "3.12", "architecture": "arm64"})
-    assert f"{checkout}[dev,ocr,mcp,team,postgres]" in calls[2]
+    assert f"{checkout}[dev,ocr,mcp]" in calls[2]
     assert calls[3][0] == "/node path/npm"
     assert not any("project_watch.studio" in command for command in calls)
     receipt = json.loads((environment / mac.MARKER).read_text(encoding="utf-8"))

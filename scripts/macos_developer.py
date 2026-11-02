@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-EXTRAS = "dev,ocr,mcp,team,postgres"
+EXTRAS = "dev,ocr,mcp"
 MARKER = "projectwatch-ready.json"
 
 

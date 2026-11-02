@@ -30,7 +30,7 @@ RUNTIMES = {
 }
 PYTHON_VERSION = "3.12.15"
 RUNTIME_RELEASE = "20261013"
-EXTRAS = "desktop,ocr,mcp,team,postgres"
+EXTRAS = "desktop,ocr,mcp"
 
 
 def runtime_url(arch):

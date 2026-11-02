@@ -13,8 +13,6 @@ from project_watch.public_search import (
     is_gdelt_rss_target,
     parse_loopback_proxy,
 )
-from project_watch.repository import ProjectRepository
-from project_watch.team_auth import TeamAuthStore
 
 
 def test_gdelt_target_is_fixed_and_uses_exact_name() -> None:
@@ -204,43 +202,3 @@ def test_public_search_uses_synthetic_feed_and_retains_candidate_boundary(tmp_pa
     assert len(signals) == 1 and signals[0]["status"] == "candidate"
     assert client.get(f"/api/projects/{project['id']}/summary").json()["confirmed_count"] == 0
 
-
-def test_public_search_team_permissions_and_csrf(tmp_path: Path) -> None:
-    database = tmp_path / "watch.sqlite3"
-    repo = ProjectRepository(database)
-    auth = TeamAuthStore(database)
-    auth.bootstrap_admin("admin@example.test", "synthetic-admin-password")
-    project = repo.create_project("Synthetic Monitored Company")
-    other = repo.create_project("Synthetic Other Company")
-    member = auth.create_user("viewer@example.test", "synthetic-viewer-password")
-    auth.grant_project_role(project.id, member.id, "viewer")
-    app = create_app(database, team_auth=auth, team_origin="https://testserver")
-    admin_client = TestClient(app, base_url="https://testserver")
-    viewer_client = TestClient(app, base_url="https://testserver")
-    admin_csrf = admin_client.post(
-        "/api/auth/login",
-        json={"username": "admin@example.test", "password": "synthetic-admin-password"},
-    ).json()["csrf_token"]
-    viewer_csrf = viewer_client.post(
-        "/api/auth/login",
-        json={"username": "viewer@example.test", "password": "synthetic-viewer-password"},
-    ).json()["csrf_token"]
-    path = f"/api/projects/{project.id}/monitoring/public-search"
-
-    assert viewer_client.get(path).status_code == 200
-    assert (
-        viewer_client.get(f"/api/projects/{other.id}/monitoring/public-search").status_code == 404
-    )
-    assert (
-        viewer_client.post(
-            path, json={"provider": "gdelt"}, headers={"X-CSRF-Token": viewer_csrf}
-        ).status_code
-        == 404
-    )
-    assert admin_client.post(path, json={"provider": "gdelt"}).status_code == 403
-    assert (
-        admin_client.post(
-            path, json={"provider": "gdelt"}, headers={"X-CSRF-Token": admin_csrf}
-        ).status_code
-        == 202
-    )

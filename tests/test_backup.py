@@ -107,30 +107,3 @@ def test_backup_rejects_unlisted_file(tmp_path: Path) -> None:
     with pytest.raises(BackupError, match="unlisted"):
         verify_backup(backup_dir)
 
-
-def test_team_restore_preserves_audit_but_revokes_live_credentials(tmp_path: Path) -> None:
-    pytest.importorskip("argon2")
-    from project_watch.team_auth import TeamAuthStore
-
-    live = tmp_path / "live"
-    live.mkdir()
-    db_path = live / "watch.sqlite3"
-    repo = ProjectRepository(db_path)
-    auth = TeamAuthStore(db_path)
-    admin = auth.bootstrap_admin("admin@example.test", "synthetic-admin-password")
-    project = repo.create_project("Synthetic Team Restore", actor_id=admin.id)
-    session_token, _ = auth.login("admin@example.test", "synthetic-admin-password")
-    executor_token, _ = auth.issue_executor_token(
-        project.id, admin.id, label="synthetic restore", permission="read"
-    )
-    before_audit = auth.list_security_events()
-    backup_dir = tmp_path / "team-backup"
-    create_backup(db_path, backup_dir)
-    restored_db = restore_backup(backup_dir, tmp_path / "team-restored")
-    assert not restored_db.with_name(restored_db.name + "-wal").exists()
-    restored = TeamAuthStore(restored_db)
-    assert restored.list_security_events() == before_audit
-    assert restored.session(session_token) is None
-    assert restored.executor_grant(executor_token) is None
-    assert restored.list_executor_tokens(project.id)[0].revoked_at is not None
-    assert restored.login("admin@example.test", "synthetic-admin-password")[0]

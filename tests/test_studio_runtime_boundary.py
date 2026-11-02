@@ -16,7 +16,7 @@ def test_actual_profile_removes_classic_but_preserves_all_core_contract_app():
     config = json.loads((ROOT / 'scripts/layer_map.json').read_text(encoding='utf-8'))
     full = inventory(ROOT)
     studio = inventory(ROOT, profile='studio')
-    assert len(full['retained_legacy_modules']) == 70  # dsh_executor, dsh_profile -> model_executor
+    assert len(full['retained_legacy_modules']) == 59  # PostgreSQL team edition (9) and team_auth/team_http removed
     assert 'project_watch.api' in studio['excluded_legacy_modules']
     for module in ('model_settings', 'model_executor', 'external_analysis', 'monitor_briefing',
                    'monitor_profile', 'company_state', 'reading_jobs', 'candidate_metrics', 'tasks',
@@ -31,7 +31,7 @@ def test_actual_profile_removes_classic_but_preserves_all_core_contract_app():
     for module in ('analysis', 'analysis.financial_mapping', 'analysis.operating_mapping',
                    'analysis.source_update', 'analysis.financial_projection', 'analysis.financial_integrity'):
         assert 'project_watch.' + module in studio['excluded_legacy_modules']
-    assert 'project_watch.team_http' in studio['retained_legacy_modules']
+    assert config['modules']['project_watch.request_guard'] == 'Core'  # the local request boundary is not Legacy
     assert len(studio['retained_legacy_modules']) < len(full['retained_legacy_modules'])
     for name, path in studio['retained_legacy_paths'].items():
         assert path[-1] == name
