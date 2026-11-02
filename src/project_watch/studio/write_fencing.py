@@ -35,6 +35,15 @@ class FencedCursor(sqlite3.Cursor):
 
 class FencedConnection(sqlite3.Connection):
     guard = None
+    keep_open = False
+
+    def close(self):
+        # A read session's shared connection outlives each borrower's closing();
+        # what the borrower left uncommitted is discarded, as a real close would.
+        if not self.keep_open:
+            super().close()
+        elif self.in_transaction:
+            self.rollback()
 
     def before_statement(self, sql):
         if self.guard is None:

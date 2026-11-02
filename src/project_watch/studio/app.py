@@ -30,7 +30,7 @@ from project_watch.studio.public_profile import company_trials
 from project_watch.studio.resolve import resolve_company
 from project_watch.studio.settings import SearchConfig, SettingsStore, SettingsUnavailable
 from project_watch.studio.sources import Collectors
-from project_watch.studio.store import StudioStore
+from project_watch.studio.store import StudioStore, shared_reads
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 DRAFT_TTL_SECONDS = 6 * 3600
@@ -273,12 +273,14 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(422, str(exc)) from exc
 
     @app.get('/api/studio/projects/{project_id}/commercial')
+    @shared_reads(store)
     def commercial_view(project_id: str):
         project = project_or_404(project_id)
         return commercial_store.view(project_id, settings_store.load().commercial,
                                      targets=commercial_targets(pipeline, project))
 
     @app.get('/api/studio/projects/{project_id}/race')
+    @shared_reads(store)
     def race_view(project_id: str, template: str | None = None):
         """Stored public company/peer records with scope, not company-wide rankings."""
         require_insight(project_id)
@@ -309,6 +311,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             relations=observations(application, project_id, limit=100, kind='business_relation')['items'])
 
     @app.get('/api/studio/projects/{project_id}/commitments')
+    @shared_reads(store)
     def commitments_view(project_id: str):
         from project_watch.studio.commitments import read
 
@@ -316,6 +319,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         return read(application, project_id)
 
     @app.get('/api/studio/projects/{project_id}/red-flags')
+    @shared_reads(store)
     def red_flags_view(project_id: str):
         """Bad signals for the company and its competitors (rules only, stored records)."""
         require_insight(project_id)
@@ -341,6 +345,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             commitments=promises(application, project_id)['items'])
 
     @app.get('/api/studio/projects/{project_id}/track')
+    @shared_reads(store)
     def track_view(project_id: str):
         """赛道四格: demand, capital, price, policy (rules over stored, cited records)."""
         require_insight(project_id)
@@ -378,6 +383,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                                patents=store.list_items(project_id=project_id, category="patent", limit=300))
 
     @app.get('/api/studio/projects/{project_id}/tech')
+    @shared_reads(store)
     def tech_view(project_id: str):
         """技术路线与新面孔 (rules over stored reports, papers and patents)."""
         return _tech_view(project_id)
@@ -666,6 +672,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         return projects
 
     @app.get("/api/studio/projects/{project_id}")
+    @shared_reads(store)
     def project_detail(project_id: str):
         from project_watch.studio import insight
         from project_watch.studio.agent_results import insight_projection
@@ -957,6 +964,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         return store.get_project(project_id)
 
     @app.get('/api/studio/projects/{project_id}/insight')
+    @shared_reads(store)
     def insight_view(project_id: str):
         """Stored deep analysis (AI judgments with numbered sources), its history and the latest job state."""
         from project_watch.studio import insight
