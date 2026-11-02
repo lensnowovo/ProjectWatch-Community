@@ -782,6 +782,16 @@ class StudioStore:
                 added += cur.rowcount
         return added
 
+    def reopen_triage(self, project_id: str, item_ids: set[str]) -> None:
+        """Send items back to screening, e.g. when a verdict could not be matched to its source."""
+        if not item_ids:
+            return
+        from project_watch.studio.event_revisions import changing_items
+
+        with closing(self._connect()) as db, db, changing_items(db, sorted(item_ids)):
+            db.execute(f"UPDATE studio_items SET triaged=0 WHERE project_id=? AND id IN ({','.join('?' * len(item_ids))})",
+                       (project_id, *sorted(item_ids)))
+
     def untriaged(self, project_id: str, limit: int = 40, *,
                   item_ids: set[str] | None = None, category: str | None = None) -> list[dict]:
         where, args = ["project_id=?", "triaged=0"], [project_id]

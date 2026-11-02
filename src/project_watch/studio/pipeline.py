@@ -1244,7 +1244,8 @@ class Pipeline:
         return [q for q in dict.fromkeys(topics) if topic_terms(q)][:3]
 
     def triage(self, project_id: str, llm: LLM, project: dict, plan: dict,
-               stage: Callable[[str], None], *, item_ids: set[str] | None = None) -> None:
+               stage: Callable[[str], None], *, item_ids: set[str] | None = None, batch_size: int = TRIAGE_BATCH,
+               note: str = "") -> None:
         competitors = "、".join(c["name"] for c in plan.get("competitors", []))
         context = (f"当前日期：{date.today().isoformat()}\n"
                    f"被监控公司：{project.get('legal_name') or project.get('name')}（简称 "
@@ -1262,10 +1263,12 @@ class Pipeline:
         for extra in (mon.feedback_prompt(self.monitor.feedback_examples(project_id)), mon.watch_prompt(watchpoints)):
             if extra:
                 context += f"\n\n{extra}"
+        if note:
+            context += f"\n\n{note}"
         names = company_names(project)
         round_no = 0
         while True:
-            batch = self.store.untriaged(project_id, limit=TRIAGE_BATCH, item_ids=item_ids)
+            batch = self.store.untriaged(project_id, limit=batch_size, item_ids=item_ids)
             if not batch:
                 return
             self.prepare_paper_abstracts(project_id, batch)

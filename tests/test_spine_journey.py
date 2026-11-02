@@ -255,3 +255,16 @@ def test_a_query_that_never_brings_anything_relevant_is_named(monkeypatch):
     assert [(s['source'], s['query'], s['screened']) for s in stale] == [('openalex_topic', '"Synthetic Tool"', 9)]
     rows['openalex_topic']['collected'] = rows['openalex_topic']['screened'] = 1  # 3 screened over 3 rounds: too few to judge
     assert round_quality.stale_queries(store, 'p') == []
+
+
+def test_verdicts_that_do_not_match_their_source_are_screened_again(env):
+    pipeline, pid, state = env
+    state['misalign_triage'] = 1
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    work(pipeline, 'analyze')
+    with pipeline.store._connect() as db:
+        statuses = [json.loads(r[0] or '{}').get('triage_binding', {}).get('status')
+                    for r in db.execute('SELECT extra FROM studio_items WHERE project_id=? AND triaged=1', (pid,))]
+    assert statuses and all(s == 'bound' for s in statuses)  # the misaligned batch was screened again
+    assert state['triage_calls'] >= 2

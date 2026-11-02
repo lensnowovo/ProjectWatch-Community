@@ -213,11 +213,43 @@ def follow_through(pipeline, llm, execution, collect_job_id, item_ids, stage):
 TRIAGE_CHUNK = 200  # store.untriaged's selection bound
 
 
+RESCREEN = frozenset({'missing_binding', 'title_mismatch', 'quote_mismatch', 'duplicate_id'})
+RESCREEN_BATCH = 5  # small groups: verdicts rarely land on the wrong item
+RESCREEN_NOTE = ('复核：这些条目上一轮的筛选结果未能与原文对应（标题或摘录对不上）。'
+                 '请逐条核对，每条结果的 id、source_title 与 source_quote 必须来自同一条原文。')
+
+
+def _unmatched(store, pid, ids):
+    with closing(store._connect()) as db:
+        rows = db.execute(f"SELECT id,extra FROM studio_items WHERE project_id=? AND triaged=1 AND id IN ({','.join('?' * len(ids))})",
+                          (pid, *sorted(ids))).fetchall()
+    unmatched = set()
+    for row in rows:
+        try:
+            binding = (json.loads(row['extra'] or '{}') or {}).get('triage_binding') or {}
+        except ValueError:
+            continue
+        if isinstance(binding, dict) and binding.get('status') in RESCREEN:
+            unmatched.add(row['id'])
+    return unmatched
+
+
 def triage_all(pipeline, pid, llm, project, plan, stage, item_ids):
-    """A real round collects hundreds of items; review them in fixed, ordered chunks."""
+    """A real round collects hundreds of items; review them in fixed, ordered chunks.
+
+    A verdict that cannot be matched to its source may belong to another item.
+    Those items are screened once more in small groups; what still does not
+    match stays listed as 待核实.
+    """
     ordered = sorted(item_ids)
     for start in range(0, len(ordered), TRIAGE_CHUNK):
-        pipeline.triage(pid, llm, project, plan, stage, item_ids=set(ordered[start:start + TRIAGE_CHUNK]))
+        chunk = set(ordered[start:start + TRIAGE_CHUNK])
+        pipeline.triage(pid, llm, project, plan, stage, item_ids=chunk)
+        unmatched = _unmatched(pipeline.store, pid, chunk) if chunk and getattr(llm, 'ready', False) else set()
+        if unmatched:
+            pipeline.store.reopen_triage(pid, unmatched)
+            pipeline.triage(pid, llm, project, plan, stage, item_ids=unmatched, batch_size=RESCREEN_BATCH,
+                            note=RESCREEN_NOTE)
 
 
 def run(pipeline, execution):

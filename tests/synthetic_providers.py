@@ -70,6 +70,13 @@ def model_answer(system, user, state):
             results.append(dict(id=item_id, relevant=True, category=None, relation='subject' if subject else 'field',
                                 importance='notable', summary='合成研究记录。', impact='与已知计划无直接关联，属研发进展。',
                                 source_title=title, source_quote=title))
+        state['triage_calls'] = state.get('triage_calls', 0) + 1
+        if state.get('misalign_triage') and len(results) > 1:
+            # A long batch answered out of order: every verdict carries its neighbour's title.
+            state['misalign_triage'] -= 1
+            titles = [r['source_title'] for r in results]
+            for r, title in zip(results, titles[1:] + titles[:1], strict=True):
+                r['source_title'] = r['source_quote'] = title
         return {'results': results}
     if '是否在讲同一事件' in system:
         return {'results': [{'pair': n + 1, 'same': False} for n in range(user.count('pair'))]}
