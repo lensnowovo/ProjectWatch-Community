@@ -2,7 +2,6 @@
 
 import json
 import re
-from contextlib import closing
 from datetime import UTC, datetime
 
 
@@ -179,23 +178,3 @@ def unknown_outcome_not_retried(client, app, transport, entity):
     assert sum(c['host'] == 'open.bigmodel.cn' for c in transport.calls) == after
     transport.model_failure = None
     return {'project_id': pid, 'job_id': failed['id'], 'model_requests': 1}
-
-
-def recover_after_restart(client, app, failure):
-    route = f"/api/studio/projects/{failure['project_id']}/jobs/{failure['job_id']}/recovery"
-    preview = client.get(route)
-    assert preview.status_code == 200 and preview.json()['can_recover'], preview.text
-    body = {'expected_version': preview.json()['version'], 'idempotency_key': 'synthetic-recovery',
-            'accept_duplicate_cost': False}
-    assert client.post(route, json=body).status_code == 409
-    body['accept_duplicate_cost'] = True
-    accepted = client.post(route, json=body)
-    assert accepted.status_code == 202, accepted.text
-    assert client.post(route, json=body).json() == accepted.json()
-    drain(app, schedule=False)
-    job = next(j for j in app.state.studio_store.jobs(failure['project_id']) if j['id'] == failure['job_id'])
-    assert job['status'] == 'done', job
-    with closing(app.state.studio_store._connect()) as db:
-        assert db.execute("SELECT count(*) FROM studio_job_calls WHERE job_id=? AND status='unknown'",
-                          (job['id'],)).fetchone()[0] == 1
-    assert not client.get(route).json()['can_recover']

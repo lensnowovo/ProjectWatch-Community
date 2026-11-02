@@ -117,12 +117,11 @@ def test_filing_company_match_beyond_page_40_is_found(tmp_path):
     assert "[第42页]" in filing_passages(buffer.getvalue(), ["Synthetic Corp"])
 
 
-def test_internal_model_journal_can_be_unbounded_but_explicit_budget_still_works(tmp_path):
-    import pytest
+def test_internal_model_journal_is_unbounded_and_budget_values_do_not_limit(tmp_path):
     from test_studio_agent_instance import make_service
 
     from project_watch.studio.execution import JobExecution
-    from project_watch.studio.http import HttpError, Response
+    from project_watch.studio.http import Response
 
     service, pid = make_service(tmp_path / "jobs.sqlite3")
     service.store.enqueue(pid, "internal")
@@ -130,10 +129,9 @@ def test_internal_model_journal_can_be_unbounded_but_explicit_budget_still_works
     execution = JobExecution(service.store, job)
     for index in range(65):
         execution.call("model", f"synthetic-{index}", lambda: Response(200, {}, b'{}'))
+    # Budget values are kept for old receipts only; app quotas were removed and do not refuse a request.
     bounded = JobExecution(service.store, job, budgets={"model": 65})
-    with pytest.raises(HttpError) as caught:
-        bounded.call("model", "synthetic-next", lambda: pytest.fail("must honor explicit budget"))
-    assert caught.value.code == "request_budget"
+    assert bounded.call("model", "synthetic-next", lambda: Response(200, {}, b'{}')).status == 200
 
 
 def test_upload_parse_and_store_preserve_all_large_document_fragments(tmp_path):

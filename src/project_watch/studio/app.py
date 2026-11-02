@@ -179,7 +179,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         pipeline.insight_available = all((race_plugin, red_flags_plugin, track_plugin, techroutes_plugin))
         validator = assess_relation
         pipeline.relationships.assessment_validator = validator
-    studio_worker = StudioWorker(pipeline)
+    studio_worker = StudioWorker(pipeline, lanes=True)
     app.state.studio_store = store
     app.state.studio_pipeline = pipeline
     app.state.studio_worker = studio_worker

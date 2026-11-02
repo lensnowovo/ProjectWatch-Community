@@ -154,8 +154,8 @@ def test_dsh_external_adapter_preserves_budget_gate_and_validates(monkeypatch, t
     assert captured[0]['before_send'] is gate
     assert captured[0]['max_output_tokens'] == 3072
     assert 'untrusted data' in captured[0]['prompt_override']
-    with pytest.raises(ExecutorUnavailable, match='quota'):
-        model.analyze_external(packet, before_send=gate)
+    # No process quota (app quotas were removed): a second run is accounted by the gate, not refused here.
+    assert model.analyze_external(packet, before_send=gate)['review_status'] == 'unreviewed'
     invalid = deepcopy(packet)
     invalid['private_profile'] = 'must not be sent'
     with pytest.raises(ExecutorUnavailable):

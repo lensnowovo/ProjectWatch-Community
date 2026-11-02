@@ -156,7 +156,7 @@ def test_preview_contains_only_explicit_subset_and_is_read_only(tmp_path):
     info = pilot.analysis.preview(packet)
     assert len(info['material_refs']) == 1
     assert info['material_refs'][0]['text'] == packet['excerpts'][0]['text']
-    assert info['max_requests'] == 20
+    assert info['max_requests'] is None  # app quotas were removed
     assert not pilot.analysis.store.list_authorizations()
     with closing(repo._connect()) as db:
         assert db.execute('SELECT count(*) FROM monitor_autopilot_analysis').fetchone()[0] == 0
@@ -174,7 +174,7 @@ def test_api_binds_analysis_choice_and_existing_upgrade(tmp_path, monkeypatch):
     headers = {'origin':'http://127.0.0.1', 'x-settings-token':'x'*40}
     assert client.post(path+'/'+started['id']+'/analysis-preview').status_code == 403
     view = client.post(path+'/'+started['id']+'/analysis-preview', headers=headers).json()
-    assert view['automatic_analysis'] is True and view['analysis']['max_requests'] == 20
+    assert view['automatic_analysis'] is True and view['analysis']['max_requests'] is None
     body = dict(packet=view['packet'], disclosure_digest=view['disclosure_digest'], model_consent=True,
                 public_consent=True, automatic_analysis=False)
     assert client.post(path, headers=headers, json=body).status_code == 409

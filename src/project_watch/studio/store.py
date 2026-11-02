@@ -1271,7 +1271,16 @@ class StudioStore:
                        "VALUES (?,?,?,'queued',?,?)", (job_id, project_id, kind, now(), input_version))
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
-    def claim(self) -> dict | None:
+    ROUND_KINDS = ('collect', 'analyze', 'report', 'brief')
+
+    def claim(self, lane: str | None = None) -> dict | None:
+        """The next job; lane 'round' takes only round work, lane 'side' only the rest.
+
+        The side lane never starts a job for a project whose round is running, so
+        the two lanes do not write one project's records at the same time.
+        """
+        if lane not in (None, 'round', 'side'):
+            raise ValueError('unknown worker lane')
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             expired = db.execute("SELECT * FROM studio_jobs WHERE status='running' AND (lease_until IS NULL OR lease_until<=?)", (now(),)).fetchall()
@@ -1288,23 +1297,33 @@ class StudioStore:
             # oldest eligible work. The persisted counter survives worker restarts
             # and is updated under the same lock as the lease claim.
             burst = db.execute("SELECT value FROM studio_state WHERE key='queue_brief_burst'").fetchone()
-            prefer_brief = int(burst[0] if burst else 0) < 2
+            # Within a lane the oldest-work reservation is unneeded: rounds no longer share a queue with side jobs.
+            prefer_brief = lane is not None or int(burst[0] if burst else 0) < 2
+            rounds = ','.join('?' * len(self.ROUND_KINDS))
+            lane_filter, lane_args = {
+                None: ('', ()),
+                'round': (f' AND j.kind IN ({rounds})', self.ROUND_KINDS),
+                'side': (f" AND j.kind NOT IN ({rounds}) AND NOT EXISTS (SELECT 1 FROM studio_jobs r WHERE "
+                         f"r.project_id=j.project_id AND r.status='running' AND r.kind IN ({rounds}))",
+                         self.ROUND_KINDS + self.ROUND_KINDS),
+            }[lane]
             # Retired kinds are archived at startup and never claimed; internal
             # documents keep being read while public monitoring is paused.
             marks = ','.join('?' * len(JOB_KINDS))
             row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
                 WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
-                AND (j.kind='internal' OR COALESCE(p.status,'active')='active')
+                AND (j.kind='internal' OR COALESCE(p.status,'active')='active'){lane_filter}
                 ORDER BY CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
                               WHEN j.kind IN ('collect','analyze') OR j.input_version LIKE 'manual:%' THEN 1 ELSE 2 END,
-                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (*JOB_KINDS, prefer_brief)).fetchone()
+                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (*JOB_KINDS, *lane_args, prefer_brief)).fetchone()
             if not row:
                 return None
-            preferred = row['kind'] in ('collect', 'analyze', 'report', 'brief') or str(row['input_version']).startswith('manual:')
-            next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and preferred else 0
-            db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                       (str(next_burst),))
+            if lane is None:  # lanes leave the single-queue reservation counter alone
+                preferred = row['kind'] in self.ROUND_KINDS or str(row['input_version']).startswith('manual:')
+                next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and preferred else 0
+                db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                           (str(next_burst),))
             db.execute("UPDATE studio_jobs SET status='running',started_at=COALESCE(started_at,?),lease_token=?,"
                        "lease_until=?,progress_at=?,heartbeat_at=?,attempts=attempts+1 WHERE id=?",
                        (now(), uuid.uuid4().hex, (datetime.now(UTC) + timedelta(seconds=90)).isoformat(), now(), now(), row["id"]))

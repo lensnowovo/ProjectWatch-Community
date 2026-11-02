@@ -41,7 +41,7 @@ def test_original_read_keeps_order_and_reads_all_scoped_reports_despite_old_limi
         return {'status': 'article_body', 'text': 'Synthetic located original product evidence.'}
 
     pipeline.article_reader = SimpleNamespace(read=read)
-    assert pipeline.fetch_bodies(pid, lambda _: None, page_limit=2) == 7
+    assert pipeline.fetch_bodies(pid, lambda _: None) == 7
     assert reads[:2] == ['https://publisher.example/newest', 'https://publisher.example/recent']
     assert len(set(reads)) == 7
     rows = pipeline.store.untriaged(pid)

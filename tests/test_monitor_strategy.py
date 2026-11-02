@@ -142,8 +142,6 @@ def test_adapter_preserves_gate_failure_and_releases_lock(monkeypatch):
         model.plan_monitoring(packet(), before_send=denied)
     assert model._lock.acquire(blocking=False)
     model._lock.release()
-    with pytest.raises(ExecutorUnavailable, match='model process quota reached'):
-        model.plan_monitoring(packet(), before_send=lambda _: None)
 
 
 def test_adapter_requires_gate_and_freezes_source(monkeypatch):

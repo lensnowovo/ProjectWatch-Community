@@ -132,3 +132,34 @@ def test_a_job_the_user_started_goes_ahead_of_background_side_jobs(tmp_path):
     asked = store.enqueue(ids[0], 'competition', input_version='manual:synthetic')
     first = store.claim()
     assert first['id'] == asked['id'] and all(first['id'] != s['id'] for s in side)
+
+
+def test_round_and_side_lanes_take_only_their_own_work(tmp_path):
+    store, ids = setup(tmp_path, 2)
+    side = store.enqueue(ids[0], 'competition')
+    collect = store.enqueue(ids[0], 'collect', input_version='manual:a')
+    running = store.claim('round')
+    assert running['id'] == collect['id']
+    # Project 0's round is running: its side job waits; another project's side job may run.
+    assert store.claim('side') is None
+    other = store.enqueue(ids[1], 'details')
+    assert store.claim('side')['id'] == other['id']
+    assert store.claim('round') is None
+    store.finish(collect['id'], lease_token=running['lease_token'])
+    assert store.claim('side')['id'] == side['id']
+
+
+def test_two_lanes_start_and_stop_together(tmp_path):
+    from project_watch.repository import ProjectRepository
+    from project_watch.studio.pipeline import Pipeline, StudioWorker
+    from project_watch.studio.settings import SettingsStore
+
+    repo = ProjectRepository(tmp_path / 'lanes.sqlite3')
+    pipeline = Pipeline(repo, StudioStore(repo.db_path), SettingsStore(tmp_path / 'settings.json'))
+    worker = StudioWorker(pipeline, poll_seconds=0.05, lanes=True)
+    worker.start()
+    try:
+        assert worker.runtime_state() == 'running' and worker._side.runtime_state() == 'running'
+    finally:
+        worker.stop()
+    assert worker.runtime_state() == 'stopped' and worker._side.runtime_state() == 'stopped'

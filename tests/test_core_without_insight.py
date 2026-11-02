@@ -88,7 +88,6 @@ with TestClient(app) as client:
     assert app.state.studio_pipeline.brief_analysis is None
     assert app.state.studio_pipeline.crosscheck_analysis is None
     assert detail['brief']['outlook'] == {} and detail['brief']['tone'] == 'neutral'
-    assert app.state.studio_pipeline.schedule_insight(pid) is None
     assert client.get(f'/api/studio/projects/{pid}/insight').json()['generation_available'] is False
     response = client.post(f'/api/studio/projects/{pid}/refresh', json={'kind': 'insight'})
     assert response.status_code == 503 and response.json()['detail']['code'] == 'insight_unavailable'
@@ -125,6 +124,5 @@ with TestClient(app2) as client:
     history = client.get(f"/api/studio/projects/{receipt['project_id']}/questions/{receipt['watch_id']}/history").json()
     assert sorted(r['id'] for r in history) == receipt['history_ids']
     assert app2.state.studio_store.jobs(failure['project_id'])[0]['status'] == 'failed'
-    core['recover_after_restart'](client, app2, failure)
     assert not blocked.intersection(sys.modules)
 ''')

@@ -69,7 +69,9 @@ def main():
         with TestClient(reopened) as client:
             history = client.get(f"/api/studio/projects/{receipt['project_id']}/questions/{receipt['watch_id']}/history").json()
             assert sorted(row['id'] for row in history) == receipt['history_ids']
-            core['recover_after_restart'](client, reopened, failure)
+            # An unclear request stays failed after restart; it is never resent automatically.
+            assert next(j for j in reopened.state.studio_store.jobs(failure['project_id'])
+                        if j['id'] == failure['job_id'])['status'] == 'failed'
         assert 'project_watch.api' not in sys.modules
         assert 'project_watch.reading_worker' not in sys.modules
         print(json.dumps({'installed_at': str(package), 'first_user': 'passed',

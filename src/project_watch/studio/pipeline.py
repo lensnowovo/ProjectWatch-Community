@@ -39,7 +39,6 @@ from project_watch.studio.store import StudioStore
 _log = logging.getLogger(__name__)
 
 CHUNK_CHARS = 8_000
-BODY_FETCH_LIMIT = 30
 FIRST_RESULT_ITEMS = 12
 FIRST_RESULT_PAGES = 6
 # Monitoring-plan searches per follow-up round (each item has up to 4 queries; ~10 items fit). The job's
@@ -1522,7 +1521,7 @@ class Pipeline:
 
     def fetch_bodies(self, project_id: str, stage: Callable[[str], None], *,
                      eligible_ids: set[str] | None = None, collectors: Collectors | None = None,
-                     page_limit: int | None = None, lookup_limit: int = NEWS_LOOKUP_LIMIT) -> int:
+                     lookup_limit: int = NEWS_LOOKUP_LIMIT) -> int:
         """Read article text for new news items so triage judges the report, not the headline.
 
         Fallbacks, in order: the article itself; for redirect-only links (Google News), the
@@ -2258,10 +2257,20 @@ class Pipeline:
 
 
 class StudioWorker:
-    """One background thread: runs queued jobs, schedules internal and external work."""
+    """Background job runner; schedules internal and external work.
 
-    def __init__(self, pipeline: Pipeline, *, poll_seconds: float = 3.0, heartbeat_seconds: float = 20.0) -> None:
+    With ``lanes=True`` it runs the round lane (collect, analyze, report, brief)
+    and a second thread runs side research, so a requested round never waits
+    behind a long side job. Stepping by hand (tests, drains) still takes any job.
+    """
+
+    def __init__(self, pipeline: Pipeline, *, poll_seconds: float = 3.0, heartbeat_seconds: float = 20.0,
+                 lanes: bool = False, lane: str | None = None, schedules: bool = True) -> None:
         self.pipeline = pipeline
+        self.lane = lane
+        self.schedules = schedules
+        self._side = StudioWorker(pipeline, poll_seconds=poll_seconds, heartbeat_seconds=heartbeat_seconds,
+                                  lane='side', schedules=False) if lanes else None
         self.poll_seconds = poll_seconds
         self.heartbeat_seconds = max(.01, heartbeat_seconds)
         self._stop = threading.Event()
@@ -2384,7 +2393,7 @@ class StudioWorker:
 
         self._loop_at = time.monotonic()
         now = datetime.now(UTC)
-        if now - self._last_schedule > timedelta(seconds=5):
+        if self.schedules and now - self._last_schedule > timedelta(seconds=5):
             self._last_schedule = now
             try:
                 self.schedule()
@@ -2392,7 +2401,8 @@ class StudioWorker:
             except Exception:
                 self._schedule_error = True
                 _log.exception("studio scheduling failed")
-        job = self.pipeline.store.claim()
+        side_running = self._side is not None and self._side.runtime_state() == 'running'
+        job = self.pipeline.store.claim('round' if side_running else self.lane)
         if not job:
             return False
         self._current_job = job['id']
@@ -2459,7 +2469,8 @@ class StudioWorker:
     def health(self) -> dict:
         state = self.runtime_state()
         restart = state == 'running' and (bool(self._stalled_job) or
-            (self._current_job is None and time.monotonic() - self._loop_at > 900))
+            (self._current_job is None and time.monotonic() - self._loop_at > 900)
+            or (self._side is not None and self._side.health()['restart_required']))
         status = 'stalled' if restart else 'degraded' if self._schedule_error and state == 'running' else state
         labels = {'running': '后台运行中', 'stopped': '后台未运行', 'stopping': '正在停止',
                   'stalled': '后台受阻，等待恢复', 'degraded': '调度暂时异常，正在重试'}
@@ -2468,21 +2479,28 @@ class StudioWorker:
     def runtime_state(self) -> str:
         """Process-local liveness, not proof of successful collection or health."""
         if self._thread is None or not self._thread.is_alive():
-            return 'stopped'
+            # Not stopped until the side lane has stopped too: it may still be writing.
+            return 'stopping' if self._side is not None and self._side.runtime_state() != 'stopped' else 'stopped'
         return 'stopping' if self._stop.is_set() else 'running'
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="studio-worker", daemon=True)
+        self._thread = threading.Thread(target=self._run, name=f"studio-worker-{self.lane or 'main'}", daemon=True)
         self._thread.start()
+        if self._side is not None:
+            self._side.start()
 
     def request_stop(self) -> None:
         self._stop.set()
+        if self._side is not None:
+            self._side.request_stop()
 
     def stop(self) -> None:
         self.request_stop()
+        if self._side is not None:
+            self._side.stop()
         if self._thread:
             self._thread.join(timeout=10)
         if (not self._thread or not self._thread.is_alive()) and self._analysis_db is not None:

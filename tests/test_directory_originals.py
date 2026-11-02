@@ -103,14 +103,14 @@ def test_no_context_or_unrelated_links_are_not_followed(tmp_path):
     assert reads == [ROOT]
 
 
-def test_directory_is_only_one_level_and_company_reads_remain_three(tmp_path):
+def test_directory_is_expanded_only_one_level(tmp_path):
     pipeline, pid, reads, execution = directory_pipeline(tmp_path)
     links = [{'url': ROOT+f'item-{i}/', 'title': TITLE+str(i)} for i in range(8)]
     pipeline.article_reader = SimpleNamespace(read=lambda url: reads.append(url) or {
         'status': 'summary_only', 'text': '', 'error_code': 'insufficient_article_text',
         'resolved_url': url, 'links': links if url == ROOT else [{'url': CHILD, 'title': TITLE}]})
     assert pipeline.competition_research.originals(pid, [{'url': ROOT}], execution=execution, context=CONTEXT) == []
-    assert len(reads) == 3 and CHILD not in reads
+    assert len(reads) == 1 + len(links) and CHILD not in reads  # the directory and its links, never a grandchild
 
 
 def test_guard_change_after_directory_prevents_child_read(tmp_path):

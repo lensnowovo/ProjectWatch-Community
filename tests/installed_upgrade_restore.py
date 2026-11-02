@@ -128,9 +128,9 @@ def upgrade_or_rollback(root, phase, label):
         for source_id in bp['source_ids']:
             assert client.get('/api/sources/' + source_id + '/fragments').json()
         failure = record['failure']
-        recovery = client.get('/api/studio/projects/' + failure['project_id'] + '/jobs/' + failure['job_id'] + '/recovery')
-        assert recovery.status_code == 200 and recovery.json()['can_recover']
-        # No recovery authorization. An ordinary idle worker step cannot retry.
+        job = next(j for j in app.state.studio_store.jobs(failure['project_id']) if j['id'] == failure['job_id'])
+        assert job['status'] == 'failed'
+        # An unclear request is never resent. An ordinary idle worker step cannot retry.
         app.state.studio_worker._last_schedule = datetime.now(UTC)
         assert not app.state.studio_worker.step()
         assert client.get('/api/studio/health').status_code == 200

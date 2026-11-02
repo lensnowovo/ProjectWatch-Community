@@ -259,8 +259,8 @@ def exercise(model, *, document_format='text'):
                 check("no_formal_facts", repo.list_observations(project_id, status="confirmed") == [])
                 # Recreate repository/worker against the same persisted synthetic DB.
                 reboot = create_app(db, proposal_model=model, start_worker=False)
-                check("budget_exhausted", reboot.state.reading_worker.status(project_id)["reason"] == "budget_reached")
-                check("no_dispatch_after_budget", reboot.state.reading_worker.process_one() is None)
+                # No request cap (app quotas were removed): with no new material nothing is sent after restart.
+                check("no_dispatch_without_new_material", reboot.state.reading_worker.process_one() is None)
                 with TestClient(reboot, base_url="http://127.0.0.1") as restarted:
                     check("reading_survives_restart", restarted.get(route + "/reading").json()["compiled"] == result["reading"])
                 result["passed"] = True

@@ -25,7 +25,6 @@ INPUT = 'collect_input_v1'
 RESULT = 'collect_result_v1'
 PATENTS = SUPPLEMENT_PREFIX + 'patent_documents'
 MAX_PATENT_DOCUMENTS = 6
-MAX_BODY_PAGES = 8
 BODIES = 'collect_bodies_v1'
 WATCH_FIELDS = ('id', 'visibility', 'status', 'scope_kind', 'relation_type', 'relation_target',
                 'axis', 'queries', 'lifecycle_version')
@@ -233,7 +232,8 @@ def read_bodies(pipeline, execution, collectors):
         pipeline.store.set_stage(execution.job['id'], text)
     plan = execution.read_checkpoint(INPUT)['public_plan']
     eligible = pipeline.prefilter_bodies(pid, llm, project, plan, stage, item_ids=ids)
-    read = pipeline.fetch_bodies(pid, stage, eligible_ids=eligible, collectors=collectors, page_limit=MAX_BODY_PAGES)
+    # What is read is the relevance pre-filter's choice; there is no count cap.
+    read = pipeline.fetch_bodies(pid, stage, eligible_ids=eligible, collectors=collectors)
     return {'read': read, 'candidates': len(ids)}
 
 
