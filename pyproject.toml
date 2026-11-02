@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "projectwatch-local"
-version = "0.2.0rc3"
-description = "Self-hosted, evidence-governed project monitoring for investment teams"
+version = "0.3.0a1"
+description = "Self-hosted, evidence-governed monitoring of key investment projects"
 readme = "README.md"
 requires-python = ">=3.11"
 # Individual attribution: qzqzqz (confirmed 2026-10-18). Public brand: ProjectWatch.
@@ -31,17 +31,15 @@ dependencies = [
 
 [project.optional-dependencies]
 desktop = ["pystray==0.19.5", "Pillow>=13,<14"]
-dev = ["pytest>=9.0.3,<10", "httpx>=0.28,<1", "reportlab>=4,<5", "packaging>=24,<27", "xlwt>=1.3,<2"]
+dev = ["pytest>=9.0.3,<10", "pytest-xdist>=3.6,<4", "httpx>=0.28,<1", "reportlab>=4,<5", "packaging>=24,<27", "xlwt>=1.3,<2"]
 ocr = ["rapidocr>=2.1,<3", "onnxruntime>=1.18,<2", "pypdfium2>=4.30,<5"]
 mcp = ["mcp>=2,<3"]
-team = ["argon2-cffi>=25,<26"]
-postgres = ["psycopg[binary,pool]>=3.2,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-project_watch = ["static/*.html", "static/*.css", "static/*.js", "static/*.mjs", "static/*.svg", "static/*.png", "migrations/*.sql", "web/*.html", "web/assets/*", "studio/*.mjs"]
+project_watch = ["static/*.html", "static/*.css", "static/*.js", "static/*.mjs", "static/*.svg", "static/*.png", "web/*.html", "web/assets/*", "studio/*.mjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

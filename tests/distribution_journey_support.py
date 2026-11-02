@@ -77,9 +77,13 @@ class SyntheticTransport:
                    + '<pubDate>Mon, 05 Jan 2026 08:00:00 GMT</pubDate></item></channel></rss>')
             return Response(200, {}, xml.encode())
         if host == 'www.cninfo.com.cn':
-            return json_response({'announcements': []})
+            return json_response({'announcements': [], 'totalAnnouncement': 0})
         if host == 'api.openalex.org':
-            return json_response({'results': []})
+            return json_response({'results': [], 'meta': {'count': 0}})
+        if host == 'www.ebi.ac.uk':
+            return json_response({'hitCount': 0, 'resultList': {'result': []}})
+        if host == 'clinicaltrials.gov':
+            return json_response({'studies': []})
         raise AssertionError(f'Unscripted endpoint (no network permitted): {host}')
 
     @staticmethod

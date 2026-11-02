@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -24,6 +25,14 @@ _NEWS_ORDER = f"""CASE WHEN ({_NEWS_DAY}) BETWEEN date('now','-180 days') AND da
                      WHEN ({_NEWS_DAY}) IS NULL OR ({_NEWS_DAY})>date('now') THEN 1 ELSE 2 END,
                   CASE WHEN ({_NEWS_DAY})<=date('now') THEN ({_NEWS_DAY}) END DESC,
                   collected_at DESC,rowid DESC"""
+
+# Shared event/publication date for reader-facing windows. Never use acquisition
+# time here; normalize offsets before comparing, and reject impossible days.
+_EVENT_DATE_RAW = """COALESCE(e.event_at, (SELECT max(ai.published_at)
+    FROM studio_items ai WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'))"""
+_EVENT_NEWS_DATE = f"""CASE WHEN length(substr({_EVENT_DATE_RAW},1,10))=10
+    AND date(substr({_EVENT_DATE_RAW},1,10),'+0 days')=substr({_EVENT_DATE_RAW},1,10)
+    AND julianday({_EVENT_DATE_RAW}) IS NOT NULL THEN {_EVENT_DATE_RAW} END"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS studio_source_permissions (
@@ -171,10 +180,16 @@ CREATE TABLE IF NOT EXISTS studio_usage (
 );
 """
 
-JOB_KINDS = ("internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight", "scope", "assessment")
+# Retired kinds (external, external_followup, insight, scope, assessment) remain in history only.
+JOB_KINDS = ("internal", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "collect", "analyze", "report")
 LANDSCAPE_DAYS = 7  # competition / industry pages are regenerated weekly
 IMPORTANCE = ("major", "notable", "routine")
 ITEM_STATUS = ("new", "read", "starred", "dismissed")
+
+
+def digest(value) -> str:
+    """Stable hash of a JSON-serialisable value (checkpoint and snapshot bindings)."""
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
 def now() -> str:
@@ -182,10 +197,6 @@ def now() -> str:
 
 
 UNREAD_DAYS = 14
-
-
-class FollowupSuperseded(ValueError):
-    """The failed follow-up's inputs changed; recover with a fresh round, never by resuming it."""
 
 
 class StudioStore:
@@ -259,9 +270,7 @@ class StudioStore:
             from project_watch.studio.execution import SCHEMA as EXECUTION_SCHEMA
 
             db.executescript(EXECUTION_SCHEMA)
-            from project_watch.studio.recovery import SCHEMA as RECOVERY_SCHEMA
-
-            db.executescript(RECOVERY_SCHEMA)
+            # Tables of retired admission/recovery modules stay in existing databases as history.
             # Additive accounting migration; old daily aggregates stay labelled
             # legacy rather than being counted twice with their old HTTP rows.
             call_columns = {r[1] for r in db.execute('PRAGMA table_info(studio_job_calls)')}
@@ -284,6 +293,12 @@ class StudioStore:
             from project_watch.studio.direct_operations import SCHEMA as DIRECT_SCHEMA
 
             db.executescript(DIRECT_SCHEMA)
+            if not db.execute("SELECT 1 FROM studio_state WHERE key='item_dates_v2'").fetchone():
+                self._backfill_item_dates(db)
+                db.execute("INSERT OR REPLACE INTO studio_state VALUES ('item_dates_v2',?)", (now(),))
+            if not db.execute("SELECT 1 FROM studio_state WHERE key='event_dates_v1'").fetchone():
+                self._backfill_event_dates(db)
+                db.execute("INSERT OR REPLACE INTO studio_state VALUES ('event_dates_v1',?)", (now(),))
             # Opening a store (including read-only adapters) must not steal a
             # live worker. Recovery happens under claim's write transaction.
         from project_watch.studio.evidence_store import EvidenceStore
@@ -311,6 +326,42 @@ class StudioStore:
             yield
         finally:
             self._write_context.guard = previous
+
+    @staticmethod
+    def _backfill_event_dates(db: sqlite3.Connection) -> None:
+        """Once: undated events take their reports' earliest publication date, as a recorded revision."""
+        from project_watch.studio.event_revisions import record
+
+        rows = db.execute("SELECT e.id, e.project_id, MIN(i.published_at) FROM studio_events e "
+                          "JOIN studio_items i ON i.event_id=e.id AND COALESCE(i.published_at,'')!='' "
+                          "WHERE COALESCE(e.event_at,'')='' GROUP BY e.id").fetchall()
+        for event_id, project_id, earliest in rows:
+            db.execute("UPDATE studio_events SET event_at=? WHERE id=?", (earliest, event_id))
+            record(db, project_id, event_id)
+
+    @staticmethod
+    def _backfill_item_dates(db: sqlite3.Connection) -> None:
+        """Once: dates and site names for search results stored before they were derived at collection."""
+        from project_watch.studio import publication_dates
+        from project_watch.studio.sources import _source_name
+
+        rows = db.execute("SELECT id,url,source,snippet,published_at,extra FROM studio_items "
+                          "WHERE COALESCE(published_at,'')='' OR source GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*'").fetchall()
+        for row in rows:
+            try:
+                extra = json.loads(row['extra'] or '{}')
+            except ValueError:
+                continue
+            extra = extra if isinstance(extra, dict) else {}
+            published, source = row['published_at'], _source_name(row['source'])
+            if not published:
+                head = extra.get('search_content') or row['snippet'] or ''
+                published, origin = publication_dates.derive(row['url'], head, extra.get('provider_date'))
+                if origin:
+                    extra['date_source'] = origin
+            if published != row['published_at'] or source != row['source']:
+                db.execute("UPDATE studio_items SET published_at=?,source=?,extra=? WHERE id=?",
+                           (published, source, json.dumps(extra, ensure_ascii=False), row['id']))
 
     @staticmethod
     def _migrate_events(db: sqlite3.Connection) -> None:
@@ -395,14 +446,14 @@ class StudioStore:
         """Watched projects. Projects removed from the watchlist keep their data but leave every list and loop."""
         with closing(self._connect()) as db:
             rows = db.execute(
-                """SELECT p.id, p.name, s.*,
+                f"""SELECT p.id, p.name, s.*,
                 (SELECT count(*) FROM studio_events e WHERE e.project_id=p.id
                    AND e.status='new' AND COALESCE(e.event_at, e.created_at) >= ?
                    AND (e.importance='major'
                         OR (e.importance='notable' AND e.category IN ('company','competitor')))) AS unread,
                 (SELECT count(*) FROM studio_events e WHERE e.project_id=p.id
                    AND e.importance='major' AND e.status != 'dismissed'
-                   AND COALESCE(e.event_at, e.created_at) >= ?) AS major_recent,
+                   AND julianday({_EVENT_NEWS_DATE}) BETWEEN julianday(?) AND julianday(?)) AS major_recent,
                 (SELECT count(*) FROM sources src WHERE src.project_id=p.id) AS documents,
                 -- A dated-ahead item (a paper's scheduled issue, a planned event) is never "latest": cap at when it was recorded.
                 (SELECT max(min(COALESCE(e.event_at, e.created_at), e.created_at)) FROM studio_events e
@@ -417,7 +468,7 @@ class StudioStore:
                 # 未读 = what deserves a look: the last UNREAD_DAYS, major items, plus notable company/competitor news.
                 # Backfilled history and routine industry/policy/paper items stay on their own tabs.
                 ((datetime.now(UTC) - timedelta(days=UNREAD_DAYS)).isoformat(),
-                 (datetime.now(UTC) - timedelta(days=30)).isoformat(), include_removed)).fetchall()
+                 (datetime.now(UTC) - timedelta(days=30)).isoformat(), now(), include_removed)).fetchall()
         return [self._project_row(r) for r in rows]
 
     def remove_project(self, project_id: str) -> None:
@@ -457,7 +508,8 @@ class StudioStore:
                     AND recovered.kind=j.kind AND recovered.status='done' AND recovered.rowid>j.rowid)
                 ORDER BY j.kind""", (project_id,)).fetchall()
             labels = {"internal": "资料分析未完成", "external": "外部更新未完成", "external_followup": "外部信息补全未完成", "brief": "项目解读未完成",
-                      "public_profile": "公开档案更新未完成", "landscape": "竞争与行业分析未完成", "insight": "深度分析未完成"}
+                      "public_profile": "公开档案更新未完成", "landscape": "竞争与行业分析未完成", "insight": "深度分析未完成",
+                      "collect": "公开信息收录未完成", "analyze": "本轮分析未完成", "report": "本轮动态整理未完成"}
             alerts.extend(labels.get(r[0], "项目更新未完成") for r in failed)
             # The optional signals store may not have been initialized yet. GET
             # must not create its tables or run a model to calculate this marker.
@@ -551,11 +603,8 @@ class StudioStore:
                 WHERE consent_at IS NOT NULL AND status='active'
                 AND NOT EXISTS (SELECT 1 FROM studio_public_profile p WHERE p.project_id=s.project_id)
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs j WHERE j.project_id=s.project_id
-                    AND (j.kind='public_profile' OR (j.kind IN ('external','external_followup')
-                        AND (j.status IN ('queued','running') OR (j.status='failed' AND j.retry_after>?
-                            AND NOT EXISTS (SELECT 1 FROM studio_jobs recovered
-                                WHERE recovered.project_id=j.project_id AND recovered.kind=j.kind
-                                AND recovered.status='done' AND recovered.rowid>j.rowid))))))""", (now(),)).fetchall()
+                    AND (j.kind='public_profile' OR (j.kind IN ('collect','analyze','report')
+                        AND j.status IN ('queued','running'))))""").fetchall()
         return [r[0] for r in rows]
 
     def due_external_projects(self, hours: int) -> list[str]:
@@ -566,13 +615,8 @@ class StudioStore:
                 WHERE consent_at IS NOT NULL AND status='active'
                 AND (last_external_at IS NULL OR last_external_at < ?)
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id
-                    AND (q.kind='external' AND q.status IN ('queued','running')
-                         OR q.kind='external_followup' AND (q.status IN ('queued','running')
-                             OR (q.status='failed' AND q.retry_after>?
-                                 AND NOT EXISTS (SELECT 1 FROM studio_jobs recovered
-                                     WHERE recovered.project_id=q.project_id AND recovered.kind=q.kind
-                                     AND recovered.status='done' AND recovered.rowid>q.rowid)))))""",
-                (cutoff, now())).fetchall()
+                    AND q.kind IN ('collect','analyze','report') AND q.status IN ('queued','running'))""",
+                (cutoff,)).fetchall()
         return [r[0] for r in rows]
 
     def due_landscape_projects(self, days: int = LANDSCAPE_DAYS) -> list[str]:
@@ -587,7 +631,7 @@ class StudioStore:
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id AND q.kind='landscape'
                     AND (q.status IN ('queued','running') OR (q.status='failed' AND q.created_at >= ?)))
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id
-                    AND q.kind IN ('external','external_followup') AND q.status IN ('queued','running'))""",
+                    AND q.kind IN ('collect','analyze','report') AND q.status IN ('queued','running'))""",
                 (cutoff, retry)).fetchall()
         return [r[0] for r in rows]
 
@@ -753,6 +797,16 @@ class StudioStore:
                 added += cur.rowcount
         return added
 
+    def reopen_triage(self, project_id: str, item_ids: set[str]) -> None:
+        """Send items back to screening, e.g. when a verdict could not be matched to its source."""
+        if not item_ids:
+            return
+        from project_watch.studio.event_revisions import changing_items
+
+        with closing(self._connect()) as db, db, changing_items(db, sorted(item_ids)):
+            db.execute(f"UPDATE studio_items SET triaged=0 WHERE project_id=? AND id IN ({','.join('?' * len(item_ids))})",
+                       (project_id, *sorted(item_ids)))
+
     def untriaged(self, project_id: str, limit: int = 40, *,
                   item_ids: set[str] | None = None, category: str | None = None) -> list[dict]:
         where, args = ["project_id=?", "triaged=0"], [project_id]
@@ -785,6 +839,13 @@ class StudioStore:
                   str(r.get("summary", ""))[:600], str(r.get("impact", ""))[:600],
                   r.get("category"), r["id"]) for r in results])
             for r in results:
+                if isinstance(r.get("importance_assessment"), dict):
+                    db.execute("UPDATE studio_items SET extra=json_set(COALESCE(extra,'{}'),"
+                               "'$.importance_assessment',json(?)) WHERE id=?",
+                               (json.dumps(r["importance_assessment"], ensure_ascii=False), r["id"]))
+                if r.get("relation") in ("subject", "competitor", "route", "field", "unrelated"):
+                    db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
+                               "'$.research_relation',?) WHERE id=? AND category IN ('paper','patent')", (r["relation"], r["id"]))
                 if isinstance(r.get("triage_binding"), dict):
                     db.execute("UPDATE studio_items SET extra=json_set(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END, "
                                "'$.triage_binding',json(?)) WHERE id=?",
@@ -1062,12 +1123,13 @@ class StudioStore:
         previous = previous_memberships(db, project_id, item_ids)
         ts = now()
         event_id = uuid.uuid4().hex
+        event_at = event.get("event_at") or _earliest_published(db, project_id, item_ids)
         db.execute(
             """INSERT INTO studio_events (id, project_id, title, summary, impact, category,
             importance, event_at, created_at, updated_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (event_id, project_id, event["title"][:300], event.get("summary", "")[:600],
              event.get("impact", "")[:600], event["category"], event["importance"],
-             event.get("event_at"), ts, ts, status))
+             event_at, ts, ts, status))
         db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
                        [(event_id, i, project_id) for i in item_ids])
         for old_event in previous:
@@ -1087,12 +1149,9 @@ class StudioStore:
             if row is None:
                 raise KeyError(event_id)
             from project_watch.studio.event_membership import after_attach, before_attach
-            from project_watch.studio.material_ownership import project_guard
 
-            if execution:
-                if execution.job['project_id'] != row['project_id']:
-                    raise ValueError('event is not in job project')
-                project_guard(db, row['project_id'], execution.job['id'])
+            if execution and execution.job['project_id'] != row['project_id']:
+                raise ValueError('event is not in job project')
             saved = before_attach(db, row['project_id'], event_id, item_ids, split_event)
             upgraded = rank.get(importance, 2) < rank.get(row["importance"], 2)
             # A more important report upgrades the event and re-surfaces it as unread.
@@ -1106,12 +1165,16 @@ class StudioStore:
                  now(), 1 if upgraded else 0, 1 if upgraded and importance == "major" else 0, event_id))
             db.executemany("UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?",
                            [(event_id, i, row['project_id']) for i in item_ids])
+            # An undated event takes the earliest publication date its reports now carry.
+            db.execute("UPDATE studio_events SET event_at=? WHERE id=? AND COALESCE(event_at,'')=''",
+                       (_earliest_published(db, row['project_id'], [*item_ids, *[r[0] for r in db.execute(
+                           'SELECT id FROM studio_items WHERE event_id=?', (event_id,))]]), event_id))
             return after_attach(db, row['project_id'], saved)
 
     def list_events(self, *, project_id: str | None = None, category: str | None = None,
                     importance: str | None = None, include_dismissed: bool = False,
                     since_days: int | None = None, limit: int = 100, offset: int = 0,
-                    event_ids: list[str] | None = None) -> list[dict]:
+                    event_ids: list[str] | None = None, dated_only: bool = False) -> list[dict]:
         where, args = ["1=1"], []
         if event_ids is not None:
             if not event_ids:
@@ -1132,16 +1195,29 @@ class StudioStore:
         if not include_dismissed:
             where.append("e.status != 'dismissed'")
         if since_days:
-            where.append("COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai "
-                         "WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'), e.created_at) >= ?")
+            # Internal research can still read newly collected undated evidence.
+            # Only an explicit news-date filter excludes it from time windows.
+            dated = _EVENT_NEWS_DATE
+            where.append('julianday(' + (dated if dated_only else f'COALESCE({dated}, e.created_at)') + ') >= julianday(?)')
             args.append((datetime.now(UTC) - timedelta(days=since_days)).isoformat())
-        sql = f"""SELECT e.*, p.name AS project_name FROM studio_events e
+            if dated_only:
+                where.append('julianday(' + dated + ') <= julianday(?)')
+                args.append(now())
+        order = (f'julianday({_EVENT_NEWS_DATE})' if dated_only else
+                 f'COALESCE({_EVENT_DATE_RAW}, e.created_at)')
+        sql = f"""SELECT e.*, p.name AS project_name, {_EVENT_NEWS_DATE} AS news_date FROM studio_events e
             JOIN projects p ON p.id=e.project_id WHERE {' AND '.join(where)}
-            ORDER BY COALESCE(e.event_at, (SELECT max(ai.published_at) FROM studio_items ai
-              WHERE ai.event_id=e.id AND ai.key LIKE 'agent:%'), e.created_at) DESC LIMIT ? OFFSET ?"""
+            ORDER BY {order} DESC, e.id DESC LIMIT ? OFFSET ?"""
         with closing(self._connect()) as db:
             events = [dict(r) for r in db.execute(sql, (*args, limit, offset)).fetchall()]
             ids = [e["id"] for e in events]
+            manual_ratings = {}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_feedback'").fetchone():
+                for chunk in (ids[n:n + 500] for n in range(0, len(ids), 500)):
+                    marks = ','.join('?' * len(chunk))
+                    for rating in db.execute(f"SELECT event_id,after FROM studio_feedback "
+                            f"WHERE kind='importance' AND event_id IN ({marks}) ORDER BY created_at,rowid", chunk):
+                        manual_ratings[rating['event_id']] = rating['after']
             sources: dict[str, list[dict]] = {i: [] for i in ids}
             for chunk in (ids[n:n + 500] for n in range(0, len(ids), 500)):
                 marks = ",".join("?" * len(chunk))
@@ -1154,6 +1230,11 @@ class StudioStore:
                     sources[item.pop("event_id")].append(item)
         for e in events:
             e["sources"] = sources.get(e["id"], [])
+            from project_watch.studio.news_assessment import event_assessment
+
+            e.update(event_assessment(e, e['sources']))
+            if manual_ratings.get(e['id']) == e['importance']:
+                e.update(importance_status='assessed', importance_reason='用户已调整评级')
             e["source_count"] = len(e["sources"])
             # Link to a report the reader can open directly: a read article, then any direct link.
             first = (next((i for i in e["sources"] if i.get("body_status") in ("article_body", "partial_body")), None)
@@ -1192,18 +1273,14 @@ class StudioStore:
             mode = db.execute('SELECT execution_mode FROM studio_projects WHERE project_id=?', (project_id,)).fetchone()
             if mode and mode[0] == 'agent':
                 return {'id': None, 'project_id': project_id, 'kind': kind, 'status': 'agent_required'}
-            if kind == 'external':
-                continuation = db.execute("SELECT * FROM studio_jobs WHERE project_id=? "
-                    "AND kind='external_followup' AND status IN ('queued','running') "
-                    "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
-                if continuation:
-                    return dict(continuation)
             existing = db.execute(
                 "SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1",
                 (project_id, kind)).fetchone()
             if existing:
                 return dict(existing)
             if automatic:
+                # An automatic job that failed on the same input waits for its retry time
+                # (or for the owner) instead of spending again in a loop.
                 held = db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind=? AND status='failed' "
                                   "AND retry_after>? AND (?='' OR input_version=?) ORDER BY created_at DESC LIMIT 1",
                                   (project_id, kind, now(), input_version, input_version)).fetchone()
@@ -1212,133 +1289,65 @@ class StudioStore:
             job_id = uuid.uuid4().hex
             db.execute("INSERT INTO studio_jobs (id, project_id, kind, status, created_at,input_version) "
                        "VALUES (?,?,?,'queued',?,?)", (job_id, project_id, kind, now(), input_version))
-            if kind in ('external', 'external_followup'):
-                # Persist intent with admission, not by guessing from a later
-                # empty input_version. Reusing an active job above never edits
-                # its frozen mode or turns a scheduled job into manual work.
-                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
-                           (job_id, 'collection_request_v1', json.dumps(dict(
-                               schema_version=1, mode='incremental' if automatic else 'refresh',
-                               origin='scheduler' if automatic else 'owner'))))
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
-    def queue_external_followup(self, job: dict, data: dict) -> dict:
-        """Atomically hand off persisted input and the brief before releasing the first lease."""
-        encoded = json.dumps(data)
-        if len(encoded) > 1_000_000:
-            raise ValueError('followup input exceeds bounds')
-        with closing(self._connect()) as db, db:
-            db.execute('BEGIN IMMEDIATE')
-            parent = db.execute("SELECT * FROM studio_jobs WHERE id=? AND project_id=? AND kind='external'",
-                                (job['id'], job['project_id'])).fetchone()
-            if (not parent or parent['status'] != 'running' or parent['lease_until'] <= now()
-                    or parent['lease_token'] != job.get('lease_token')):
-                raise RuntimeError('job lease expired or replaced')
-            saved = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='external_first_ready'",
-                               (job['id'],)).fetchone()
-            if saved:
-                child_id = json.loads(saved[0])['followup_id']
-                return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (child_id,)).fetchone())
-            # Both inserts and their receipts commit together. A crash cannot leave
-            # an orphan child with no input, or a committed handoff with no brief.
-            active = db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND kind='external_followup' "
-                                "AND status IN ('queued','running')", (job['project_id'],)).fetchone()
-            if active:
-                raise ValueError('外部信息已有补全任务')
-            brief = db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='brief' "
-                               "AND status IN ('queued','running')", (job['project_id'],)).fetchone()
-            if not brief:
-                db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at) VALUES (?,?,'brief','queued',?)",
-                           (uuid.uuid4().hex, job['project_id'], now()))
-            child_id = uuid.uuid4().hex
-            db.execute("INSERT INTO studio_jobs (id,project_id,kind,status,created_at,input_version) "
-                       "VALUES (?,?,'external_followup','queued',?,?)", (child_id, job['project_id'], now(), job['id']))
-            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)', (child_id, 'external_followup_input', encoded))
-            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
-                       (job['id'], 'external_first_ready', json.dumps({'followup_id': child_id})))
-            return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (child_id,)).fetchone())
+    ROUND_KINDS = ('collect', 'analyze', 'report', 'brief')
 
-    def retry_external_followup(self, project_id: str) -> dict:
-        """Explicitly resume the same known-outcome child and its saved call receipts."""
-        from project_watch.studio.recovery import UNRESOLVED
+    def claim(self, lane: str | None = None) -> dict | None:
+        """The next job; lane 'round' takes only round work, lane 'side' only the rest.
 
-        with closing(self._connect()) as db, db:
-            db.execute('BEGIN IMMEDIATE')
-            job = db.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind='external_followup' "
-                             "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
-            if not job:
-                raise ValueError('没有可继续的补全任务，请重新更新项目')
-            if job['status'] in ('queued', 'running'):
-                return dict(job)
-            if job['status'] != 'failed':
-                raise ValueError('补全已完成，请重新更新项目')
-            unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED}",
-                                 (job['id'],)).fetchone()
-            if unknown:
-                raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
-            if job['retry_after'] == '9999-12-31':
-                if '监控依据已变化' in (job['error'] or ''):
-                    raise FollowupSuperseded('监控依据已变化，请按最新信息重新更新项目')
-                raise ValueError('请求结果尚未确认，请先核对来源；不会自动重发')
-            db.execute("UPDATE studio_jobs SET status='queued',error='',finished_at=NULL,retry_after=NULL,"
-                       "lease_token='',lease_until=NULL WHERE id=?", (job['id'],))
-            return dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (job['id'],)).fetchone())
-
-    def claim(self) -> dict | None:
-        from project_watch.studio.recovery import UNRESOLVED
-
+        Neither lane starts a job for a project the other lane is working on, so one
+        project's records are never written by two jobs at once (an analysis fails
+        if its section evidence changes underneath it). A round waits at most for
+        that one running side job, not for the side queue.
+        """
+        if lane not in (None, 'round', 'side'):
+            raise ValueError('unknown worker lane')
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             expired = db.execute("SELECT * FROM studio_jobs WHERE status='running' AND (lease_until IS NULL OR lease_until<=?)", (now(),)).fetchall()
             for old in expired:
-                uncertain = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (old["id"],)).fetchone()
-                unsafe = not old["lease_token"] or uncertain or old["attempts"] >= 3
-                if unsafe:
-                    db.execute("UPDATE studio_jobs SET status='failed',error='interrupted: request outcome uncertain or recovery limit',"
+                # An interrupted job runs again on its saved checkpoints. Its requests
+                # still marked started are not resent (dispatch.check), only accounted.
+                if not old["lease_token"] or old["attempts"] >= 3:
+                    db.execute("UPDATE studio_jobs SET status='failed',error='interrupted: attempt limit',"
                                "finished_at=?,retry_after=?,lease_token='' WHERE id=?", (now(), "9999-12-31", old["id"]))
                 else:
                     db.execute("UPDATE studio_jobs SET status='queued',lease_token='',lease_until=NULL WHERE id=?", (old["id"],))
-            # Prefer finished-input briefs, but reserve every third selection for
+            # Prefer briefs and reports, then the round or job a user asked for, over background side jobs,
+            # but reserve every third selection for
             # oldest eligible work. The persisted counter survives worker restarts
             # and is updated under the same lock as the lease claim.
             burst = db.execute("SELECT value FROM studio_state WHERE key='queue_brief_burst'").fetchone()
-            prefer_brief = int(burst[0] if burst else 0) < 2
-            row = db.execute("""SELECT j.* FROM studio_jobs j
+            # Within a lane the oldest-work reservation is unneeded: rounds no longer share a queue with side jobs.
+            prefer_brief = lane is not None or int(burst[0] if burst else 0) < 2
+            rounds = ','.join('?' * len(self.ROUND_KINDS))
+            lane_filter, lane_args = {
+                None: ('', ()),
+                'round': (f" AND j.kind IN ({rounds}) AND NOT EXISTS (SELECT 1 FROM studio_jobs r WHERE "
+                          f"r.project_id=j.project_id AND r.status='running' AND r.kind NOT IN ({rounds}))",
+                          self.ROUND_KINDS + self.ROUND_KINDS),
+                'side': (f" AND j.kind NOT IN ({rounds}) AND NOT EXISTS (SELECT 1 FROM studio_jobs r WHERE "
+                         f"r.project_id=j.project_id AND r.status='running' AND r.kind IN ({rounds}))",
+                         self.ROUND_KINDS + self.ROUND_KINDS),
+            }[lane]
+            # Retired kinds are archived at startup and never claimed; internal
+            # documents keep being read while public monitoring is paused.
+            marks = ','.join('?' * len(JOB_KINDS))
+            row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
-                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND (j.kind NOT IN ('external','external_followup','public_profile','landscape','business','competition','details','commercial','insight','brief','scope','assessment')
-                    OR COALESCE(p.status,'active')='active')
-                AND (j.kind!='external_followup' OR EXISTS (SELECT 1 FROM studio_jobs parent
-                     WHERE parent.id=j.input_version AND parent.project_id=j.project_id AND parent.kind='external' AND parent.status='done')
-                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints link JOIN studio_jobs parent
-                       ON parent.id=json_extract(link.data,'$.job_id')
-                       JOIN studio_call_recoveries grant ON grant.job_id=parent.id
-                         AND grant.previous_key=json_extract(link.data,'$.previous_key')
-                       WHERE link.job_id=j.id AND link.stage='recovery_origin' AND parent.project_id=j.project_id
-                         AND parent.kind IN ('external','external_followup') AND parent.status='done'
-                         AND j.input_version='recovery:'||parent.id))
-                AND (j.kind!='external' OR NOT EXISTS (SELECT 1 FROM studio_jobs material
-                     WHERE material.project_id=j.project_id AND material.kind='internal' AND material.status IN ('queued','running')))
-                AND (j.kind!='insight' OR NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c
-                     WHERE c.job_id=j.id AND c.stage='event_insight_input_v1') OR EXISTS (
-                     SELECT 1 FROM studio_job_checkpoints c JOIN studio_jobs parent
-                       ON parent.id=COALESCE(json_extract(c.data,'$.predecessor_job_id'),json_extract(c.data,'$.origin_job_id'))
-                     WHERE c.job_id=j.id AND c.stage='event_insight_input_v1' AND parent.project_id=j.project_id
-                       AND (parent.status IN ('done','failed') OR (parent.id=j.id
-                         AND json_extract(c.data,'$.budget_basis')='explicit_new_analysis_round'))))
-                AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints c WHERE c.job_id=j.id AND c.stage='public_stage_input_v1')
-                     OR EXISTS (SELECT 1 FROM studio_job_checkpoints c LEFT JOIN studio_jobs parent
-                       ON parent.id=json_extract(c.data,'$.predecessor_job_id')
-                     WHERE c.job_id=j.id AND c.stage='public_stage_input_v1' AND
-                       ((parent.project_id=j.project_id AND parent.status IN ('done','failed'))
-                        OR (json_extract(c.data,'$.predecessor_job_id') IS NULL
-                            AND json_extract(c.data,'$.budget_basis')='explicit_periodic_scope_round'))))
-                ORDER BY CASE WHEN ? AND j.kind='brief' THEN 0 ELSE 1 END,
-                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (prefer_brief,)).fetchone()
+                WHERE j.status='queued' AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
+                AND (j.kind='internal' OR COALESCE(p.status,'active')='active'){lane_filter}
+                ORDER BY CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
+                              WHEN j.kind IN ('collect','analyze') OR j.input_version LIKE 'manual:%' THEN 1 ELSE 2 END,
+                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (*JOB_KINDS, *lane_args, prefer_brief)).fetchone()
             if not row:
                 return None
-            next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and row['kind'] == 'brief' else 0
-            db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                       (str(next_burst),))
+            if lane is None:  # lanes leave the single-queue reservation counter alone
+                preferred = row['kind'] in self.ROUND_KINDS or str(row['input_version']).startswith('manual:')
+                next_burst = int(burst[0] if burst else 0) + 1 if prefer_brief and preferred else 0
+                db.execute("INSERT INTO studio_state VALUES ('queue_brief_burst',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                           (str(next_burst),))
             db.execute("UPDATE studio_jobs SET status='running',started_at=COALESCE(started_at,?),lease_token=?,"
                        "lease_until=?,progress_at=?,heartbeat_at=?,attempts=attempts+1 WHERE id=?",
                        (now(), uuid.uuid4().hex, (datetime.now(UTC) + timedelta(seconds=90)).isoformat(), now(), now(), row["id"]))
@@ -1370,18 +1379,23 @@ class StudioStore:
                 (job['id'], job['lease_token'], now())).rowcount)
 
     def finish(self, job_id: str, *, error: str = "", lease_token: str | None = None) -> bool:
-        from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
+        from project_watch.studio.dispatch import RECEIVED_FAILURE, UNRESOLVED
 
         with closing(self._connect()) as db, db:
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (job_id,)).fetchone()
-            if unknown and not error:
-                error = 'request_outcome_unknown: 已保留已有结果，等待确认未返回的请求'
-            model_failure = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND ({_RECEIVED_MODEL_FAILURE}) LIMIT 1', (job_id,)).fetchone()
-            if model_failure and not error:
-                error = 'model_http_5xx: 已保留已有结果，模型请求未取得可用回答，等待确认恢复'
+            round_job = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN ('collect','analyze','report')",
+                                   (job_id,)).fetchone()
+            if unknown and not error and not round_job:
+                # Round jobs finish with their unclear requests recorded per source/section.
+                error = 'request_outcome_unknown: 已保留已有结果，结果不明的请求不会自动重发'
+            model_failure = db.execute("SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND c.kind='model' "
+                                       f"AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE} LIMIT 1",
+                                       (job_id,)).fetchone()
             business = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN ('business','competition','details')", (job_id,)).fetchone()
-            held = bool(model_failure) or 'request_outcome_unknown' in error or '监控依据已变化' in error
-            retry_after = "9999-12-31" if error and (unknown or business or held) else (datetime.now(UTC) + timedelta(minutes=30)).isoformat() if error else None
+            # Uncertain or billing-ambiguous outcomes never turn into an automatic paid
+            # retry on the same input; definite failures retry after 30 minutes.
+            held = bool(unknown or model_failure or business) or 'request_outcome_unknown' in error
+            retry_after = ("9999-12-31" if held else (datetime.now(UTC) + timedelta(minutes=30)).isoformat()) if error else None
             return bool(db.execute("UPDATE studio_jobs SET status=?,error=?,finished_at=?,stage='',retry_after=?,lease_token='' "
                        "WHERE id=? AND (? IS NULL OR (status='running' AND lease_token=? AND lease_until>?))",
                        ("failed" if error else "done", error[:500], now(),
@@ -1408,3 +1422,13 @@ class StudioStore:
         from project_watch.studio.usage import rows
 
         return rows(self, days)
+
+
+def _earliest_published(db, project_id: str, item_ids) -> str | None:
+    """The earliest publication time among these items, or None."""
+    ids = sorted(set(item_ids))
+    if not ids:
+        return None
+    row = db.execute(f"SELECT MIN(published_at) FROM studio_items WHERE project_id=? AND id IN ({','.join('?' * len(ids))}) "
+                     "AND COALESCE(published_at,'')!=''", (project_id, *ids)).fetchone()
+    return row[0] if row and row[0] else None

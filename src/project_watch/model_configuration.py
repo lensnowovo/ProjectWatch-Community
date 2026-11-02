@@ -106,7 +106,7 @@ class ModelConfiguration:
             self._lock.release()
 
 
-def attach_model_settings(app, settings, *, team_mode=False):
+def attach_model_settings(app, settings):
     operator_token = os.environ.get("PROJECT_WATCH_SETTINGS_TOKEN", "")
 
     @app.exception_handler(RequestValidationError)
@@ -119,7 +119,7 @@ def attach_model_settings(app, settings, *, team_mode=False):
         return await request_validation_exception_handler(request, exc)
 
     def authorize(request):
-        if team_mode or not operator_token:
+        if not operator_token:
             raise HTTPException(403, "模型配置需要本机管理口令；请通过管理启动器启用。")
         if not hmac.compare_digest(request.headers.get("x-settings-token", ""), operator_token):
             raise HTTPException(403, "管理口令无效。")
@@ -132,7 +132,7 @@ def attach_model_settings(app, settings, *, team_mode=False):
     def status():
         return {
             **settings.status(),
-            "editable": bool(operator_token) and not team_mode and settings.model_factory is not None,
+            "editable": bool(operator_token) and settings.model_factory is not None,
             "executor": settings.executor_name,
         }
 

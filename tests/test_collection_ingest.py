@@ -3,8 +3,8 @@ import json
 from contextlib import closing
 from copy import deepcopy
 
+import collection_fixtures
 import pytest
-import test_studio_dsh_monitor as fixtures
 from test_collection_plan import candidate, plan
 
 from project_watch.studio.collection_ingest import CollectionIngest
@@ -17,10 +17,7 @@ from project_watch.studio.sources import _item
 
 @pytest.fixture
 def host(tmp_path):
-    research = fixtures.loop.__wrapped__(tmp_path)
-    p = plan([candidate() | {'source': 'clinical_term', 'category': 'trial'}],
-             round_id=research.execution.job['id'], project_id=research.project_id)
-    return research, p['units'][0], CollectionIngest(research.execution)
+    return collection_fixtures.host(tmp_path)
 
 
 def trial(status='RECRUITING', url='https://clinicaltrials.gov/study/NCT00000001'):
@@ -28,6 +25,16 @@ def trial(status='RECRUITING', url='https://clinicaltrials.gov/study/NCT00000001
                  snippet='Synthetic source metadata', published_at='2024-01-02',
                  extra={'source_identity': 'clinical:NCT00000001', 'nct_id': 'NCT00000001',
                         'status': status, 'source_record': {'nctId': 'NCT00000001', 'overallStatus': status}})
+
+
+def test_source_only_cannot_resurrect_withdrawn_snapshot(host):
+    research, unit, ingest = host
+    ref = ingest(unit, [trial()])['evidence_refs'][0]
+    research.pipeline.evidence.dependencies.withdraw(research.project_id, ref['evidence_version_id'],
+                                                     'Synthetic withdrawal', actor='test')
+    with pytest.raises(HttpError, match='source_only_withdrawn_item'):
+        CollectionIngest(research.execution, admit_materials=False)(
+            unit | {'id': 'new-metadata'}, [trial('COMPLETED')])
 
 
 def rows(research, table):
@@ -206,3 +213,33 @@ def test_structured_record_contract_cannot_claim_full_document_read():
                     {'parts': [EvidencePart(locator_kind='pdf_page', locator='1', text='text')]}):
         with pytest.raises(ValueError):
             EvidenceInput(**(deepcopy(data) | changes))
+
+
+def test_failed_source_does_not_block_two_saved_candidates_or_recollect_on_reopen(host):
+    from project_watch.studio.research_sources import research_sources
+
+    research, _unit, ingest = host
+    p = plan([candidate() | {'source': 'clinical_term', 'category': 'trial', 'query': name}
+              for name in ('source-a', 'source-b', 'source-c')],
+             round_id=research.execution.job['id'], project_id=research.project_id)
+    calls = []
+    def collect(unit):
+        calls.append(unit['query'])
+        if unit['query'] == 'source-b':
+            raise HttpError('source_timeout')  # Known read-only source failure, not model unknown.
+        item = trial()
+        item['url'] += '?source=' + unit['query']
+        item['extra']['source_identity'] = 'synthetic:' + unit['query']
+        item['extra']['nct_id'] = unit['query']
+        return dict(items=[item], request_ids=['synthetic-' + unit['query']], truncated=False)
+    ledger = CollectionLedger(research.execution, p)
+    coverage = run_collection(ledger, collect=collect, ingest=ingest, guard=research.guard)
+    assert coverage['status'] == 'partial'
+    assert sorted(r['outcome'] for r in ledger.receipts) == ['failed', 'success', 'success']
+    page = research_sources(research.store, research.project_id, 'trial')
+    assert page['total'] == 2
+    assert all(item['processing_status'] == 'pending' for item in page['items'])
+    assert research.store.list_events(project_id=research.project_id) == []
+    reopened = CollectionLedger(research.execution, p)
+    assert run_collection(reopened, collect=collect, ingest=ingest, guard=research.guard) == coverage
+    assert sorted(calls) == ['source-a', 'source-b', 'source-c']

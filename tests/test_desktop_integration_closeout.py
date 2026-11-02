@@ -4,25 +4,7 @@ import json
 import pytest
 from test_windows_install import hashes, home_at, payload, with_runtime
 
-from project_watch.studio import public_executor
 from scripts.windows import maintain
-
-
-def test_old_classic_upgrade_preserves_executor_without_writing_user_config(tmp_path):
-    home, root = home_at(tmp_path), tmp_path/'program'
-    maintain.install(payload(tmp_path), root, home)
-    # Simulate a pre-migration install-state with no executor-default field.
-    state_path = root/'install-state.json'
-    state = json.loads(state_path.read_text())
-    state.pop('public_executor_default', None)
-    state_path.write_text(json.dumps(state))
-    before = hashes(home)
-    bundle, _ = with_runtime(tmp_path, 'two')
-    result = maintain.install(bundle, root, home)
-    assert json.loads(state_path.read_text())['public_executor_default'] == 'classic'
-    assert public_executor.resolve(home, root/'versions'/result['active'])['executor'] == 'classic'
-    assert hashes(home) == before
-    assert not (home/'desktop-runtime.json').exists()
 
 
 @pytest.mark.parametrize('choice', [True, False])

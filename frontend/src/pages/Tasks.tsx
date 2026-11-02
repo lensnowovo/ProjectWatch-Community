@@ -3,8 +3,7 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { JobActivity, WorkIndicator, useVisiblePoll } from "../Operational";
 import { isCoverageNote, jobReason, unresolvedJobs } from "../workState";
-import { api, type Job, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
-import { RecoveryDialog } from "../RecoveryDialog";
+import { api, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
 import { Page } from "../motion";
 import PageHeader from "../PageHeader";
 import { ErrorNote, errorMessage, relTime, useAsync } from "../ui";
@@ -48,7 +47,7 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
   const stuckDocs = useMemo(() => docs.filter(docFailed), [docs]);
   const finished = useMemo(() => jobs.filter((j) => (j.status === "done" || j.status === "failed")
     && (filter === "all" || (filter === "partial" ? j.runtime?.state === "partial" : j.status === filter
-      && j.runtime?.state !== "partial" && (filter !== 'done' || j.runtime?.state !== 'needs_confirmation')))), [jobs, filter]);
+      && j.runtime?.state !== "partial"))), [jobs, filter]);
   const doneDocs = docs.filter(docDone);
   const working = active.length + activeDocs.length;
 
@@ -141,7 +140,7 @@ export function FinishedRow({ j }: { j: TaskJob }) {
   return <tr className={j.status === "failed" ? "task-failed" : ""}>
     <td className="muted small num">{relTime(j.finished_at)}</td>
     <td><Link to={`/projects/${j.project_id}`} className="cell-title">{j.project_name}</Link></td>
-    <td>{j.label}{j.status === "failed" && j.error && <div className="task-error">{errorMessage(j.error)}</div>}</td>
+    <td>{j.label}{j.status === "failed" && j.error && <div className="task-error">{j.runtime?.blocking_jobs?.length ? jobReason(j) : errorMessage(j.error)}</div>}</td>
     <td>{j.runtime?.state === "partial" ? <span className="tag tag-warn" title={j.runtime.label}>部分完成</span>
       : j.runtime?.state === 'needs_confirmation' ? <span className="tag tag-warn" title={j.runtime.label}>仍有请求待确认</span>
       : j.status === "done" ? <span className="tag tag-ok">成功</span> : <span className="tag tag-warn">{j.runtime?.label || "失败"}</span>}</td>
@@ -171,7 +170,6 @@ export function DocumentRow({ d }: { d: TaskDocument }) {
 export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [recovering, setRecovering] = useState(false);
   const [done, setDone] = useState("");
   const partial = j.runtime?.state === "partial";
   const fallback = { why: jobReason(j), todo: partial
@@ -183,9 +181,9 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
     setBusy(true); setError(null);
     try { await fn(); setDone(message); onChanged(); } catch (e) { setError(e); } finally { setBusy(false); }
   };
-  return <li className="fix-row">
+  return <li className="fix-row" id={`task-${j.id}`}>
     <div className="fix-head">
-      <span className="tag tag-warn">{partial ? "部分完成" : j.runtime?.state === "needs_confirmation" ? "结果待确认" : "未完成"}</span>
+      <span className="tag tag-warn">{partial ? "部分完成" : "未完成"}</span>
       <strong><Link to={`/projects/${j.project_id}`}>{j.project_name}</Link> · {j.label}</strong>
       <span className="muted small">{relTime(j.finished_at)}</span>
     </div>
@@ -194,7 +192,6 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
       <div><dt>怎么处理</dt><dd>{advice.todo}</dd></div>
     </dl>
     {done ? <p className="fix-done small">{done}</p> : <div className="fix-actions">
-      {advice.action === "recover" && <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => setRecovering(true)}>查看并重发</button>}
       {advice.action === "settings" && <Link className="btn btn-sm" to="/settings">去设置测试连接</Link>}
       {(advice.action === "rerun" || advice.action === "settings") && <button className={`btn btn-sm${advice.action === "rerun" ? " btn-primary" : ""}`} disabled={busy}
         onClick={() => act(() => api.refresh(j.project_id, j.kind), "已重新加入队列，可在上方“正在处理”里看到进度。")}>重新运行</button>}
@@ -203,7 +200,5 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
       {j.error && <details className="fix-raw"><summary>原始信息</summary><code>{errorMessage(j.error)}</code></details>}
     </div>}
     <ErrorNote error={error} />
-    {recovering && <RecoveryDialog projectId={j.project_id} job={j as unknown as Job} onClose={() => setRecovering(false)}
-      onQueued={() => { setDone("已确认重发，任务重新排队。"); onChanged(); }} />}
   </li>;
 }

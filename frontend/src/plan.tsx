@@ -9,7 +9,6 @@ import { workRevision, projectWork } from "./workState";
 import { publicLink } from "./relationScope";
 import { MonitorScope } from "./monitorScope";
 import { CollectionSources } from "./CollectionSources";
-import { TopicResearch } from "./TopicResearch";
 import { collectionExecutionLabel } from "./externalCollection";
 
 /** 监控方案: a complete plan grown from a fixed framework — four rings around the company, nine dimensions by
@@ -253,8 +252,6 @@ function ItemDetail({ item, latest, module, moduleLabel, labels, dims, onChanged
         {item.last_run_at ? ` · 上次 ${relTime(item.last_run_at)}` : " · 尚未运行"}</dd></div>
       <div><dt>来源</dt><dd>{labels.origin[item.plan_origin] ?? "—"} · {labels.tier[item.tier]}</dd></div>
     </dl>
-    {item.visibility === 'public' && item.tier === 'topic' && item.scope_kind !== 'relation'
-      && !!item.queries.length && !!item.exit_rule && <TopicResearch key={`${item.id}:${item.lifecycle_version}`} item={item} />}
     <div className="plan-actions">
       {item.scope_kind !== "question" && item.tier !== "core" && <RowAction item={item} fields={{ tier: "core" }} label="升为核心" note="升为核心" onChanged={onChanged} />}
       {item.tier === "core" && <RowAction item={item} fields={{ tier: "background" }} label="降为背景" note="降为背景" onChanged={onChanged} />}

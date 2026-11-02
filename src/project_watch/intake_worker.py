@@ -10,9 +10,6 @@ from pathlib import Path
 from project_watch.blob_store import BlobStore
 from project_watch.domain import IntakeJob
 from project_watch.extraction_process import (
-    MAX_PARSER_OUTPUT_BYTES,
-    PARSER_TIMEOUT_SECONDS,
-    PDF_PARSER_TIMEOUT_SECONDS,
     extract_document_subprocess,
 )
 from project_watch.extractors import ExtractionError, extract_document
@@ -78,19 +75,11 @@ class IntakeWorker:
                 )
             else:
                 suffix = Path(source.reference).suffix
-                if self.isolated and self.blob_store.max_bytes is not None:
-                    result = extract_document_subprocess(
-                        stored_path, suffix=suffix,
-                        timeout_seconds=(PDF_PARSER_TIMEOUT_SECONDS if suffix.lower() == ".pdf"
-                                         else PARSER_TIMEOUT_SECONDS),
-                        max_output_bytes=MAX_PARSER_OUTPUT_BYTES,
-                    )
+                if self.isolated:
+                    result = extract_document_subprocess(stored_path, suffix=suffix,
+                                                        cancel=self._stop, on_progress=self._progress)
                 else:
-                    if self.isolated:
-                        result = extract_document_subprocess(stored_path, suffix=suffix,
-                                                            cancel=self._stop, on_progress=self._progress)
-                    else:
-                        result = extract_document(stored_path, suffix=suffix)
+                    result = extract_document(stored_path, suffix=suffix)
             if self._stop.is_set():
                 raise ExtractionError('parser_cancelled')
             self._phase = 'indexing'

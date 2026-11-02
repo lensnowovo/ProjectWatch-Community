@@ -63,6 +63,8 @@ def _record(item):
     snapshot = {k: item.get(k) for k in ('title', 'url', 'source', 'snippet', 'published_at')}
     if raw is not None:
         snapshot['source_record'] = raw
+    if extra.get('query_context'):
+        snapshot['query_context'] = extra['query_context']
     text = _json(snapshot)
     if len(text.encode()) > 1_000_000:
         raise ValueError('collected source record exceeds storage bound')
@@ -70,8 +72,9 @@ def _record(item):
 
 
 class CollectionIngest:
-    def __init__(self, execution):
+    def __init__(self, execution, *, admit_materials=True):
         self.execution, self.store = execution, execution.store
+        self.admit_materials = admit_materials
         self.project_id = execution.job['project_id']
         with self.store.write_scope(execution._guard), closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
@@ -79,13 +82,22 @@ class CollectionIngest:
             for statement in SCHEMA:
                 db.execute(statement)
             db.execute(evidence_tasks.SCHEMA)
-            from project_watch.studio.material_ownership import SCHEMA as ownership_schema
-
-            for statement in ownership_schema:
-                db.execute(statement)
 
     def __call__(self, unit, items):
+        context = None
         try:
+            if unit['target_id'].startswith('scope:'):
+                with closing(self.store._connect()) as db:
+                    row = db.execute('SELECT record FROM studio_collection_targets WHERE project_id=? AND id=?',
+                        (self.project_id, unit['target_id'][6:])).fetchone()
+                target = json.loads(row[0]) if row else {}
+                if target.get('query_context'):
+                    from project_watch.studio.retrieval_queries import validate
+
+                    context = validate(self.store, self.project_id, target['query_context'])
+                    if target['query'] != unit['query'] or target['adapter'] != unit['source'] or target['status'] != 'active':
+                        raise ValueError('query scope changed')
+                    items = [{**item, 'extra': {**item.get('extra', {}), 'query_context': context}} for item in items]
             prepared = [(item, *_record(item)) for item in items]
             unique = {}
             for entry in prepared:
@@ -108,6 +120,8 @@ class CollectionIngest:
         with self.store.write_scope(self.execution._guard), closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             self.execution._guard(db)
+            if context:
+                validate(self.store, self.project_id, context, db=db)
             for item, identity, text, structured in prepared:
                 refs.append(self._save(db, unit, item, identity, text, structured, observed))
         # Database evidence and observations are atomic; replay after this write
@@ -135,7 +149,17 @@ class CollectionIngest:
                 raise HttpError('ambiguous_collection_identity')
             existing = matches[0] if matches else None
         item_id = existing['id'] if existing else uuid.uuid4().hex
+        if not self.admit_materials and existing is not None and (
+                existing['triaged'] or existing['event_id'] or existing['status'] == 'dismissed' or not existing['relevant']):
+            # A source-only grant cannot invalidate or replace admitted events.
+            raise HttpError('source_only_admitted_item')
         key = 'collection:' + hashlib.sha256(identity.encode()).hexdigest()
+        if not self.admit_materials and db.execute(
+                "SELECT 1 FROM studio_evidence_lifecycle l JOIN studio_evidence_versions v ON v.id=l.evidence_version_id "
+                "WHERE l.project_id=? AND l.status='withdrawn' AND (v.source_key=? OR v.id IN ("
+                "SELECT evidence_version_id FROM studio_collection_observations WHERE item_id=?)) LIMIT 1",
+                (self.project_id, key, item_id)).fetchone():
+            raise HttpError('source_only_withdrawn_item')
         older_source = source is not None and _time(observed) < _time(source['observed_at'])
         # A second adapter can discover an already indexed URL. It must not
         # downgrade that item with an older cached representation either.
@@ -157,6 +181,8 @@ class CollectionIngest:
                      else 'updated' if existing else 'added')
         if existing is None:
             category = {'chain': 'company', 'technology': 'industry'}.get(unit['category'], unit['category'])
+            if category == 'trial' and item.get('kind') == 'policy':
+                category = 'policy'  # a regulator's news or notice page is not a trial record
             db.execute('INSERT INTO studio_items (id,project_id,key,category,title,url,source,snippet,published_at,'
                        'collected_at,extra) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                        (item_id, self.project_id, key, category, item['title'], item['url'], item['source'],
@@ -180,7 +206,7 @@ class CollectionIngest:
                        'observed_at=excluded.observed_at', (self.project_id, identity, item_id, record['id'], observed))
         db.execute('INSERT OR IGNORE INTO studio_collection_observations VALUES (?,?,?,?,?,?)',
                    (self.execution.job['id'], unit['id'], item_id, record['id'], operation, observed))
-        if operation != 'historical':
+        if operation != 'historical' and self.admit_materials:
             evidence_tasks.admit(db, self.execution, record['id'])
         return dict(item_id=item_id, evidence_version_id=record['id'], identity=identity,
                     operation=prior['operation'] if prior else operation, observed_at=prior['observed_at'] if prior else observed,

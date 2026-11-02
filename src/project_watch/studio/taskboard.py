@@ -11,7 +11,8 @@ from datetime import UTC, datetime, timedelta
 KIND_LABEL = {"internal": "分析内部资料", "external": "收集公开信息", "external_followup": "补全外部信息", "brief": "生成当前判断",
               "public_profile": "补充公开档案", "landscape": "整理竞争与行业", "business": "整理产品与用途",
               "competition": "更新竞对资料", "details": "整理商业关系与政策条件", "commercial": "查询专业数据来源",
-              "insight": "深度分析", "scope": "公开范围维护", "assessment": "公开问题评估"}
+              "insight": "深度分析", "scope": "公开范围维护", "assessment": "公开问题评估",
+              "collect": "收录公开信息", "analyze": "分析本轮信息", "report": "整理本轮动态"}
 INTAKE_LABEL = {"queued": "等待识别", "processing": "正在识别文字", "completed": "已识别", "needs_ocr": "部分页面未识别", "failed": "识别失败"}
 
 
@@ -40,12 +41,12 @@ def board(store, *, worker_state: str, model_ready: bool, model_binding: str = "
         ids = [j["id"] for j in jobs]
         calls = {}
         if ids:
-            from project_watch.studio.recovery import _RECEIVED_MODEL_FAILURE, UNRESOLVED
+            from project_watch.studio.dispatch import RECEIVED_MODEL_FAILURE, UNRESOLVED
 
             marks = ",".join("?" * len(ids))
             calls = {r[0]: {"calls": r[1], "unknown": r[2], "model_failure": r[3]} for r in db.execute(
                 f"SELECT job_id, sum(kind='model'), sum(CASE WHEN {UNRESOLVED} THEN 1 ELSE 0 END), "
-                f"sum(CASE WHEN ({_RECEIVED_MODEL_FAILURE}) THEN 1 ELSE 0 END) "
+                f"sum(CASE WHEN ({RECEIVED_MODEL_FAILURE}) THEN 1 ELSE 0 END) "
                 f"FROM studio_job_calls c WHERE job_id IN ({marks}) GROUP BY job_id", ids)}
         documents = [dict(r) for r in db.execute(
             f"""SELECT s.id, s.project_id, s.reference AS name, s.created_at, p.name AS project_name,
@@ -72,7 +73,7 @@ def board(store, *, worker_state: str, model_ready: bool, model_binding: str = "
     for job in jobs:
         job["label"] = KIND_LABEL.get(job["kind"], job["kind"])
         job.update(calls.get(job["id"], {"calls": 0, "unknown": 0}))
-        if job["status"] == "failed" or job['runtime']['state'] in ('partial', 'needs_confirmation'):
+        if job["status"] == "failed" or job['runtime']['state'] == 'partial':
             job["advice"] = advice(job)
             job["dismissed"] = job["id"] in dismissed
         start, end = job.get("started_at"), job.get("finished_at")
@@ -139,41 +140,21 @@ def _document_steps(doc: dict, job: dict | None, model_ready: bool, model_bindin
 def advice(job: dict) -> dict:
     """An incomplete outcome in plain words: what happened and what can be done.
 
-    action: recover = review and resend the requests whose outcome is unknown (may bill twice);
-            rerun = start the task again; settings = check a service first, then rerun; none = no execution action.
+    action: rerun = start the task again; settings = check a service first, then rerun; none = no execution action.
     """
     error = (job.get("error") or "").strip()
-    if job.get('model_failure') or error.startswith('model_http_5xx'):
-        return {'why': '模型服务已返回 HTTP 5xx，但没有可用回答。已有结果保留，计费仍待核。',
-                'todo': '查看恢复选项，确认指定请求后继续；不会自动重发，也不会改写历史完成记录。',
-                'action': 'recover'}
-    if error.startswith('request_outcome_unknown: site_recovery_blocked: '):
-        return {'why': error.split('site_recovery_blocked: ', 1)[1],
-                'todo': '到任务记录核对其他阻塞请求；本次网页授权尚未使用，不能据此恢复其他请求。',
-                'action': 'none'}
-    if job.get('kind') == 'commercial' and job.get('unknown'):
-        return {'why': '部分专业来源请求结果不明，已有信息保留。',
-                'todo': '请先检查服务商调用记录；本轮不会自动重发。', 'action': 'none'}
-    if job.get('runtime', {}).get('state') == 'needs_confirmation' or job.get("unknown") or error.startswith(("request_outcome_unknown", "interrupted")):
-        n = job.get("unknown") or 1
-        return {"why": f"有 {n} 次请求已经发出，但没有收到明确结果，服务商可能已经计费。为避免重复扣费，系统停下来等你确认。",
-                "todo": "点“查看并重发”，确认只重发这几次请求；也可收起提醒，任务仍保留为未完成。", "action": "recover"}
+    if error.startswith('project_budget'):
+        return {'why': '本项目本月这类请求已达上限，已收到的结果保留。',
+                'todo': '下月自动恢复，期间不会再发送这类请求。', 'action': 'none'}
+    if job.get('model_failure') or job.get('unknown') or error.startswith(
+            ('model_http_5xx', 'request_outcome_unknown', 'unknown_not_resent', 'interrupted')):
+        n = job.get('unknown') or job.get('model_failure') or 1
+        return {'why': f'有 {n} 次请求没有取得明确结果，服务商可能已计费。这些请求不会自动重发，已有结果保留。',
+                'todo': '不影响下一次更新；如是分析未完成，可在项目页“用已保存材料重新分析”。', 'action': 'none'}
     if job.get('runtime', {}).get('state') == 'partial':
         return {'why': job['runtime'].get('label') or '部分内容已完成，其余暂未取得结果。',
                 'todo': '无需操作即可查看已有结果；未覆盖的信息仍保留说明，可按需查看，不会自动重跑。',
                 'action': 'none'}
-    if error.startswith(("dsh_model_timeout", "dsh_interrupted_or_deadline")):
-        return {"why": "研究执行器等待超时，本轮没有完成。已收到的请求结果和用量记录保留。",
-                "todo": "先检查任务调用记录；如有结果不明的请求，须单独确认恢复，不要直接重复运行。",
-                "action": "none"}
-    if error.startswith('dsh_tools_unavailable'):
-        return {'why': '研究执行器未加载 ProjectWatch 工具，本次模型请求未发送。',
-                'todo': '请检查安装完整性或联系维护者修复运行时；已有结果保留，不要反复重试。',
-                'action': 'none'}
-    if error.startswith(("dsh_no_valid_submission", "dsh_runtime_error")):
-        return {"why": "研究执行器已结束，但没有完成有效提交，不能视为已完成判断或专题已停止。",
-                "todo": "请查看任务记录和校验原因，确认卡点后再决定下一步；已有信息保留。",
-                "action": "none"}
     if error.startswith('watchdog_'):
         return {'why': '任务长时间没有进展，多次恢复后仍未完成。已有结果保留。',
                 'todo': '请先检查后台或联系维护人员，避免反复执行同一任务。', 'action': 'none'}

@@ -66,10 +66,9 @@ def test_saved_read_stage_is_replayed_without_opening_page_twice(tmp_path):
     assert read_page(execution, reader, 'https://example.test/a')['text'] == 'public product text'
     assert read_page(execution, reader, 'https://example.test/a')['text'] == 'public product text'
     assert len(calls) == 1 and execution.usage()['page']['cache_hits'] == 1
-    from project_watch.studio.http import HttpError
-    with pytest.raises(HttpError):
-        read_page(execution, reader, 'https://example.test/b')
-    assert len(calls) == 1
+    # App quotas were removed: a new page is read and counted, never refused by a request cap.
+    read_page(execution, reader, 'https://example.test/b')
+    assert calls == ['https://example.test/a', 'https://example.test/b']
 
 
 def test_page_receipt_survives_store_reopen_but_not_a_new_job(tmp_path):
@@ -202,7 +201,7 @@ def test_saved_discovery_models_are_not_reused_after_model_change(tmp_path):
     assert calls == []
 
 
-def test_research_uses_three_distinct_original_pages_and_replays_all(tmp_path):
+def test_research_reads_every_distinct_original_page_once_and_replays_all(tmp_path):
     pipeline, pid, calls, reads = research_pipeline(tmp_path)
     transport = pipeline.http_factory(None).transport
 
@@ -222,14 +221,14 @@ def test_research_uses_three_distinct_original_pages_and_replays_all(tmp_path):
     pipeline.schedule_competition(pid)
     claimed = pipeline.store.claim()
     pipeline.run(claimed)
-    assert len(reads) == 6
-    assert len(set(reads)) == 6
-    assert not any(url.endswith('/4') for url in reads)
+    # Two searches, each with four distinct pages and one duplicate: every distinct page is read once.
+    assert len(reads) == 8
+    assert len(set(reads)) == 8
     baseline = len(calls), len(reads)
     pipeline.run(claimed)
     assert (len(calls), len(reads)) == baseline
     saved = pipeline.competition_research.saved(pid)
-    assert saved['usage']['page']['requests'] == 6
+    assert saved['usage']['page']['requests'] == 8
 
 
 def test_original_pages_continue_known_failure_but_hold_unknown(tmp_path):
@@ -250,8 +249,8 @@ def test_original_pages_continue_known_failure_but_hold_unknown(tmp_path):
 
     pipeline.article_reader = SimpleNamespace(read=read)
     evidence = pipeline.competition_research.originals(pid, hits, execution=execution)
-    assert len(reads) == 3
-    assert len(evidence) == 2 and all(e['read_scope'] == 'partial' for e in evidence)
+    assert len(reads) == 4  # a known 404 is skipped and reading continues
+    assert len(evidence) == 3 and all(e['read_scope'] == 'partial' for e in evidence)
     assert all('search snippet' not in p['text'] for e in evidence for p in e['parts'])
     pipeline.article_reader = SimpleNamespace(read=lambda url: (_ for _ in ()).throw(HttpError('request_outcome_unknown')))
     with pytest.raises(HttpError, match='request_outcome_unknown'):

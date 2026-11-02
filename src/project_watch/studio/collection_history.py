@@ -86,7 +86,7 @@ def schedule(plan, binding, history, *, overlap_days=7, baseline_days=30, contin
     # times: repeated successful company searches cannot starve other units.
     result['units'].sort(key=lambda u: (u['disposition'] != 'pending',
                                       moment(u['last_success_at']).timestamp() if u['last_success_at'] else float('-inf'),
-                                      u['priority'], u['id']))
+                                      u['priority'], u.get('query_rank', 0), u['id']))
     return result
 
 

@@ -26,11 +26,11 @@ async function openAiExtraction(source, fragment) {
     if (state.current?.id !== projectId) return;
     aiExtraction = { projectId, ticket: preview.ticket };
     $("ai-extraction-form").reset();
-    $("ai-extraction-destination").textContent = `${preview.executor} · ${preview.model} · ${preview.base_url} · 本进程剩余 ${preview.remaining_runs} 次`;
+    $("ai-extraction-destination").textContent = `${preview.executor} · ${preview.model} · ${preview.base_url}`;
     $("ai-extraction-source").textContent = `${preview.source_reference} · ${preview.source_locator}${preview.truncated ? " · 仅前 1500 字符" : ""}`;
     $("ai-extraction-excerpt").textContent = preview.excerpt;
     $("ai-extraction-status").textContent = "";
-    $("ai-extraction-submit").disabled = preview.remaining_runs <= 0;
+    $("ai-extraction-submit").disabled = false;
     $("ai-extraction-dialog").showModal();
   } catch (error) { toast(error.message); }
 }

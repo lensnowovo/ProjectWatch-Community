@@ -4,7 +4,6 @@ import json
 from contextlib import closing
 
 from project_watch.studio.event_revisions import FIELDS, _encoded, record
-from project_watch.studio.material_ownership import project_guard
 from project_watch.studio.store import now
 
 
@@ -90,7 +89,6 @@ def correct(store, project_id, receipt_id):
             raise KeyError('merge not found in project')
         if merge['undone']:
             return {'id': receipt_id, 'undone': True}
-        project_guard(db, project_id, '')
         if db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND status='running' LIMIT 1", (project_id,)).fetchone():
             raise ValueError('wait for the running project job before correcting membership')
         store.event_revisions._undo(db, project_id, merge)

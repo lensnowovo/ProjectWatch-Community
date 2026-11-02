@@ -124,13 +124,14 @@ def test_cross_section_sources_do_not_repair_unrelated_summary():
     assert out['operations']['summary'] == '订单超70套'
 
 
-def test_no_new_calls_or_unstable_fingerprint_after_guarded_save(tmp_path):
-    from test_studio_insight import Model, _setup
 
-    from project_watch.studio.insight import load
 
-    project, store, pipeline = _setup(tmp_path)
-    gen.run(pipeline, Model(answer('产品收入尚未确认', '产品已上市', ['D1'])), project.id)
-    assert '确认情况待核实' in load(store, project.id)['analysis']['headline']
-    assert gen.due(pipeline, project.id) is None
-    assert not store.jobs(project.id)
+def test_an_unsafe_point_the_summary_does_not_rest_on_drops_only_that_point():
+    raw = answer('产品已获批上市，领先同类在研产品', '产品已获批上市')
+    raw['operations']['against'] = [{'text': '产品报告期内尚未确认收入', 'refs': ['N1']}]
+    out = gen.normalize(raw, {'N1': source('产品已获批上市。后续收入未披露。')})
+    part = out['operations']
+    assert part['summary'] == '产品已获批上市，领先同类在研产品'
+    assert part['verdict'] == 'improving' and part['confidence'] == 'low'
+    assert part['for'][0]['text'] == '产品已获批上市' and not part['against']
+    assert any(c['reason'] == 'recognition_not_supported' for c in out['qualifier_checks'])

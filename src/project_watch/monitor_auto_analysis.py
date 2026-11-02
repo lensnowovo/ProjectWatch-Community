@@ -10,7 +10,7 @@ from project_watch.monitor_activation import current_packet
 from project_watch.monitor_strategy import RULE_VERSION, SUPPORTED_VERSIONS, digest
 from project_watch.reading_jobs import ReadingDenied, ReadingLimits
 
-MAX_REQUESTS = 20
+MAX_REQUESTS = None
 
 
 def parent_current(db, pilot_id, project_id, config_id):

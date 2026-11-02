@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import os
-import platform
 import sys
 from pathlib import Path
 
@@ -54,29 +53,15 @@ def network_guard(event, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True, help='New directory outside source')
-    parser.add_argument('--dsh-runtime', type=Path, help='Explicit prepared synthetic-test runtime')
     parser.add_argument('tests', nargs='*', default=['tests'])
     args = parser.parse_args()
     output = args.output.resolve()
     if output.exists() or output.is_relative_to(ROOT) or ROOT.is_relative_to(output):
         raise ValueError('Output must be new and outside source')
-    dsh = None
-    if args.dsh_runtime:
-        sys.path.insert(0, str(ROOT))
-        from scripts.prepare_dsh_runtime import verify_prepared
-
-        target = ('win32-x64' if sys.platform == 'win32' else
-                  'darwin-arm64' if sys.platform == 'darwin' and platform.machine() == 'arm64' else None)
-        if target is None:
-            raise ValueError('Official DSH release testing requires a supported native host')
-        dsh = args.dsh_runtime.resolve()
-        verify_prepared(dsh, target=target)
     output.mkdir(parents=True)
     clean = clean_environment(os.environ, output)
     os.environ.clear()
     os.environ.update(clean)
-    if dsh:
-        os.environ['PW_DSH_TEST_RUNTIME'] = str(dsh)
     sys.addaudithook(network_guard)
     sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
     os.chdir(ROOT)

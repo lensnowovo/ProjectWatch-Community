@@ -76,24 +76,6 @@ def test_cadence_decides_what_runs_and_closed_items_never_run(tmp_path):
     assert event["id"] not in {w["id"] for w in plan.due(pid, at=later)}
 
 
-def test_competition_and_demand_items_file_news_under_their_own_category(tmp_path):
-    app, _client, pid, plan = _app(tmp_path)
-    pipeline = app.state.studio_pipeline
-    plan.add(pid, {**ITEM, "text": "同靶点竞品读出", "axis": "competition", "queries": ["竞品 读出"]}, actor="human", origin="human")
-    plan.add(pid, {**ITEM, "text": "患者有哪些治疗选择", "axis": "demand", "queries": ["病种 治疗 指南"]}, actor="human", origin="human")
-    seen = []
-
-    class Collect:
-        has_search = False
-
-        def news(self, query, search_count=0):
-            seen.append(query)
-            return [{"key": query, "title": f"{query} 报道", "url": f"https://news.example/{len(seen)}", "source": "s",
-                     "snippet": "", "published_at": None}]
-
-    pipeline._collect_monitor(pid, pipeline.store.get_project(pid), Collect(), lambda _t: None)
-    categories = {i["title"]: i["category"] for i in pipeline.store.untriaged(pid)}
-    assert categories == {"竞品 读出 报道": "competitor", "病种 治疗 指南 报道": "industry"}
 
 
 def test_every_plan_shows_the_full_framework_with_project_baseline_and_grown_items(tmp_path):

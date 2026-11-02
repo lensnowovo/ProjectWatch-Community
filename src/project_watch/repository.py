@@ -2959,8 +2959,6 @@ class ProjectRepository:
         """Reserve a paid call before egress, atomically across local worker threads."""
         if isinstance(monthly_limit, bool) or not 0 <= monthly_limit <= 100_000:
             raise ValueError("invalid Brave monthly limit")
-        if monthly_limit == 0:
-            return False
         month = datetime.now(UTC).strftime("%Y-%m")
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -2969,8 +2967,8 @@ class ProjectRepository:
                 (month,),
             )
             changed = connection.execute(
-                "UPDATE brave_news_budget SET used = used + 1 WHERE month_utc = ? AND used < ?",
-                (month, monthly_limit),
+                "UPDATE brave_news_budget SET used = used + 1 WHERE month_utc = ?",
+                (month,),
             ).rowcount
             return changed == 1
 

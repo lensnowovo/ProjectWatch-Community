@@ -39,18 +39,15 @@ class ProfileEdit(BaseModel):
     restore_focus: bool = False
 
 
-def attach_workspace_routes(app, repo, *, team_mode=False):
+def attach_workspace_routes(app, repo):
     # Sidecar is UI workflow metadata, not a migration of the investment database.
     sidecar = Path(str(repo.db_path) + ".client.sqlite3")
-    if not team_mode:
-        with closing(sqlite3.connect(sidecar)) as c, c:
-            c.execute(
-                "CREATE TABLE IF NOT EXISTS inbox_state(id TEXT PRIMARY KEY,status TEXT NOT NULL)"
-            )
+    with closing(sqlite3.connect(sidecar)) as c, c:
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS inbox_state(id TEXT PRIMARY KEY,status TEXT NOT NULL)"
+        )
 
     def allowed(request, write=False):
-        if team_mode:
-            raise HTTPException(404, "本机工作台接口不适用于团队部署。")
         if write and request.headers.get("origin") != str(request.base_url).rstrip("/"):
             raise HTTPException(403, "请从本机页面执行。")
 

@@ -19,7 +19,7 @@ def owner(tmp_path):
 
 def save(owner):
     pipe, _client, pid, _ = owner
-    pipe.store.enqueue(pid, 'external')
+    pipe.store.enqueue(pid, 'collect')
     execution = JobExecution(pipe.store, pipe.store.claim())
     unit = plan([candidate() | dict(source='clinical_term', category='trial')],
                 project_id=pid, round_id=execution.job['id'])['units'][0]

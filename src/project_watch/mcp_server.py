@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING
-from urllib.parse import urlsplit
 
 from project_watch.api import MetricSeriesResponse
 from project_watch.evidence_pages import page_excerpts
@@ -14,17 +12,10 @@ from project_watch.metric_series import build_metric_series
 from project_watch.repository import NotFoundError, ProjectRepository
 from project_watch.tasks import EvidenceConflictError, TaskService
 
-if TYPE_CHECKING:
-    from project_watch.team_auth import TeamAuthStore
-
 
 def build_mcp_server(
     db_path: Path | str,
     project_id: str,
-    *,
-    team_auth: TeamAuthStore | None = None,
-    resource_url: str | None = None,
-    issuer_url: str | None = None,
 ):
     try:
         from mcp.server import MCPServer
@@ -37,84 +28,17 @@ def build_mcp_server(
     if project is None:
         raise ValueError("bound project does not exist")
     tasks = TaskService(repository)
-    auth_kwargs = {}
-    if team_auth is not None:
-        if Path(team_auth.db_path).resolve() != Path(db_path).resolve():
-            raise ValueError("executor identity store must use the same database")
-        if not resource_url or not issuer_url:
-            raise ValueError("authenticated MCP requires resource and issuer URLs")
-        resource = urlsplit(resource_url)
-        issuer = urlsplit(issuer_url)
-        if (
-            resource.scheme != "https"
-            or resource.path != "/mcp"
-            or not resource.netloc
-            or resource.username
-            or resource.query
-            or resource.fragment
-            or issuer.scheme != "https"
-            or not issuer.netloc
-            or issuer.username
-            or issuer.query
-            or issuer.fragment
-        ):
-            raise ValueError("authenticated MCP requires HTTPS URLs and a /mcp resource path")
-        from mcp.server.auth.middleware.auth_context import get_access_token
-        from mcp.server.auth.provider import AccessToken, TokenVerifier
-        from mcp.server.auth.settings import AuthSettings
-        from pydantic import AnyHttpUrl
-
-        class ProjectTokenVerifier(TokenVerifier):
-            async def verify_token(self, token: str) -> AccessToken | None:
-                grant = team_auth.executor_grant(token)
-                if grant is None or grant.project_id != project_id:
-                    return None
-                scopes = ["watch:read"]
-                if grant.permission == "propose":
-                    scopes.append("watch:propose")
-                return AccessToken(
-                    token=token,
-                    client_id=grant.label,
-                    scopes=scopes,
-                    expires_at=int(grant.expires_at.timestamp()),
-                    resource=resource_url,
-                    subject=grant.id,
-                )
-
-        auth_kwargs = {
-            "token_verifier": ProjectTokenVerifier(),
-            "auth": AuthSettings(
-                issuer_url=AnyHttpUrl(issuer_url),
-                resource_server_url=AnyHttpUrl(resource_url),
-                required_scopes=["watch:read"],
-                validate_token_resource=True,
-            ),
-        }
-
     server = MCPServer(
         "Project Watch",
         instructions=(
             "This server is bound to one project. Read evidence before proposing a candidate. "
             "Candidate observations are not confirmed institutional facts."
         ),
-        **auth_kwargs,
     )
-
-    def require_executor(permission: str) -> str | None:
-        if team_auth is None:
-            return None
-        access = get_access_token()
-        if access is None:
-            raise ToolError("authenticated HTTP executor required")
-        grant = team_auth.executor_grant(access.token, permission=permission)
-        if grant is None or grant.project_id != project_id:
-            raise ToolError("executor grant expired or revoked")
-        return grant.id
 
     @server.tool()
     def project_overview() -> dict[str, object]:
         """Show this project's identity status, source versions and review counts."""
-        require_executor("read")
         sources = repository.list_sources(project_id)
         observations = repository.list_observations(project_id)
         return {
@@ -140,7 +64,6 @@ def build_mcp_server(
         source_id: str, limit: int = 8, cursor: str | None = None
     ) -> dict[str, object]:
         """Read a bounded page of located excerpts from one source."""
-        require_executor("read")
         source = repository.get_source(source_id)
         if source is None or source.project_id != project_id:
             raise ToolError("source not found in bound project")
@@ -160,7 +83,6 @@ def build_mcp_server(
     @server.tool()
     def monitoring_status(limit: int = 20, include_metrics: bool = False) -> dict[str, object]:
         """Read bounded source receipts and candidate signals; never run a source."""
-        require_executor("read")
         if not 1 <= limit <= 20:
             raise ToolError("limit must be between 1 and 20")
         plans = repository.list_monitoring_plans(project_id)
@@ -209,8 +131,7 @@ def build_mcp_server(
             raise ToolError(str(exc)) from exc
         return {**asdict(task), "created_at": task.created_at.isoformat()}
 
-    if team_auth is None:
-        server.tool()(run_coverage)
+    server.tool()(run_coverage)
 
     @server.tool()
     def propose_candidate(
@@ -235,7 +156,6 @@ def build_mcp_server(
         basis must be actual, forecast, budget or unknown; leave unknown when unclear.
         A qualitative candidate omits number/unit/period. Candidates remain unconfirmed.
         """
-        actor_id = require_executor("propose")
         try:
             observation = tasks.propose_candidate(
                 project_id,
@@ -249,8 +169,8 @@ def build_mcp_server(
                 period=period,
                 scope=scope,
                 basis=basis,
-                submission_channel="team_mcp" if team_auth is not None else "mcp",
-                actor_id=actor_id,
+                submission_channel="mcp",
+                actor_id=None,
             )
         except (ValueError, NotFoundError, EvidenceConflictError) as exc:
             raise ToolError(str(exc)) from exc
@@ -269,64 +189,6 @@ def build_mcp_server(
         }
 
     return server
-
-
-def create_team_mcp_app():
-    """Create a project-bound, HTTPS-only MCP resource server for manual bearer tokens."""
-    try:
-        from mcp.server.transport_security import TransportSecuritySettings
-    except ImportError as exc:
-        raise RuntimeError('Install the optional "mcp" extra to run the MCP bridge') from exc
-    from starlette.responses import JSONResponse
-
-    from project_watch.team_auth import TeamAuthStore
-
-    db_path = os.environ.get("PROJECT_WATCH_DB_PATH")
-    project_id = os.environ.get("PROJECT_WATCH_PROJECT_ID")
-    resource_url = os.environ.get("PROJECT_WATCH_MCP_RESOURCE_URL")
-    issuer_url = os.environ.get("PROJECT_WATCH_MCP_ISSUER_URL")
-    if not all((db_path, project_id, resource_url, issuer_url)):
-        raise RuntimeError("team MCP requires database, project, resource URL and issuer URL")
-    parsed = urlsplit(resource_url)
-    issuer = urlsplit(issuer_url)
-    if (
-        parsed.scheme != "https"
-        or parsed.path != "/mcp"
-        or not parsed.netloc
-        or parsed.username
-        or parsed.query
-        or parsed.fragment
-        or issuer.scheme != "https"
-        or not issuer.netloc
-        or issuer.username
-        or issuer.query
-        or issuer.fragment
-    ):
-        raise ValueError("team MCP requires explicit HTTPS URLs and a /mcp resource path")
-    auth = TeamAuthStore(Path(db_path))
-    if not auth.is_bootstrapped():
-        raise RuntimeError("team identities must be bootstrapped before MCP starts")
-    server = build_mcp_server(
-        Path(db_path),
-        project_id,
-        team_auth=auth,
-        resource_url=resource_url,
-        issuer_url=issuer_url,
-    )
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    inner = server.streamable_http_app(
-        transport_security=TransportSecuritySettings(
-            allowed_hosts=[parsed.netloc], allowed_origins=[origin]
-        )
-    )
-
-    async def https_only(scope, receive, send):
-        if scope["type"] == "http" and scope.get("scheme") != "https":
-            await JSONResponse({"detail": "HTTPS required"}, status_code=400)(scope, receive, send)
-            return
-        await inner(scope, receive, send)
-
-    return https_only
 
 
 def main() -> None:

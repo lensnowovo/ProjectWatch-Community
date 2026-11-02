@@ -9,10 +9,13 @@ from project_watch.studio.store import now
 
 # Adapter contracts, not industry words or model-authored applicability rules.
 ADAPTERS = {
+    'europepmc_affiliation': ('paper', True), 'europepmc_topic': ('paper', False),
+    'europepmc_patent': ('patent', True),
     'openalex_affiliation': ('paper', True), 'openalex_author': ('paper', True),
     'openalex_topic': ('paper', False), 'patent_search': ('patent', True),
     'clinical_sponsor': ('trial', True), 'clinical_term': ('trial', True),
     'cn_regulatory': ('trial', True),
+    'google_patent': ('patent', True),
 }
 SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_collection_targets (
     project_id TEXT NOT NULL REFERENCES projects(id), id TEXT NOT NULL,
@@ -81,7 +84,7 @@ def require_source_enabled(store, project_id, adapter):
         raise ValueError('source excluded by owner decision')
 
 
-def retain(research, *, adapter, query, reason, ref):
+def retain(research, *, adapter, query, reason, ref, relationship=None, subject=None):
     """Only a public, exact source excerpt can supply a specialist search term.
 
     This registers a search hypothesis. Relevance, entity disambiguation and
@@ -96,15 +99,32 @@ def retain(research, *, adapter, query, reason, ref):
     research.pipeline.evidence.resolve(research.project_id, ref, include_internal=False)
     if query not in ref.quote:
         raise ValueError('query must occur in its cited public excerpt')
+    if adapter == 'google_patent':
+        from project_watch.studio.google_patents import publication_number
+
+        publication_number(query)
+    context = None
+    if relationship is not None or subject is not None:
+        from project_watch.studio.retrieval_queries import context as query_context
+
+        context = query_context(query=query, subject=subject, relationship=relationship, ref=ref)
     identity = hashlib.sha256(json.dumps([adapter, query], ensure_ascii=False).encode()).hexdigest()
+    if context:
+        identity = hashlib.sha256(json.dumps([adapter, context], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     category, historical = ADAPTERS[adapter]
     record = dict(id=identity, adapter=adapter, query=query, category=category, historical=historical,
                   reason=reason.strip(), ref=ref.model_dump(), status='active', created_at=now(),
                   basis='public_query_candidate', schema_version=1)
+    if context:
+        record['query_context'] = context
     execution = research.execution
     with research.store.write_scope(execution._guard), closing(research.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)
+        if context:
+            from project_watch.studio.retrieval_queries import validate
+
+            validate(research.store, research.project_id, context, db=db)
         db.execute(SCHEMA)
         # Do not revive a disabled scope or overwrite its original provenance.
         db.execute('INSERT OR IGNORE INTO studio_collection_targets VALUES (?,?,?)',
@@ -132,6 +152,10 @@ def targets(research):
             research.pipeline.evidence.resolve(research.project_id, ref, include_internal=False)
             if row['query'] not in ref.quote:
                 raise ValueError('query basis changed')
+            if row.get('query_context'):
+                from project_watch.studio.retrieval_queries import validate
+
+                validate(research.store, research.project_id, row['query_context'])
         except (KeyError, ValueError):
             row.update(capability='needs_scope', reason='Public query basis unavailable')
         else:

@@ -66,7 +66,7 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   const running = !!view?.job && ["queued", "running"].includes(view.job.status);
   const analysisJob = detail.jobs?.find(j => j.id === view?.job?.id);
   const analysisState = analysisJob ? jobWorkState(detail, analysisJob) : view?.job ? jobWorkState(detail, {
-    ...view.job, kind: "insight", stage: "", error: view.job.error || "", finished_at: null,
+    ...view.job, kind: "analyze", stage: "", error: view.job.error || "", finished_at: null,
   }) : "idle";
   const q = QUESTIONS.find((x) => x.key === active);
   const j = q ? judged(view, q) : null;
@@ -91,7 +91,10 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
             <span className="rj-tile-head"><span className="rj-tile-label"><span className="qa-no">0{i + 1}</span>{x.label}</span>
               <span className={`rj-verdict ${v ? verdictTone(x.scale, v.verdict) : ""}`}>{v ? labelsFor(x)[v.verdict] ?? v.verdict : "—"}</span></span>
             <span className="rj-tile-summary">{v ? v.summary : error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : analysis ? "下次 AI 交叉分析时生成" : "还没有 AI 交叉分析"}</span>
-            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : "暂无结果"}</span>
+            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : "暂无结果"}
+              {view?.record?.section_versions?.[x.key] && <small> · {view.record.section_versions[x.key].generated_at?.slice(0, 10)}
+                {view.record.section_versions[x.key].status !== 'current' ? ' · 待更新' : ''}</small>}
+            </span>
             <i className="rj-tile-glow" aria-hidden="true" />
           </button>;
         })}

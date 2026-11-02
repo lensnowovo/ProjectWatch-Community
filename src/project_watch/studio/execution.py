@@ -14,6 +14,7 @@ from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 
 from project_watch.feeds import FeedError
+from project_watch.studio import dispatch
 from project_watch.studio.http import Http, HttpError, Response
 from project_watch.studio.runtime_health import CALL_GRACE_SECONDS, progress
 from project_watch.studio.store import now
@@ -52,40 +53,35 @@ CREATE TABLE IF NOT EXISTS studio_provider_backoff (
 class JobExecution:
     def __init__(self, store, job, *, budgets=None):
         self.store, self.job = store, job
-        # Model work scales with the authorized material, not an arbitrary
-        # per-job count. Explicit acceptance-batch budgets still take precedence.
+        # Retain historical values for frozen receipt compatibility only.
+        # Neither these values nor acceptance counts limit dispatch.
         self.budgets = {"search": 64, "model": None, "open_data": 128, "page": 30,
                         # Official-site checks: a few candidate homepages, robots files and up to MAX_PAGES pages.
                         "site": 16, **(budgets or {})}
+        self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
         self.last_replay = False
         self.slice_started = time.monotonic()
         self.slice_seconds = 120
-        self._model_continuation = None
-        self._site_recovery = None
 
     @contextmanager
-    def site_recovery(self, pipeline, slot):
-        """Only the original authorized site request may cross this boundary."""
-        previous = self._site_recovery
-        self._site_recovery = (pipeline, slot)
+    def call_scope(self, kinds):
+        """Restrict capabilities temporarily, without creating a request quota."""
+        previous = self.allowed_call_kinds
+        self.allowed_call_kinds = frozenset(kinds) if previous is None else previous & frozenset(kinds)
         try:
             yield
         finally:
-            self._site_recovery = previous
-
-    @contextmanager
-    def model_continuation(self, previous_key):
-        """Gateway-only scope; the journal atomically consumes one approved slot."""
-        previous = self._model_continuation
-        self._model_continuation = previous_key
-        try:
-            yield
-        finally:
-            self._model_continuation = previous
+            self.allowed_call_kinds = previous
 
     def yield_if_due(self):
         if time.monotonic() - self.slice_started >= self.slice_seconds:
             raise JobYield()
+
+    def _progress(self, db):
+        progress(db, self.job['id'])
+
+    def _receipt_guard(self, db):
+        self._guard(db)
 
     def _guard(self, db):
         row = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
@@ -103,7 +99,7 @@ class JobExecution:
             old = db.execute('SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
                              (self.job['id'], stage)).fetchone()
             if not old or old[0] != encoded:
-                progress(db, self.job['id'])
+                self._progress(db)
             db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data",
                        (self.job["id"], stage, encoded))
 
@@ -159,7 +155,7 @@ class JobExecution:
                             for i, part in enumerate(parts)])
             db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?) ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data",
                        (self.job["id"], stage, manifest))
-            progress(db, self.job["id"])
+            self._progress(db)
 
     def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
         if kind not in self.budgets or not key or len(key) > 200:
@@ -170,84 +166,29 @@ class JobExecution:
         with closing(self.store._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             self._guard(db)
-            request_key = key
-            recovery_owner = self.job['id']
-            recovery = db.execute('SELECT next_key FROM studio_call_recoveries WHERE job_id=? AND base_key=? '
-                                  'ORDER BY rowid DESC LIMIT 1', (self.job['id'], key)).fetchone()
-            if not recovery and not self._model_continuation:
-                alias = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
-                                   (self.job["id"], "dsh_request:" + key)).fetchone()
-                if alias:
-                    recovery = json.loads(alias[0])
-            if self._model_continuation:
-                if kind != "model":
-                    raise HttpError("request_outcome_unknown")
-                from project_watch.studio.recovery import model_continuation_slot
-
-                recovery = model_continuation_slot(db, self.job)
-                if not recovery or recovery['previous_key'] != self._model_continuation:
-                    raise HttpError("request_outcome_unknown")
-                recovery_owner = recovery['origin_job_id']
-            if recovery:
-                key = recovery['next_key']
-                identity = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
-                                      (self.job["id"], "dsh_continuation:" + key)).fetchone()
-                if identity and json.loads(identity[0])["request_key"] != request_key:
-                    raise HttpError("recovery_payload_mismatch")
             old = db.execute("SELECT * FROM studio_job_calls WHERE job_id=? AND call_key=?", (self.job["id"], key)).fetchone()
             if old:
-                if self._site_recovery and kind != 'site':
-                    raise HttpError('recovery_request_mismatch')
                 self.last_replay = True
                 if old["status"] == "failed_read":
                     diagnostic = self._read_checkpoint(db, 'call_error:' + key[:40]) or {}
                     code = diagnostic.get('code', 'response_too_large')
                     if code not in ('response_too_large', 'public_read_failed'):
-                        raise HttpError('request_outcome_unknown')
+                        raise dispatch.NotSent('unknown_not_resent')
                     raise HttpError(code)
                 if old["status"] != "completed":
-                    raise HttpError("request_outcome_unknown")
+                    raise dispatch.NotSent('unknown_not_resent')  # accounting, not a job-wide hold
                 db.execute("INSERT INTO studio_job_cache_hits VALUES (?,?,1) ON CONFLICT(job_id,call_key) DO UPDATE SET hits=hits+1", (self.job["id"], key))
                 return Response(old["response_status"], json.loads(old["response_headers"]), old["response_body"])
-            # A pause is a dispatch boundary, not an uncertain transport outcome.
-            if self._site_recovery:
-                from project_watch.studio.recovery import dsh_site_recovery
-
-                pipeline, approved = self._site_recovery
-                current = dsh_site_recovery(pipeline, self, db=db)
-                if (current != approved or kind != 'site' or request_key != approved['base_key']
-                        or key != approved['next_key'] or provider_hash != approved['provider']):
-                    raise HttpError('recovery_request_mismatch')
-            # Already-received replies above remain replayable. Explicitly
-            # uploaded internal materials retain their existing processing path.
-            project = db.execute('SELECT status FROM studio_projects WHERE project_id=?',
-                                 (self.job['project_id'],)).fetchone()
-            if self.job['kind'] != 'internal' and project and project[0] == 'paused':
-                raise HttpError('project_paused')
-            backoff = db.execute("SELECT retry_after FROM studio_provider_backoff WHERE provider=?", (provider_hash,)).fetchone()
-            if backoff and backoff[0] > now():
-                raise HttpError("provider_backoff")
-            count = self.budget_used(kind, db=db)
-            if self.budgets[kind] is not None and count >= self.budgets[kind]:
-                raise HttpError("request_budget")
-            db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) VALUES (?,?,?,?,'started',?,1,?)",
-                       (self.job["id"], key, kind, provider_hash, now(), self.budgets[kind]))
+            # One rule for every job kind, no cross-job holds (see dispatch.py).
+            if self.allowed_call_kinds is not None and kind not in self.allowed_call_kinds:
+                raise HttpError("call_kind_not_permitted")
+            dispatch.check(db, self.job, kind, key, provider_hash)
+            db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) "
+                       "VALUES (?,?,?,?,'started',?,1,?)", (self.job["id"], key, kind, provider_hash, now(), None))
             db.execute('UPDATE studio_job_calls SET deadline_at=? WHERE job_id=? AND call_key=?',
                        ((datetime.now(UTC) + timedelta(seconds=max(1, float(timeout)) + CALL_GRACE_SECONDS)).isoformat(),
                         self.job['id'], key))
-            if recovery:
-                db.execute('UPDATE studio_call_recoveries SET consumed_at=? WHERE job_id=? AND next_key=?',
-                           (now(), recovery_owner, key))
-                if self._model_continuation:
-                    # Persist linkage in the SAME transaction as request admission.
-                    stage = "dsh_continuation:" + key
-                    data = {"mode": "checkpoint_continuation", "previous_key": self._model_continuation,
-                            "next_key": key, "request_key": request_key, "origin_job_id": recovery_owner}
-                    db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?)",
-                               (self.job["id"], stage, json.dumps(data)))
-                    db.execute("""INSERT INTO studio_job_checkpoints VALUES (?,?,?)
-                        ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data""",
-                        (self.job["id"], "dsh_request:" + request_key, json.dumps({"next_key": key})))
+        self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
         self.last_replay = False
         started = time.monotonic()
         try:
@@ -272,7 +213,7 @@ class JobExecution:
             with closing(self.store._connect()) as db, db:
                 if failed_read:
                     db.execute("BEGIN IMMEDIATE")
-                    self._guard(db)
+                    self._receipt_guard(db)
                 db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
                            ("failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
                 phase = getattr(exc, 'transport_phase', 'unknown')
@@ -293,8 +234,8 @@ class JobExecution:
             raise
         with closing(self.store._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            self._guard(db)
-            progress(db, self.job['id'])
+            self._receipt_guard(db)
+            self._progress(db)
             safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
             from project_watch.studio.usage import FIELDS, reported
 
@@ -328,10 +269,8 @@ class JobExecution:
             (self.job['id'], kind, self.job['id'], kind)).fetchone()[0]
 
     def usage(self):
-        from project_watch.studio.recovery import UNRESOLVED
-
         with closing(self.store._connect()) as db:
             return {r["kind"]: {"requests": r["requests"], "completed": r["completed"], "unknown": r["unknown"], "cache_hits": r["cache_hits"]}
-                    for r in db.execute(f"SELECT c.kind,count(*) requests,sum(c.status='completed') completed,sum({UNRESOLVED}) unknown,"
+                    for r in db.execute(f"SELECT c.kind,count(*) requests,sum(c.status='completed') completed,sum({dispatch.UNRESOLVED}) unknown,"
                         "sum(COALESCE(h.hits,0)) cache_hits FROM studio_job_calls c LEFT JOIN studio_job_cache_hits h ON h.job_id=c.job_id AND h.call_key=c.call_key "
                         "WHERE c.job_id=? GROUP BY c.kind", (self.job["id"],))}

@@ -22,7 +22,7 @@ import sys
 from contextlib import closing
 sys.path.insert(0, sys.argv[1])
 blocked = {'project_watch.monitor_profile', 'project_watch.company_state',
-           'project_watch.reading_jobs', 'project_watch.reading_worker', 'project_watch.dsh_executor'}
+           'project_watch.reading_jobs', 'project_watch.reading_worker', 'project_watch.model_executor'}
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname in blocked:
@@ -77,7 +77,7 @@ import json
 import sys
 sys.path.insert(0, sys.argv[1])
 blocked = {'project_watch.company_state', 'project_watch.reading_jobs',
-           'project_watch.reading_worker', 'project_watch.dsh_executor'}
+           'project_watch.reading_worker', 'project_watch.model_executor'}
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname in blocked:

@@ -16,7 +16,7 @@ def test_generic_configuration_does_not_import_dsh_or_legacy_methods():
 import importlib.abc
 import sys
 sys.path.insert(0, sys.argv[1])
-blocked = {'project_watch.dsh_executor', 'project_watch.external_analysis',
+blocked = {'project_watch.model_executor', 'project_watch.external_analysis',
            'project_watch.model_settings', 'project_watch.company_state',
            'project_watch.monitor_briefing'}
 class RejectLegacy(importlib.abc.MetaPathFinder):
@@ -159,7 +159,7 @@ def test_missing_factory_is_readable_but_not_editable(monkeypatch):
 
 def test_legacy_constructor_retains_default_dsh_factory(monkeypatch):
     from project_watch import model_configuration, model_settings
-    from project_watch.dsh_executor import DshProposalModel
+    from project_watch.model_executor import DirectProposalModel
 
     assert model_settings.ModelInput is model_configuration.ModelInput
     assert model_settings.attach_model_settings is model_configuration.attach_model_settings
@@ -170,11 +170,11 @@ def test_legacy_constructor_retains_default_dsh_factory(monkeypatch):
         sent.append(model)
         return asdict(packet)
 
-    monkeypatch.setattr(DshProposalModel, 'propose', propose)
+    monkeypatch.setattr(DirectProposalModel, 'propose', propose)
     settings = model_settings.ModelSettings()
     result = settings.test(model_settings.ModelInput(base_url='https://synthetic.example',
                            protocol='openai-completions', model='synthetic', key='synthetic-key', max_runs=7))
     assert result['status'] == 'ready' and len(sent) == 1
-    assert type(sent[0]) is DshProposalModel and sent[0].max_runs == 7
+    assert type(sent[0]) is DirectProposalModel and sent[0].max_runs == 7
     assert settings.get() is None  # Test does not implicitly activate.
-    assert settings.executor_name == 'DSH'
+    assert settings.executor_name == 'direct'

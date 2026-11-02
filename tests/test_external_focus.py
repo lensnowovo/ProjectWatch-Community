@@ -8,7 +8,6 @@ from project_watch.external_focus import ExternalFocusStore, external_reading
 from project_watch.monitoring import FeedItem, ManualSnapshotAdapter, MonitoringRunner
 from project_watch.public_search import gdelt_rss_target
 from project_watch.repository import ProjectRepository, ReviewConflictError
-from project_watch.team_auth import TeamAuthStore
 
 
 def test_bing_scope_disclosure_and_persistence(tmp_path):
@@ -163,16 +162,6 @@ def test_policy_relevance_is_not_applicability_and_failures_keep_last_success(tm
     assert '尚需核实' in policy['items'][0]['relevance']
     repo.set_monitoring_plan_enabled(plan.id, False)
     assert external_reading(repo, project.id)['categories'][3]['coverage'] == 'paused'
-
-
-def test_team_mode_does_not_expose_local_focus_routes(tmp_path):
-    database = tmp_path / 'watch.sqlite3'
-    repo = ProjectRepository(database)
-    project = repo.create_project('Synthetic Company')
-    client = TestClient(create_app(database, team_auth=TeamAuthStore(database), team_origin='https://testserver'), base_url='https://testserver')
-    for suffix in ['external', 'focus?category=company&term=Synthetic&provider=gdelt']:
-        assert client.get(f'/api/projects/{project.id}/monitoring/{suffix}').status_code in {401,404}
-    assert repo.list_monitoring_plans(project.id) == []
 
 
 def test_existing_database_upgrade_and_immutable_scope(tmp_path):

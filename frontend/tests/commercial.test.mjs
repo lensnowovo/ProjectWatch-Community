@@ -45,11 +45,11 @@ test("company discrepancies never appear as unsupported peer funding discrepanci
   assert.doesNotMatch(component, /data.notice|未自动合并|不代表融资款到账/);
 });
 
-test("compact source disclosure preserves attribution, failures and limits", () => {
+test("compact source disclosure preserves attribution and failures without app quotas", () => {
   assert.match(component, /部分来源未更新/);
   assert.match(component, /"error", "held", "limited"/);
   assert.match(component, /数据来源于万得 Wind 金融数据服务/);
-  assert.match(component, /daily_queries.remaining === 0/);
+  assert.doesNotMatch(component, /daily_queries.remaining === 0|今日查询已达上限/);
   assert.match(component, /刷新融资动态/);
   assert.match(component, /<ErrorNote error=\{actionError\}/);
 });

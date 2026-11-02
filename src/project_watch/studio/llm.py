@@ -138,9 +138,13 @@ class LLM:
                         timeout=300,
                     )
             except HttpError as exc:
+                if exc.code == 'legacy_batches_waiting':
+                    raise ModelError('进度已保存，后续批次尚未发送，等待先前请求处理', code=exc.code) from exc
                 if exc.code in ("unsafe_redirect", "disallowed_url"):
                     raise ModelError("服务地址发生不安全跳转，请检查模型地址；未自动重发", code=exc.code) from exc
-                if exc.code in ("provider_backoff", "request_budget", "request_outcome_unknown", "project_paused"):
+                if exc.code in ("provider_backoff", "request_budget", "request_outcome_unknown", "project_paused",
+                                # Definite "not sent" from the rewritten pipeline's dispatch rule.
+                                "unknown_not_resent", "request_in_flight", "project_budget", "project_not_consented"):
                     raise ModelError("请求已暂停，等待检查服务或显式重试", code=exc.code) from exc
                 if exc.code == "connection_failed" and re.search(r"timed?\s*out|timeout", exc.detail, re.I):
                     raise ModelError("模型响应超时，请稍后重试；本次长请求未重复发送", code="model_timeout") from exc
@@ -201,13 +205,15 @@ class LLM:
             return text
         raise ModelError(f"模型服务连续失败：{last_error}")
 
-    def json(self, system: str, user: str, *, max_tokens: int = 4096):
+    def json(self, system: str, user: str, *, max_tokens: int = 4096, repair_invalid: bool = True):
         system = system + "\n\n只输出 JSON，不要输出任何解释或 Markdown。"
         options = structured_options(self.config)
         text = self.complete(system, user, max_tokens=max_tokens, **options)
         try:
             return _extract_json(text)
         except ModelError:
+            if not repair_invalid:
+                raise
             repair = self.complete(
                 "将下面内容修正为符合原始要求的 JSON 对象，不能输出顶层数组。只输出 JSON。\n原始要求：\n" + system,
                 text[:20000],

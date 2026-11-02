@@ -378,14 +378,6 @@ class CommercialStore:
                 if old and old['status'] not in ('started', 'held') and old['expires_at'] > at:
                     report[provider] = {'status': old['status'], 'cached': True}
                     continue
-                # A conservative all-project intent cap; failures/uncertain calls
-                # count too. This limits requests, not provider invoices.
-                if replay is None:
-                    intents = db.execute("SELECT count(*) FROM studio_commercial_calls WHERE created_at>=? "
-                                         "AND status<>'limited'", (at[:10],)).fetchone()[0]
-                    if intents >= config.daily_limit:
-                        report[provider] = {'status': 'limited', 'cached': False}
-                        continue
                 db.execute('INSERT INTO studio_commercial_calls VALUES (?,?,?,?,?, ?,?,?,?) '
                            'ON CONFLICT(project_id,call_key) DO UPDATE SET status=excluded.status,data=excluded.data,'
                            'created_at=excluded.created_at,expires_at=excluded.expires_at',
@@ -438,8 +430,6 @@ class CommercialStore:
             saved = next((r for r in rows if r['provider'] == provider and r['subject'] == company and r['status'] in ('ok', 'partial')), None)
             status = latest['status'] if latest else 'not_collected'
             enabled = provider in config.ready_providers()
-            if enabled and used >= config.daily_limit and (not latest or latest['expires_at'] < now()):
-                status = 'limited'
             stale = bool(saved and (saved['expires_at'] < now() or status not in ('ok', 'partial') or not enabled))
             data = json.loads(saved['data']) if saved else {}
             for record in data.get('records', []):
@@ -456,7 +446,8 @@ class CommercialStore:
             len({r['amount'] for r in group if r['amount']}) > 1 or len({r['date'] for r in group if r['date']}) > 1)
             for group in groups.values())
         return {'investment_status': focus[0] if focus else 'watching', 'records': records, 'sources': sources,
-                'daily_queries': {'used': used, 'limit': config.daily_limit, 'remaining': max(0, config.daily_limit-used)},
+                'daily_queries': {'used': used, 'limit': None, 'remaining': None,
+                                  'historical_limit': config.daily_limit},
                 'different_conventions': different,
                 'notice': '来源记录，不代表融资款到账；日期与金额保留各家口径。',
                 'private': True}

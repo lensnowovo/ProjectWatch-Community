@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 from project_watch.studio import insight, insight_generation
 
 
@@ -82,49 +80,10 @@ def test_judgments_keep_only_referenced_points_and_cap_confidence():
     assert out["gaps"] == ["竞品销售额"]
 
 
-def test_run_saves_record_and_history(tmp_path):
-    project, store, pipeline = _setup(tmp_path)
-    data = {"headline": "合成总判断", "position": {"verdict": "on_par", "confidence": "low", "for": [{"text": "已获批", "refs": ["D1"]}]},
-            "technology": {"maturity": "mainstream", "consensus": "forming", "confidence": "low",
-                           "academic": [{"text": "综述增多", "refs": ["A1"]}]}, "industry": {}, "gaps": []}
-    record = insight_generation.run(pipeline, Model(data), project.id)
-    assert "[A1]" in Model.user and "通用型 CAR-T 综述" in Model.user
-    assert record["analysis"]["position"]["verdict"] == "on_par"
-    assert record["analysis"]["technology"]["consensus"] == "forming"
-    assert insight.load(store, project.id)["fingerprint"] == record["fingerprint"]
-    assert insight.history(store, project.id)[0]["position"] == "on_par"
 
 
-def test_due_waits_for_change_not_twenty_hours(tmp_path):
-    project, store, pipeline = _setup(tmp_path)
-    now = datetime.now(UTC)
-    assert insight_generation.due(pipeline, project.id, now=now)  # never analysed
-    insight_generation.run(pipeline, Model({"headline": "x"}), project.id)
-    assert insight_generation.due(pipeline, project.id, now=now + timedelta(hours=30)) is None  # sources unchanged
-    store.add_items(project.id, "paper", [{"key": "a2", "title": "体内 CAR-T 新进展", "url": "https://p.example/a2",
-                                           "source": "OpenAlex", "snippet": "", "published_at": "2026-06-01"}])
-    _triage(store)
-    assert insight_generation.due(pipeline, project.id, now=now + timedelta(seconds=2))  # fresh evidence, no daily gate
-    assert insight_generation.due(pipeline, project.id, now=now + timedelta(hours=30))
-    store.enqueue(project.id, "external")
-    assert insight_generation.due(pipeline, project.id, now=now + timedelta(hours=30)) is None  # collection still running
 
 
-def test_due_waits_for_every_followup_and_does_not_retry_failed_input(tmp_path):
-    from contextlib import closing
-
-    project, store, pipeline = _setup(tmp_path)
-    fingerprint = insight_generation.due(pipeline, project.id)
-    for kind in ("details", "competition", "business", "commercial"):
-        job = store.enqueue(project.id, kind)
-        assert insight_generation.due(pipeline, project.id) is None
-        with closing(store._connect()) as db, db:
-            db.execute("UPDATE studio_jobs SET status='done' WHERE id=?", (job["id"],))
-    assert insight_generation.due(pipeline, project.id) == fingerprint
-    job = store.enqueue(project.id, "insight", input_version=fingerprint)
-    with closing(store._connect()) as db, db:
-        db.execute("UPDATE studio_jobs SET status='failed',retry_after=NULL WHERE id=?", (job["id"],))
-    assert insight_generation.due(pipeline, project.id) is None
 
 
 def test_fingerprint_includes_source_identity_and_company_context(tmp_path):
@@ -140,28 +99,6 @@ def test_fingerprint_includes_source_identity_and_company_context(tmp_path):
     assert insight_generation.gather(pipeline, project.id)["fingerprint"] != after
 
 
-def test_scheduler_queues_once_and_respects_pause_and_agent_mode(tmp_path):
-    from contextlib import closing
-
-    project, store, pipeline = _setup(tmp_path)
-    pipeline.insight_generator = insight_generation
-    pipeline.settings_store.update({'model': {'provider': 'openai', 'api_key': 'synthetic-key',
-                                             'base_url': 'https://example.invalid/v1', 'model': 'synthetic'}})
-    store.upsert_project(project.id, {'legal_name': project.name}, consent=True)
-    store.set_status(project.id, 'paused')
-    assert pipeline.schedule_insight(project.id) is None
-    with closing(store._connect()) as db, db:
-        db.execute("UPDATE studio_projects SET status='active',execution_mode='agent' WHERE project_id=?", (project.id,))
-    assert pipeline.schedule_insight(project.id)["status"] == "agent_required"
-    assert not store.jobs(project.id)
-    with closing(store._connect()) as db, db:
-        db.execute("UPDATE studio_projects SET execution_mode='api' WHERE project_id=?", (project.id,))
-    pipeline._insight_checked.clear()
-    job = pipeline.schedule_insight(project.id)
-    assert job["status"] == "queued"
-    pipeline._insight_checked.clear()
-    assert pipeline.schedule_insight(project.id) is None  # the queued job coalesces changes
-    assert len([j for j in store.jobs(project.id) if j["kind"] == "insight"]) == 1
 
 
 def test_api_returns_record_and_manual_refresh_needs_a_model(tmp_path):
@@ -179,26 +116,6 @@ def test_api_returns_record_and_manual_refresh_needs_a_model(tmp_path):
     assert response.status_code == 409 and "模型" in response.json()["detail"]
 
 
-def test_unknown_paid_outcome_holds_deep_analysis(tmp_path):
-    from contextlib import closing
-
-    import pytest
-
-    project, store, pipeline = _setup(tmp_path)
-    job = store.enqueue(project.id, "internal")
-    with closing(store._connect()) as db, db:
-        db.execute("UPDATE studio_jobs SET status='failed' WHERE id=?", (job["id"],))
-        columns = {r[1] for r in db.execute("PRAGMA table_info(studio_job_calls)")}
-        values = {"job_id": job["id"], "kind": "model", "status": "unknown", "call_key": "k1"}
-        for name in columns - set(values):
-            notnull = next(r for r in db.execute("PRAGMA table_info(studio_job_calls)") if r[1] == name)
-            if notnull[3] and notnull[4] is None:
-                values[name] = 0 if "INT" in (notnull[2] or "").upper() else "x"
-        db.execute(f"INSERT INTO studio_job_calls ({','.join(values)}) VALUES ({','.join('?' * len(values))})", tuple(values.values()))
-    assert insight.held(store, project.id)
-    assert insight_generation.due(pipeline, project.id) is None
-    with pytest.raises(ValueError, match="结果不明"):
-        insight_generation.run(pipeline, Model({"headline": "x"}), project.id)
 
 
 def test_removing_a_project_hides_it_stops_work_and_can_be_restored(tmp_path):
@@ -211,7 +128,7 @@ def test_removing_a_project_hides_it_stops_work_and_can_be_restored(tmp_path):
     keep = client.post("/api/studio/projects", json={"entity": {"legal_name": "保留公司"}, "consent": True}).json()
     gone = client.post("/api/studio/projects", json={"entity": {"legal_name": "移出公司"}, "consent": True}).json()
     store = app.state.studio_store
-    store.enqueue(gone["id"], "external")
+    store.enqueue(gone["id"], "collect")
     assert client.delete(f"/api/studio/projects/{gone['id']}").status_code == 204
     assert [p["id"] for p in client.get("/api/studio/projects").json()] == [keep["id"]]
     assert all(j["status"] != "queued" for j in store.jobs(gone["id"]))

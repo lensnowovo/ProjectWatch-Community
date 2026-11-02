@@ -34,6 +34,23 @@ const base = () => ({ project:{id:'synthetic',activated:true,status:'active'}, j
 const job = (state='running', phase='collect') => ({id:'job',kind:'external_followup',status:state==='queued'?'queued':state==='failed'?'failed':'running',created_at:'2026-10-19T00:00:00Z',stage:'实际执行步骤',runtime:{state,label:state,phase}});
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props));
 
+test('an unsent or unclear request is explained without a resend button', () => {
+  const j={...job('failed'), project_id:'synthetic',project_name:'Synthetic',label:'收录公开信息',
+    error:'request_outcome_unknown',runtime:{state:'failed',label:'未完成 · 部分请求结果不明，未自动重发'},
+    advice:{action:'none',why:'有 1 次请求没有取得明确结果，服务商可能已计费。这些请求不会自动重发，已有结果保留。',todo:'不影响下一次更新'}};
+  const html=render(MemoryRouter,{children:React.createElement(FailureRow,{j,onChanged:()=>{}})});
+  assert.match(html,/不会自动重发/); assert.match(html,/不影响下一次更新/);
+  assert.doesNotMatch(html,/查看并重发|查看先前请求|重新运行/);
+});
+
+test('a saved multi-batch wait is distinct from an unsent whole job or an unknown request', () => {
+  const {jobReason} = load('../src/workState.ts');
+  const j={...job('queued'),runtime:{state:'blocked',continuation_wait:true,blocking_jobs:['other']}};
+  assert.match(jobReason(j),/已保存完成的批次.*后续批次尚未发送/);
+  assert.doesNotMatch(jobReason(j),/本次未执行|本任务没有发送|结果不明|可能.*计费/);
+  assert.equal(isMoving('blocked'),false);
+});
+
 test('an unresolved historical receipt survives unrelated later success without claiming success', () => {
   const held = {...job('done'), id:'old',status:'done',finished_at:'2026-10-19T01:00:00Z',
     runtime:{state:'needs_confirmation',label:'模型服务出错，等待确认恢复'}};

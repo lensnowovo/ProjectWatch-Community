@@ -3,7 +3,6 @@
 import logging
 import threading
 from contextlib import closing, suppress
-from decimal import Decimal
 
 from project_watch.company_state import (
     READING_OUTPUT_TOKENS,
@@ -32,8 +31,6 @@ class ReadingWorker:
         model = self.settings.get()
         if model is None or not hasattr(model, "compile_reading") or not hasattr(model, "authorization_id"):
             return None
-        if model.disclosure().get("remaining_runs", 0) <= 0:
-            return None
         config_id = model.authorization_id()
         with closing(self.repo._connect()) as db:
             grant_ids = [r[0] for r in db.execute("""SELECT id FROM reading_authorizations
@@ -42,9 +39,7 @@ class ReadingWorker:
         for grant_id in grant_ids:
             grant = self.ledger.status(grant_id)
             limits = grant["limits"]
-            if (grant["requests_used"] >= limits["max_requests"]
-                    or limits["max_output_tokens"] < READING_OUTPUT_TOKENS
-                    or (limits["max_cost_cny"] is not None and Decimal(grant["reserved_cny"]) >= Decimal(limits["max_cost_cny"]))):
+            if limits["max_output_tokens"] < READING_OUTPUT_TOKENS:
                 continue
             readable = {j.source_id for j in self.repo.list_intake(grant["project_id"])
                         if j.status in {"completed", "needs_ocr"}}
@@ -97,9 +92,6 @@ class ReadingWorker:
         grants = [g for g in self.ledger.list_authorizations(project_id) if g['purpose'] == 'company_reading']
         matching = [g for g in grants if g["config_id"] == config_id and g["rule_version"] == READING_RULE_VERSION]
         active = [g for g in matching if g["status"] == "active"]
-        usable = [g for g in active if g["requests_used"] < g["limits"]["max_requests"]
-                  and (g["limits"]["max_cost_cny"] is None
-                       or Decimal(g["reserved_cny"]) < Decimal(g["limits"]["max_cost_cny"]))]
         reason = "ready"
         if config_id is None:
             reason = "model_missing"
@@ -107,10 +99,6 @@ class ReadingWorker:
             reason = "consent_required"
         elif not active:
             reason = "paused"
-        elif not usable:
-            reason = "budget_reached"
-        elif model.disclosure().get("remaining_runs", 0) <= 0:
-            reason = "model_limit"
         with closing(self.repo._connect()) as db:
             counts = dict(db.execute("""SELECT j.state,count(*) FROM reading_jobs j
                 JOIN reading_authorizations a ON a.id=j.authorization_id

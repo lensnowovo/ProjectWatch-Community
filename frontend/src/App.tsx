@@ -15,6 +15,7 @@ import SetupPage from "./pages/Setup";
 import AgentsPage from "./pages/Agents";
 import { SourceDrawerProvider } from "./ui";
 import SettingsGear from "./SettingsGear";
+import DesktopExit from "./DesktopExit";
 import ProjectNavStatus from "./ProjectNavStatus";
 import { useVisiblePoll } from "./Operational";
 import { projectListWork, isMoving } from "./workState";
@@ -109,6 +110,7 @@ export default function App() {
                   {modelReady === false && !agentMode && <span className="tag tag-warn">待配置</span>}
                 </NavItem>
                 <ThemeToggle />
+                <DesktopExit />
               </div>
             </aside>
             <div className="main">

@@ -223,7 +223,7 @@ def test_finish_does_not_call_unknown_provider_done(tmp_path, kind):
     assert finished['status'] == 'failed' and finished['retry_after'] == '9999-12-31'
     view = board(store, worker_state='running', model_ready=True)
     assert view['jobs'][0]['unknown'] == 1
-    assert view['jobs'][0]['runtime']['state'] == 'needs_confirmation'
+    assert view['jobs'][0]['runtime']['state'] == 'failed'  # unclear request recorded, never resent
     assert view['summary']['done_24h'] == 0
     # Old rows are projected honestly without silently rewriting historical jobs.
     with closing(store._connect()) as db, db:

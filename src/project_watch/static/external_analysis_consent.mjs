@@ -27,7 +27,7 @@ export async function openExternalAnalysisConsent({projectId,sources,external,re
   if(grants.length){
     const history=el('details','consent-existing');history.open=true;history.append(el('summary','','已开启的范围与用量'));
     for(const grant of grants){
-      const row=el('div','consent-grant');row.append(el('strong','',({active:'已开启',paused:'已暂停',revoked:'已撤销'})[grant.status]),el('p','reading-note',`${grant.recipient.base_url} · ${grant.recipient.model}\n${Object.keys(grant.scope.plan_scopes).length} 个公开关注范围 · ${grant.scope.material_refs.length} 段背景 · 已用 ${grant.requests_used} / ${grant.limits.max_requests} 次`));
+      const row=el('div','consent-grant');row.append(el('strong','',({active:'已开启',paused:'已暂停',revoked:'已撤销'})[grant.status]),el('p','reading-note',`${grant.recipient.base_url} · ${grant.recipient.model}\n${Object.keys(grant.scope.plan_scopes).length} 个公开关注范围 · ${grant.scope.material_refs.length} 段背景 · 已用 ${grant.requests_used} 次`));
       if(grant.limits.max_cost_cny!==null)row.append(el('p','reading-note',`预算 ¥${grant.limits.max_cost_cny} · 已预留 ¥${grant.reserved_cny}`));
       for(const [next,label] of (grant.status==='active'?[['paused','暂停'],['revoked','撤销']]:grant.status==='paused'?[['active','继续解读'],['revoked','撤销']]:[])){
         row.append(action(label,()=>run(async()=>{await send(`${route}/authorization/${grant.id}`,'PATCH',{status:next});await onChanged();dialog.close();})));
@@ -70,27 +70,22 @@ export async function openExternalAnalysisConsent({projectId,sources,external,re
   };
   function showFragment(){const f=fragments.find(f=>String(f.ordinal)===fragment.input.value);excerpt.textContent=f?f.text.slice(0,3000)+(f.text.length>3000?'\n（仅选取本段前 3000 字）':''):'此材料尚无可用正文。';}
   fragment.input.onchange=showFragment;
-  const quota=field('本次调用上限','number','20');quota.input.min='1';quota.input.max='1000';quota.input.step='1';body.append(quota.wrap);
-  const money=el('details','consent-existing');money.append(el('summary','','金额上限（可选）'));
-  const prices=[field('预算（元）','number'),field('输入价格（元 / 百万 tokens）','number'),field('输出价格（元 / 百万 tokens）','number')];
-  for(const p of prices){p.input.min='0.000001';p.input.step='any';money.append(p.wrap);}body.append(money);
+  body.append(el('p','reading-note','调用不设次数或金额上限，可随时暂停。'));
   const preview=el('section','analysis-disclosure');body.append(preview);
   const confirm=check('我同意将以上消息与所选背景发送给所示服务。');confirm.wrap.hidden=true;body.append(confirm.wrap);
   const next=el('button','primary-button','查看发送范围');next.type='submit';footer.prepend(next);
   function invalidate(){viewed=null;confirm.input.checked=false;confirm.wrap.hidden=true;preview.replaceChildren();next.textContent='查看发送范围';}
-  for(const c of [...choices,future,articles,quota,...prices])c.input.addEventListener('input',invalidate);
+  for(const c of [...choices,future,articles])c.input.addEventListener('input',invalidate);
   function draft(){
-    const count=Number(quota.input.value);if(!Number.isInteger(count)||count<1||count>1000)throw Error('调用上限为 1–1000 次。');
-    const value={plan_ids:choices.filter(c=>c.input.checked).map(c=>c.id),selections:selections.map(({label,...s})=>s),include_future_news:future.input.checked,read_articles:articles.input.checked,max_requests:count};
+    const value={plan_ids:choices.filter(c=>c.input.checked).map(c=>c.id),selections:selections.map(({label,...s})=>s),include_future_news:future.input.checked,read_articles:articles.input.checked,max_requests:null};
     if(!value.plan_ids.length)throw Error('请至少选择一个公开关注范围。');
-    if(prices.some(p=>p.input.value)){if(prices.some(p=>!p.input.value||!Number.isFinite(Number(p.input.value))||Number(p.input.value)<=0))throw Error('请填写完整、正数的预算与输入输出价格。');[value.max_cost_cny,value.input_cny_per_million,value.output_cny_per_million]=prices.map(p=>p.input.value);}
     return value;
   }
   form.onsubmit=e=>{e.preventDefault();run(async()=>{
     const value=draft();
     if(!viewed){
       const result=await send(route+'/preview','POST',value);if(!dialog.isConnected)return;
-      viewed={...result,draft:JSON.stringify(value)};preview.replaceChildren(el('h3','','将发送给'),el('p','consent-recipient',`${result.recipient.base_url}\n${result.recipient.model}`),el('p','reading-note',`${value.include_future_news?'当前及未来':'当前已收到的'}选定范围消息。${result.source_note} 每次最多输出 ${result.limits.max_output_tokens} tokens；最多 ${value.max_requests} 次调用。`));
+      viewed={...result,draft:JSON.stringify(value)};preview.replaceChildren(el('h3','','将发送给'),el('p','consent-recipient',`${result.recipient.base_url}\n${result.recipient.model}`),el('p','reading-note',`${value.include_future_news?'当前及未来':'当前已收到的'}选定范围消息。${result.source_note} 每次最多输出 ${result.limits.max_output_tokens} tokens；调用次数不设上限。`));
       for(const ref of result.scope.material_refs)preview.append(el('p','reading-note',`背景 · ${ref.locator}`),el('blockquote','',ref.text));
       if(!result.scope.material_refs.length)preview.append(el('p','reading-note','不附带私有材料；项目关联不足时会明确说明。'));
       preview.append(el('p','reading-note','不会自动确认正式事实。暂停阻止新请求，已发送的请求无法撤回；结果不明时不自动重复计费调用。'));

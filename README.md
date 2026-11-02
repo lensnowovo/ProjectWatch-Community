@@ -75,7 +75,7 @@
 
 | 平台 | 本轮状态 |
 | --- | --- |
-| Windows x64 | 自带 Python / Node / DSH 的标准安装器；已完成本版隔离安装、升级和恢复验证，独立用户验收仍未完成 |
+| Windows x64 | 自带 Python 的标准安装器（不再附带 Node / DSH；监控与分析直接调用你配置的模型）；已完成本版隔离安装、升级和恢复验证，独立用户验收仍未完成 |
 | Apple Silicon Mac（M 系列） | 本次 rc3 新版本暂缓；旧 Release 中的 Mac 资产不代表本版已验收 |
 | Intel Mac | 本次不提供新用户包，不把历史候选当已验证版本 |
 
@@ -96,7 +96,7 @@ git clone https://github.com/lensnowovo/ProjectWatch-Community.git
 cd ProjectWatch-Community
 py -3.12 -m venv .venv-developer
 .\.venv-developer\Scripts\python.exe -m pip install --upgrade "pip>=26.2.2"
-.\.venv-developer\Scripts\python.exe -m pip install -e ".[dev,team,mcp,postgres]" build ruff
+.\.venv-developer\Scripts\python.exe -m pip install -e ".[dev,mcp]" build ruff
 npm --prefix frontend ci
 npm --prefix frontend run build
 $env:PROJECT_WATCH_HOME = Join-Path $env:LOCALAPPDATA 'ProjectWatch-developer-sandbox'
@@ -129,7 +129,7 @@ npm --prefix frontend run build
 新技术包名 `projectwatch-local`，导入名 `project_watch`。
 这不代表同名公共包索引登记；使用本次源码或已核验哈希的 wheel。
 与旧 `greenpine-project-watch` 不能混装，升级另建环境并验证备份，原数据不随 Git 分发。
-可选 OCR/MCP 和独立安装验证见开发指南；PostgreSQL 测试须专用空 `_test` 数据库。
+可选 OCR/MCP 和独立安装验证见开发指南。PostgreSQL 团队版已于 2026-11-02 删除，只保留个人 SQLite 版。
 
 </details>
 

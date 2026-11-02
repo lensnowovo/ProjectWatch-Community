@@ -4,6 +4,7 @@ from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
+from synthetic_providers import run_leased
 
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.execution import JobExecution
@@ -37,11 +38,10 @@ def reply(usage=None, *, status=200, text='ok'):
 def model_call(pipeline, response, *, leased=True):
     pid = pipeline.repository.create_project('Synthetic Usage').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.run_external = lambda _: pipeline.tools()[2].complete('s', 'u')
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     job = pipeline.store.claim()
     if leased:
-        pipeline.run(job)
+        run_leased(pipeline, job, lambda: pipeline.tools()[2].complete('s', 'u'))
     else:
         pipeline.tools()[2].complete('s', 'u')
     return pid, job
@@ -72,7 +72,7 @@ def test_usage_is_saved_before_response_parsing_and_survives_crash(tmp_path):
     app, pipeline, _calls = configured(tmp_path, reply({'prompt_tokens': 7, 'completion_tokens': 3}))
     pid = pipeline.repository.create_project('Synthetic Crash').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     job = pipeline.store.claim()
     execution = JobExecution(pipeline.store, job)
     execution.call('model', 'lost-after-response', lambda: reply({'prompt_tokens': 7, 'completion_tokens': 3}))
@@ -88,7 +88,7 @@ def test_invalid_json_and_http_denial_still_count_requests(tmp_path):
     app, pipeline, _ = configured(tmp_path, reply())
     pid = pipeline.repository.create_project('Synthetic Errors').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     job = pipeline.store.claim()
     execution = JobExecution(pipeline.store, job)
     execution.call('model', 'malformed', lambda: Response(200, {}, b'not JSON'))
@@ -148,7 +148,7 @@ def test_reopen_legacy_journal_and_daily_totals_not_counted_twice(tmp_path):
     _app, pipeline, _ = configured(tmp_path, reply({'prompt_tokens': 7, 'completion_tokens': 3}))
     pid = pipeline.repository.create_project('Synthetic Upgrade').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     job = pipeline.store.claim()
     with closing(pipeline.store._connect()) as db, db:
         db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at) "
@@ -208,7 +208,7 @@ def test_project_usage_is_scoped_stored_only_and_retains_limits_replays(tmp_path
     assert observed['purpose'] == 'competition' and 'lease_token' not in observed
     kind = observed['kinds'][0]
     assert kind['requests'] == kind['known_usage'] == kind['replay_hits'] == 1
-    assert kind['min_request_limit'] == kind['max_request_limit'] == 32
+    assert kind['min_request_limit'] is None and kind['max_request_limit'] is None  # monthly budget, not per job
     assert kind['timed_requests'] == 1 and kind['elapsed_ms'] >= 0
     assert calls == []
     other = pipeline.repository.create_project('Synthetic Other Project').id
@@ -239,7 +239,7 @@ def test_old_journal_schema_upgrades_additively_without_rewriting_receipts(tmp_p
     _app, pipeline, _ = configured(tmp_path, reply())
     pid = pipeline.repository.create_project('Synthetic Old Schema').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     job = pipeline.store.claim()
     with closing(pipeline.store._connect()) as db, db:
         # Disposable synthetic database only; this reproduces the old release DDL.

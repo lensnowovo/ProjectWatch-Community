@@ -48,7 +48,7 @@ def test_project_account_provider_shape_and_expiry_isolation(tmp_path):
 
 def test_failed_query_is_logged_not_cached_as_empty_result(tmp_path):
     store, pid = make_store(tmp_path)
-    cache = ProjectQueryCache(store, pid, purpose="external")
+    cache = ProjectQueryCache(store, pid, purpose="collect", job_id="round-1")
 
     def uncertain():
         raise HttpError("request_outcome_unknown")
@@ -58,9 +58,13 @@ def test_failed_query_is_logged_not_cached_as_empty_result(tmp_path):
     with closing(store._connect()) as db:
         assert db.execute("SELECT count(*) FROM studio_query_cache").fetchone()[0] == 0
         assert db.execute("SELECT outcome FROM studio_query_uses").fetchone()[0] == "unknown"
+    # Within the same job an uncertain query is never repeated, even after a reopen.
     with pytest.raises(HttpError, match="request_outcome_unknown"):
-        ProjectQueryCache(StudioStore(store.db_path), pid, purpose="competition").get(
+        ProjectQueryCache(StudioStore(store.db_path), pid, purpose="collect", job_id="round-1").get(
             SIG, lambda: pytest.fail("an uncertain paid query must not be automatically repeated"))
+    # A later round asks again; the earlier use stays recorded as unknown.
+    data, cached = ProjectQueryCache(store, pid, purpose="collect", job_id="round-2").get(SIG, lambda: [])
+    assert data == [] and not cached
 
 
 def test_stale_lease_guard_prevents_serving_or_writing_query_results(tmp_path):

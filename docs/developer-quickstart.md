@@ -15,7 +15,7 @@ Mac 用户使用 [macOS 开发者步骤](macos-developer.md)，不要执行下�
 ```powershell
 py -3.12 -m venv .venv-developer
 .\.venv-developer\Scripts\python.exe -m pip install --upgrade "pip>=26.2.2"
-.\.venv-developer\Scripts\python.exe -m pip install -e ".[dev,team,mcp,postgres]" build ruff
+.\.venv-developer\Scripts\python.exe -m pip install -e ".[dev,mcp]" build ruff
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
@@ -23,7 +23,7 @@ npm --prefix frontend run build
 产品分发名为 `projectwatch-local`，Python 导入名仍为 `project_watch`。
 该名称用于本地构建，不代表已在公共包索引注册；不要从未知索引安装同名包。
 普通安装已包含监控、分析和所有现有页面，不需要另购或安装私有分析包。
-上述开发环境包含全量测试需要的 team/MCP/PostgreSQL 客户端依赖，不会自动启动服务器。
+上述开发环境包含全量测试需要的 MCP 依赖，不会自动启动服务器。
 只运行个人版可仅装 `.[dev]`，但不能据此运行所有可选模块测试。OCR 按需要追加：
 
 ```powershell
@@ -32,7 +32,7 @@ npm --prefix frontend run build
 ```
 
 OCR 首次运行可能下载模型；MCP 的依赖安装成功不等于外部客户端已完成授权。
-`team`、`postgres` 是可选兼容路线，个人 SQLite 开发不需要数据库服务器或 WSL。
+团队版（`team`、`postgres`）已删除；个人 SQLite 开发不需要数据库服务器或 WSL。
 
 ## 空数据启动
 
@@ -72,7 +72,6 @@ npm --prefix frontend run build
 不要把排除 Insight 的 Core/Studio probe 当作完整开发者发行包。
 独立安装测试必须另建 venv，从 `dist` 中本次构建的确切 wheel 安装并执行
 `tests/installed_wheel_smoke.py`；不要从源码导入冒充安装成功。
-PostgreSQL 集成测试只有配置专用空 `_test` 数据库才运行；跳过须记录。
 合成测试不消耗真实模型额度，不代替真实内容质量验收。
 
 ## 从旧包迁移

@@ -30,7 +30,7 @@ def test_agent_create_has_no_provider_work_or_changed_existing_state(tmp_path, m
     assert project['execution_mode'] == 'agent' and project['status'] == 'paused'
     assert not store.jobs(pid)
     assert store.enqueue(pid, 'internal')['status'] == 'agent_required'
-    assert store.enqueue(pid, 'external')['status'] == 'agent_required'
+    assert store.enqueue(pid, 'collect')['status'] == 'agent_required'
     assert store.claim() is None
     assert web.post(f'/api/studio/projects/{pid}/refresh', json={}).status_code == 409
     assert web.post(f'/api/studio/projects/{pid}/watchpoints', json={'text': 'Synthetic capacity', 'alert': False}).status_code == 409

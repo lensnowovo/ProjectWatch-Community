@@ -16,13 +16,14 @@ test('duplicate statements merge citations without modifying response or losing 
   const result=compiledReading(copy,'p',[source]);assert.equal(result[0].items.length,2);assert.equal(result[0].items[0].source_refs.length,1);
   assert.equal(copy.compiled.batches[0].items.length,3);
 });
-test('authorization requires explicit consent, scope and finite bound',()=>{
+test('authorization requires consent and scope without an application quota',()=>{
   const status={automatic_reading_available:true,rule_version:'company-reading-v2',model:{config_id:'config',max_output_tokens:3072}};
   const choice={hashes:['b','a','a'],includeFuture:false,maxRequests:2,consent:true,requestKey:'fixed'};
   assert.deepEqual(consentPayload(status,choice).source_hashes,['a','b']);
   assert.equal(consentPayload(status,choice).rule_version,status.rule_version);
   assert.equal(consentPayload(status,choice).max_output_tokens,3072);
-  for(const change of [{consent:false},{hashes:[]},{maxRequests:0},{maxRequests:1.5},{maxRequests:Infinity}])assert.throws(()=>consentPayload(status,{...choice,...change}));
+  assert.equal(consentPayload(status,choice).max_requests,null);
+  for(const change of [{consent:false},{hashes:[]}])assert.throws(()=>consentPayload(status,{...choice,...change}));
   assert.equal(consentPayload(status,{...choice,hashes:[],includeFuture:true}).include_future,true);
   assert.throws(()=>consentPayload({...status,model:null},choice));
   assert.throws(()=>consentPayload({...status,rule_version:null},choice));

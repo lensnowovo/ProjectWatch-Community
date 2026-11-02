@@ -145,7 +145,7 @@ def _public_studio_fixture(relative: str, data: bytes) -> bool:
         return False
     try:
         from project_watch.studio.http import Response
-        from scripts.studio_live_probe import PUBLIC_ENDPOINTS, trim_response
+        from scripts.studio_live_probe import PUBLIC_ENDPOINTS, SINGLE_DOCUMENT, trim_response
     except ImportError as error:
         # An unimportable probe says nothing about the fixture. Swallowing this
         # once reported every live fixture as unmarked, so fail loudly instead.
@@ -172,10 +172,11 @@ def _public_studio_fixture(relative: str, data: bytes) -> bool:
         if set(response) != {"format", "body"}:
             return False
         body = response["body"]
-        raw = body.encode("utf-8") if response["format"] == "xml" else json.dumps(body).encode("utf-8")
+        raw = body.encode("utf-8") if response["format"] in ("xml", "html") else json.dumps(body).encode("utf-8")
         fmt, trimmed, count = trim_response(meta["operation"], Response(200, {}, raw))
+        expected = count == 1 if meta["operation"] in SINGLE_DOCUMENT else 3 <= count <= 5
         return (fmt == response["format"] and trimmed == body
-                and count == meta["records"] and 3 <= count <= 5 and len(data) <= 100_000)
+                and count == meta["records"] and expected and len(data) <= 100_000)
     except Exception:
         return False
 
@@ -288,7 +289,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument("--extras", nargs="*", default=["team", "postgres", "mcp"])
+    parser.add_argument("--extras", nargs="*", default=["mcp"])
     args = parser.parse_args()
     wheel_count, wheel_findings = audit_wheel(args.wheel)
     if wheel_count == 0:

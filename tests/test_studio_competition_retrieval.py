@@ -131,7 +131,7 @@ def test_original_selection_prefers_company_and_use_not_short_name_homonyms(tmp_
     evidence = pipeline.competition_research.originals(pid, hits, execution=execution,
         context={'names': ['Beta'], 'products': [], 'uses': ['drug screening']}, report=report)
     assert reads[:2] == ['https://beta.test/biology', 'https://beta.test/product']
-    assert len(reads) == 3 and len(hits) == 5 and len(evidence) == 3
+    assert len(reads) == len(hits) == 5 and len(evidence) == 5  # every lead is read; company and use first
     assert report[0]['title'] == 'Beta Organ B'
     assert report[0]['selection_matches'] == ['company', 'use']
     assert report[0]['status'] == 'article_body' and report[0]['evidence_id'] == evidence[0]['id']

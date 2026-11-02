@@ -57,7 +57,7 @@ def test_atomic_concurrent_requests_only_one_wins(tmp_path):
 
 def test_pause_reports_running_work_instead_of_claiming_cancelled(tmp_path):
     service, project_id = make_service(tmp_path / "work.sqlite3")
-    job = service.store.enqueue(project_id, "external")
+    job = service.store.enqueue(project_id, "collect")
     service.store.claim()
     receipt = service.change_status(project_id, "paused", expected_version=1,
                                     idempotency_key="pause-running", actor="synthetic-agent")
@@ -67,7 +67,7 @@ def test_pause_reports_running_work_instead_of_claiming_cancelled(tmp_path):
 
 def test_paused_monitoring_queue_waits_until_resume(tmp_path):
     service, project_id = make_service(tmp_path / "paused-queue.sqlite3")
-    job = service.store.enqueue(project_id, "external")
+    job = service.store.enqueue(project_id, "collect")
     receipt = service.change_status(project_id, "paused", expected_version=1,
                                     idempotency_key="pause-queued", actor="synthetic-agent")
     assert service.store.claim() is None

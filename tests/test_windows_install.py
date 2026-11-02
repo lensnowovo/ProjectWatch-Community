@@ -26,8 +26,8 @@ def test_installer_exposes_and_remembers_directory_without_overriding_uninstalle
 def test_nsis_payload_extraction_uses_extended_paths_and_retains_failure_evidence():
     script = (Path(__file__).resolve().parents[1]/'scripts/windows/Installer.nsi').read_text(encoding='utf-8')
     core = script.split('Section "ProjectWatch（完整功能）" Core', 1)[1].split('SectionEnd', 1)[0]
-    for suffix in ('', '\\runtimes\\${DSH_RUNTIME_ID}', '\\runtimes\\${NODE_RUNTIME_ID}'):
-        assert 'SetOutPath "\\\\?\\$INSTDIR\\.payload'+suffix+'"' in core
+    assert 'SetOutPath "\\\\?\\$INSTDIR\\.payload"' in core
+    assert 'RUNTIME_ID' not in core  # current bundles ship no shared runtime
     failure = core.split('IfErrors 0 +2', 1)[1].split('  ${EndIf}', 1)[0]
     assert 'installer-result.json' in failure
     assert 'RMDir /r' not in failure

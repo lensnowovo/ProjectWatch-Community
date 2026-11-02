@@ -57,7 +57,7 @@ def test_capital_dedupes_company_round_and_compares_windows():
     reports = [ev("合成甲完成5亿元C轮融资", "2026-09-02"), ev("合成丁完成天使轮融资", "2026-08-20"),
                ev("合成戊完成A轮融资", "2026-07-30"), ev("合成己完成B轮融资", "2026-05-01")]
     c = cell(build(commercial_records=records, industry_events=reports), "capital")
-    assert c["value"] == "近 90 天 3 起" and c["sub"] == "此前 90 天 1 起"
+    assert c["value"] == "近 90 天 3 起" and c["sub"] == "此前 90 天 1 起 · 含融资与授权交易"
     assert (c["direction"], c["tone"]) == ("升温", "good")
     assert any(e["source"] == "烯牛" for e in c["evidence"]) or c["sources"] >= 1
 
@@ -85,3 +85,12 @@ def test_summary_balance():
     data = build(policy_events=[ev("工信部发布准入试点第二批名单", "2026-09-29")],
                  competitor_events=[ev("合成甲价格下探20%", "2026-10-05")])
     assert data["summary"] == "价格下行、政策顺风" and data["balance"] == "方向不一"
+
+
+def test_licensing_deals_count_as_capital_events():
+    reports = [ev("合成甲与合成乙达成ADC授权合作，首付款4亿美元", "2026-10-01"),
+               ev("合成丙获合成丁许可协议，里程碑付款超10亿美元", "2026-09-15"),
+               ev("合成戊宣布授权交易，首付5000万美元", "2026-09-01"),
+               ev("合成己授权合作进展顺利", "2026-08-20")]  # no amount: not counted
+    c = cell(build(competitor_events=reports), "capital")
+    assert c["value"] == "近 90 天 3 起" and c["direction"] == "升温"

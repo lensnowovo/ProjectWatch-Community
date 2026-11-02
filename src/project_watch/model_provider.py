@@ -6,7 +6,6 @@ not an unauthenticated endpoint that lets web callers choose outbound URLs.
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -72,26 +71,3 @@ class ModelProviderConfig:
         if not key or any(c in key for c in "\r\n"):
             raise ValueError("configured model credential is missing or invalid")
         return key
-
-    def dsh_proxy_patch(self, port: int, max_output_tokens: int = 300) -> str:
-        if type(port) is not int or not 1 <= port <= 65535:
-            raise ValueError("invalid loopback proxy port")
-        if type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 8192:
-            raise ValueError("model output cap must be between 1 and 8192")
-        # JSON is a YAML subset; user strings cannot introduce YAML tags/code.
-        route = {
-            "api": self.protocol,
-            "baseURL": f"http://127.0.0.1:{port}"
-            + ("/v1" if self.protocol == "openai-completions" else ""),
-            "apiKeyEnv": "PROJECT_WATCH_MODEL_PROXY_TOKEN",
-            "retryPolicy": {"mode": "normal", "maxRetries": 0},
-            "models": [
-                {"id": self.model, "maxTokens": max_output_tokens, "reasoningEfforts": False}
-            ],
-        }
-        return (
-            "- id: llm-deepseek\n  disabled: true\n"
-            "- insert:\n    - id: project-watch-model\n"
-            "      name: '@deepseek-ai/dsh-llm-pi-ai'\n"
-            "      config: " + json.dumps({"providers": {"project-watch-model": route}}) + "\n"
-        )

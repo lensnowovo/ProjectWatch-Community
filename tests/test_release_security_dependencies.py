@@ -36,22 +36,6 @@ def test_pdf_parser_floor_and_container_lock_exclude_known_dos():
     assert 'pypdf==6.21.2' in (ROOT / 'requirements-parser.lock').read_text()
 
 
-def test_pinned_dsh_lock_has_redirect_and_zip_security_fixes():
-    package = json.loads((ROOT / 'packaging/dsh/package.json').read_text())
-    lock = json.loads((ROOT / 'packaging/dsh/package-lock.json').read_text())
-    assert package['dependencies']['@deepseek-ai/dsh'] == '0.2.1-rc.2'
-    assert package['overrides']['@modelcontextprotocol/client'] == '2.3.0'
-    assert lock['packages']['node_modules/@modelcontextprotocol/client']['version'] == '2.3.0'
-    assert lock['packages']['node_modules/@modelcontextprotocol/core']['version'] == '2.3.0'
-    for path, entry in lock['packages'].items():
-        if path.endswith('/fflate'):
-            assert entry['version'] == '0.8.3'
-        if path.endswith('/undici'):
-            assert entry['version'] == '8.12.2'
-        if path.endswith('/zod'):
-            assert entry['version'] == '4.6.7'
-    assert package['overrides']['undici'] == '8.12.2'
-    assert package['overrides']['zod'] == '4.6.7'
 
 
 def test_vite_lock_matches_reviewed_fixed_dev_server():
@@ -62,11 +46,11 @@ def test_vite_lock_matches_reviewed_fixed_dev_server():
 
 
 def test_windows_runtime_security_pins_match_ci():
-    from scripts.build_windows_bundle import NODE_VERSION, PYTHON_VERSION
+    from scripts.build_windows_bundle import PYTHON_VERSION
 
-    assert NODE_VERSION == 'v24.22.1'
     assert PYTHON_VERSION == '3.13.17'
+    # Node is a build-time tool for the frontend only; installers ship no Node.
     ci = json.loads((ROOT / '.github/workflows/ci.yml').read_text())
-    for name in ('python', 'frontend', 'native', 'installed'):
+    for name in ('python', 'frontend', 'installed'):
         setup = next(s for s in ci['jobs'][name]['steps'] if s.get('name') == 'Node')
-        assert setup['with']['node-version'] == NODE_VERSION.removeprefix('v')
+        assert setup['with']['node-version'] == '24.22.1'

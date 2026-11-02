@@ -12,7 +12,7 @@ from packaging.utils import canonicalize_name
 from scripts.private_delivery import linked, wheel_record
 
 TARGET = 'cp313-win_amd64'
-EXTRAS = 'desktop,ocr,mcp,team,postgres'
+EXTRAS = 'desktop,ocr,mcp'
 
 
 def inventory(wheelhouse, product):

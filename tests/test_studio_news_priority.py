@@ -32,7 +32,7 @@ def test_recent_published_reports_precede_collected_undated_and_future_rows(tmp_
     assert all(not r['triaged'] and r['body_status'] == '' for r in rows)
 
 
-def test_original_read_budget_uses_recent_order_and_retains_deferred_reports(tmp_path):
+def test_original_read_keeps_order_and_reads_all_scoped_reports_despite_old_limit(tmp_path):
     pipeline, pid = seeded(tmp_path)
     reads = []
 
@@ -41,9 +41,10 @@ def test_original_read_budget_uses_recent_order_and_retains_deferred_reports(tmp
         return {'status': 'article_body', 'text': 'Synthetic located original product evidence.'}
 
     pipeline.article_reader = SimpleNamespace(read=read)
-    assert pipeline.fetch_bodies(pid, lambda _: None, page_limit=2) == 2
-    assert {url.rsplit('/', 1)[-1] for url in reads} == {'newest', 'recent'}
+    assert pipeline.fetch_bodies(pid, lambda _: None) == 7
+    assert reads[:2] == ['https://publisher.example/newest', 'https://publisher.example/recent']
+    assert len(set(reads)) == 7
     rows = pipeline.store.untriaged(pid)
     assert len(rows) == 7
-    assert {r['key'] for r in rows if r['body_status'] == 'article_body'} == {'newest', 'recent'}
+    assert all(r['body_status'] == 'article_body' for r in rows)
     assert all(not r['triaged'] for r in rows)

@@ -1,16 +1,13 @@
 """Host question collection advances one cycle, not an answer or a cache clock."""
-import json
 from contextlib import closing
 
+import collection_fixtures as fixtures
 import pytest
-import test_collection_host as fixtures
 from test_collection_plan import candidate, plan, success
 
-from project_watch.studio import collection_history, dsh_runtime
+from project_watch.studio import collection_history
 from project_watch.studio.collection_ledger import CollectionLedger
 from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import Http, Response
-from project_watch.studio.settings import SearchConfig
 
 
 @pytest.fixture
@@ -89,7 +86,7 @@ def test_reused_prior_cycle_cache_does_not_add_another_no_gain_round(setup):
         ledger.record(success(p, unit_id=unit['id']))
     engine.finish(execution.job['project_id'], execution.job['id'])
     assert pipeline.store.finish(execution.job['id'], lease_token=execution.job['lease_token'])
-    pipeline.store.enqueue(execution.job['project_id'], 'external')
+    pipeline.store.enqueue(execution.job['project_id'], 'collect')
     next_execution = JobExecution(pipeline.store, pipeline.store.claim())
     next_plan = manifest(next_execution, watch)
     engine.admit_collection(next_execution, next_plan)
@@ -151,7 +148,7 @@ def test_three_new_successful_cycles_stop_only_question_not_standing_relation(se
         actor='human', origin='human', visibility='public')
     for index, day in enumerate((26, 27, 28)):
         if index:
-            pipeline.store.enqueue(pid, 'external')
+            pipeline.store.enqueue(pid, 'collect')
             execution = JobExecution(pipeline.store, pipeline.store.claim())
         p = manifest(execution, watch)
         # Freeze distinct later acquisitions, not three readings of one cache.
@@ -184,31 +181,3 @@ def test_changed_question_generation_cannot_be_completed_by_prior_receipts(setup
     assert state(pipeline, execution, watch)['no_gain'] == 0
 
 
-def test_actual_host_then_model_explore_reuses_receipt_and_cycle(setup, monkeypatch):
-    pipeline, execution, watch = setup
-    from project_watch.studio.progressive_bootstrap import freeze
-    freeze(execution, 'monitor', materials=False)  # Resume the legacy explore protocol.
-    settings = pipeline.settings_store.load()
-    settings.search = SearchConfig(providers=['tavily'], keys={'tavily': 'synthetic'}, google_news=False)
-    pipeline.settings_store.save(settings)
-    calls = []
-
-    def send(_method, url, _headers, body, _timeout):
-        if 'api.tavily.com' in url:
-            calls.append(json.loads(body)['query'])
-            return Response(200, {}, b'{"results":[]}')
-        return fixtures.response(url)
-
-    pipeline.http_factory = lambda _: Http(send)
-
-    def model_turn(research, *_):
-        assert cycle(pipeline, execution, watch)['state'] == 'collected'
-        before, sent = state(pipeline, execution, watch), list(calls)
-        for query in watch['queries']:
-            result = research.tool('pw_explore', {'watch_id': watch['id'], 'query': query})
-            assert result['collection']['outcome'] == 'success'
-        assert calls == sent and state(pipeline, execution, watch) == before
-
-    monkeypatch.setattr(dsh_runtime, 'run_dsh', model_turn)
-    dsh_runtime.run_monitor(pipeline, execution, None)
-    assert calls.count('Synthetic A') == calls.count('Synthetic B') == 1

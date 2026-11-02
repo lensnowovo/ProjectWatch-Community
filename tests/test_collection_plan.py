@@ -27,6 +27,16 @@ def success(p, **changes):
                 ingestion_complete=True, truncated=False) | changes
 
 
+def test_explicit_query_rank_changes_order_not_query_identity_or_legacy_order():
+    rows = [candidate() | {'query': '合成公司'}, candidate() | {'query': 'Synthetic Biologics'}]
+    old = plan(rows)
+    ranked = plan([rows[0] | {'query_rank': 1}, rows[1] | {'query_rank': 0}])
+    assert [u['query'] for u in ranked['units']] == ['Synthetic Biologics', '合成公司']
+    assert {u['query']: u['id'] for u in old['units']} == {u['query']: u['id'] for u in ranked['units']}
+    assert all('query_rank' not in u for u in old['units'])
+    assert old == plan(rows)
+
+
 @pytest.mark.parametrize('mode,due', [('first', True), ('refresh', True),
                                     ('incremental', False), ('topic', False)])
 def test_cadence_is_explicit_and_manual_refresh_bypasses_only_schedule(mode, due):

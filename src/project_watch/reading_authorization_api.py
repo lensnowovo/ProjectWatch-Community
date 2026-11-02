@@ -23,7 +23,7 @@ class ReadingAuthorizationInput(BaseModel):
     request_key: str = Field(min_length=16, max_length=100)
     source_hashes: list[str] = Field(default_factory=list, max_length=1000)
     include_future: bool = Field(default=False, strict=True)
-    max_requests: int = Field(default=20, ge=1, le=1000, strict=True)
+    max_requests: int | None = Field(default=None, ge=1, strict=True)
     max_cost_cny: str | None = Field(default=None, max_length=40)
     input_cny_per_million: str | None = Field(default=None, max_length=40)
     output_cny_per_million: str | None = Field(default=None, max_length=40)
@@ -34,14 +34,12 @@ class ReadingAuthorizationStatus(BaseModel):
     status: Literal["active", "paused", "revoked"]
 
 
-def attach_reading_authorization(app, repository, settings, *, team_mode=False):
-    ledger = None if team_mode else ReadingJobs(repository)
+def attach_reading_authorization(app, repository, settings):
+    ledger = ReadingJobs(repository)
     operator_token = os.environ.get("PROJECT_WATCH_SETTINGS_TOKEN", "")
     app.state.reading_jobs = ledger
 
     def allowed(request, project_id, *, write=False):
-        if team_mode:
-            raise HTTPException(404, "本机材料授权不适用于团队部署。")
         if request.url.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise HTTPException(403, "请从本机页面操作。")
         if write and (

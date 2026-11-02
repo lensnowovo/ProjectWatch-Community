@@ -10,6 +10,7 @@ import { Empty, ErrorNote, TONE_LABEL, formatAmount, relTime, useAsync } from ".
 import { periodLabel } from "../metrics";
 import { Seg } from "../widgets";
 import PageHeader from "../PageHeader";
+import { RemoveProjectDialog } from '../RemoveProjectDialog';
 
 type SortKey = "recent" | "major" | "unread" | "revenue" | "growth" | "runway" | "name" | "signals";
 type View = "cards" | "table";
@@ -22,25 +23,14 @@ function readView(): View {
   }
 }
 
-/** 移出关注 from the portfolio: inline confirmation; the project's data stays on this machine. */
+/** A shared centered confirmation for table rows and cards. */
 function RemoveControl({ project, onRemoved }: { project: Project; onRemoved: () => void }) {
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const toast = useToast();
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
-  const remove = async () => {
-    setBusy(true);
-    try { await api.removeProject(project.id); toast(`已将 ${project.name} 移出关注`, "info"); onRemoved(); }
-    finally { setBusy(false); setConfirming(false); }
-  };
   return (
     <span className="remove-wrap" onClick={stop} onKeyDown={stop}>
-      <button type="button" className="btn-row-remove" aria-expanded={confirming} title="移出关注" onClick={() => setConfirming((v) => !v)}>移出</button>
-      {confirming && <div className="remove-confirm" role="dialog" aria-label={`确认将 ${project.name} 移出关注`}>
-        <p>将 <strong>{project.name}</strong> 移出关注？之后不再自动更新、不再调用模型，也不出现在侧栏和列表中；资料与历史记录保留，可在本页底部恢复。</p>
-        <div><button className="btn btn-sm btn-danger" disabled={busy} onClick={remove}>确认移出</button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setConfirming(false)}>取消</button></div>
-      </div>}
+      <button type="button" className="btn-row-remove" aria-haspopup="dialog" aria-expanded={confirming} title="移出关注" onClick={() => setConfirming(true)}>移出</button>
+      {confirming && <RemoveProjectDialog project={project} onClose={()=>setConfirming(false)} onRemoved={onRemoved}/>}
     </span>
   );
 }

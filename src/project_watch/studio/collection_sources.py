@@ -6,6 +6,7 @@ from copy import copy
 from urllib.parse import urlsplit
 
 from project_watch.studio.collection_pages import clinical_page, cninfo_page, openalex_page
+from project_watch.studio.europepmc import page as europepmc_page
 from project_watch.studio.http import Http, HttpError
 
 
@@ -36,9 +37,11 @@ class CollectionSources:
 
     def capabilities(self):
         ready = 'available' if self.collectors.has_search else 'not_configured'
-        return (dict.fromkeys(('search', 'patent_search', 'cn_regulatory'), ready)
+        # News needs no key: Bing News RSS always, a configured search service in addition.
+        return ({'search': 'available'} | dict.fromkeys(('patent_search', 'cn_regulatory'), ready)
                 | dict.fromkeys(('openalex_topic', 'openalex_author', 'openalex_affiliation',
-                                 'clinical_sponsor', 'clinical_term', 'cninfo'), 'available'))
+                                 'clinical_sponsor', 'clinical_term', 'cninfo',
+                                 'europepmc_affiliation', 'europepmc_topic', 'europepmc_patent', 'google_patent'), 'available'))
 
     def snapshot(self):
         job = self.execution.job
@@ -65,7 +68,7 @@ class CollectionSources:
                    'window_applied': False, 'truncated': False}
         try:
             if source == 'search':
-                items = self.collectors.web_search(unit['query'], count=10)
+                items = self.collectors.news(unit['query'], search_count=10 if self.collectors.has_search else 0)
             elif source == 'patent_search':
                 items = self.collectors.patents(unit['query'])
             elif source == 'cn_regulatory':
@@ -91,7 +94,7 @@ class CollectionSources:
             self.execution.checkpoint_chunked(trace_stage, trace)
         # A paginated resume may only replay its durable pages. The manifest is
         # frozen, so original requests remain valid provenance for these items.
-        relevant_requests = trace['requests'] if source.startswith(('openalex_', 'clinical_')) or source == 'cninfo' else requests
+        relevant_requests = trace['requests'] if source.startswith(('openalex_', 'clinical_', 'europepmc_')) or source in ('cninfo', 'google_patent') else requests
         ids = [f"call:{self.execution.job['id']}:{r['call_key']}" for r in relevant_requests]
         cached = [r for r in uses if r['outcome'] == 'cached']
         ids.extend('query-use:' + r['id'] for r in cached)
@@ -107,7 +110,9 @@ class CollectionSources:
                                                         'done': False, 'metadata': {}, 'requests': [],
                                                         'visited': list(continuation.get('visited', [])), 'exhausted': False}
         paper = unit['source'].startswith('openalex_')
+        biomedical = unit['source'].startswith('europepmc_')
         filing = unit['source'] == 'cninfo'
+        patent = unit['source'] == 'google_patent'
         seen = {(item['extra']['source_identity'], item['extra']['source_version']) for item in state['items']}
         interruption = {}
         while not state['done'] and not state.get('exhausted') and state['pages'] < self.max_pages:
@@ -116,7 +121,15 @@ class CollectionSources:
             try:
                 if cursor in state.get('visited', []):
                     raise HttpError('collection_cursor_cycle')
-                if paper or filing:
+                if patent:
+                    from project_watch.studio.google_patents import page as patent_page
+
+                    page = patent_page(self.collectors.http, unit['query'])
+                elif biomedical:
+                    page = europepmc_page(self.collectors.http, unit['query'], mode=unit['source'][10:],
+                        cursor=state['cursor'], start=(unit.get('window_start') or '')[:10] or None,
+                        end=unit['window_end'][:10])
+                elif paper or filing:
                     method = openalex_page if paper else cninfo_page
                     options = {'mode': unit['source'][9:]} if paper else {}
                     page = method(self.collectors.http, unit['query'], page=state['cursor'] or 1,
@@ -139,7 +152,7 @@ class CollectionSources:
                 break
             for item in page['items']:
                 extra = item['extra']
-                identity = extra['source_identity'] if filing else (
+                identity = extra['source_identity'] if filing or biomedical or patent else (
                     ('openalex:' + extra['openalex_id']) if paper else ('clinical:' + extra['nct_id']))
                 version = hashlib.sha256(json.dumps(extra['source_record'], sort_keys=True,
                                                      ensure_ascii=False).encode()).hexdigest()
@@ -150,7 +163,8 @@ class CollectionSources:
             state['pages'] += 1
             state.setdefault('visited', []).append(cursor)
             state['cursor'] = page['next_cursor']
-            state['metadata'] = {key: value for key, value in page.items() if key != 'items'}
+            state['metadata'] = {key: value for key, value in page.items() if key not in ('items', 'dropped_records')}
+            state['dropped_records'] = state.get('dropped_records', 0) + page.get('dropped_records', 0)
             state['done'] = not page['truncated']
             state['exhausted'] = page['truncated'] and state['cursor'] is None
             after_requests, _ = self.snapshot()
@@ -164,6 +178,7 @@ class CollectionSources:
             if page['truncated'] and state['cursor'] is None:
                 break
         return dict(state['metadata'], items=state['items'], truncated=not state['done'],
+                    dropped_records=state.get('dropped_records', 0),
                     next_cursor=state['cursor'], pages_completed=state['pages'],
                     visited_cursors=state['visited'], **interruption)
 

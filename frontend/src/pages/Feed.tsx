@@ -5,10 +5,12 @@ import { api, type Category, type Item, type Project } from "../api";
 import { AttentionBoard } from "../attention";
 import { ItemList } from "../items";
 import { Page, useToast } from "../motion";
-import { CATEGORY_LABEL, Empty, ErrorNote, byNewest, dayLabel, seenAt, useAsync } from "../ui";
+import { CATEGORY_LABEL, Empty, ErrorNote, dayLabel, useAsync } from "../ui";
+import { feedChanged } from "../feedSnapshot";
+import { newsDate } from "../newsFacts";
 import { Kpi, Seg } from "../widgets";
 import PageHeader from "../PageHeader";
-import { useStagedRead } from "../Operational";
+import { useStagedRead, useVisiblePoll } from "../Operational";
 import { projectListWork, isMoving } from "../workState";
 
 const RANGES = [
@@ -25,6 +27,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
   const [level, setLevel] = useState<"" | "major" | "notable">("");
   const [category, setCategory] = useState<"" | Category>("");
   const [projectId, setProjectId] = useState("");
+  const [revision, setRevision] = useState(0);
   const { data, error, loading, setData } = useAsync(
     () => api.feed({ days, importance: level || undefined, category: category || undefined,
       project_id: projectId || undefined, limit: 150 }),
@@ -32,13 +35,18 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
   );
 
   const attention = useAsync(() => (projects.length ? api.attention(7) : Promise.resolve(null)), [projects.length]);
-  const staged = useStagedRead(`${days}:${level}:${category}:${projectId}`, () => api.feed({ days,
+  const summary = useAsync(() => api.feedSummary({ days, category: category || undefined,
+    importance: level || undefined, project_id: projectId || undefined }), [days, level, category, projectId, revision]);
+  useVisiblePoll(summary.reload, 30000, !!data && data.length === 0);
+  const staged = useStagedRead(`${days}:${level}:${category}:${projectId}:${revision}`, () => api.feed({ days,
     importance: level || undefined, category: category || undefined, project_id: projectId || undefined, limit: 150 }),
-    next => next.some(item => !(data ?? []).some(old => old.id === item.id)), !!data);
+    next => feedChanged(data ?? [], next), !!data);
   const added = staged.pending?.filter(item => !(data ?? []).some(old => old.id === item.id)).length ?? 0;
-  const update = (changed: Item) =>
+  const update = (changed: Item) => {
+    staged.clear(); setRevision(value => value + 1);
     setData((items) => (items ?? []).map((i) => (i.id === changed.id ? changed : i))
       .filter((i) => i.status !== "dismissed"));
+  };
 
   if (!projects.length) {
     return (
@@ -51,13 +59,15 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
   }
 
   const all = data ?? [];
-  const items = (unreadOnly ? all.filter((i) => i.status === "new") : all).slice().sort(byNewest);
+  const items = (unreadOnly ? all.filter((i) => i.status === "new") : all).slice()
+    .sort((a, b) => (newsDate(b) ?? 0) - (newsDate(a) ?? 0));
   // The last three days with news stay open; older days wait behind one button.
-  const dayList = [...new Set(items.map((i) => dayLabel(seenAt(i))))];
-  const recent = items.filter((i) => dayList.slice(0, 3).includes(dayLabel(seenAt(i))));
+  const dayList = [...new Set(items.map((i) => dayLabel(i.published_at ?? undefined)))];
+  const recent = items.filter((i) => dayList.slice(0, 3).includes(dayLabel(i.published_at ?? undefined)));
   const unreadHere = all.filter((i) => i.status === "new").length;
   const readAll = async () => {
     const r = await api.readAll({ project_id: projectId || undefined, days });
+    staged.clear(); setRevision(value => value + 1);
     setData((list) => (list ?? []).map((i) => (i.status === "new" ? { ...i, status: "read" } : i)));
     toast(r.updated ? `已将 ${r.updated} 条标为已读` : "没有未读信息", "info");
   };
@@ -77,7 +87,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
       <div className="kpis kpis-split">
         <Kpi label="关注的公司" value={projects.length} />
         <Kpi label="近 30 天重大事件" value={majorRecent} tone={majorRecent ? "major" : undefined} />
-        <Kpi label="未读信息" value={unread} />
+        <div title="按近 14 天收录或事件时间统计的重大及公司/竞品关注信息；与下方按事件日期筛选的动态口径不同。"><Kpi label="未读信息" value={unread} /></div>
         <Kpi label="待核对 / 异常" value={todo} tone={todo ? "major" : undefined} />
       </div>
       <Columns main={<>
@@ -99,12 +109,17 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
       </div>
       <ErrorNote error={error} />
       {staged.failed && <p className="muted small">新动态暂时无法检查，当前列表保留。</p>}
-      {added > 0 && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); attention.reload(); }}>新增 {added} 条 · 点击查看</button>}
+      {staged.pending && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); attention.reload(); summary.reload(); }}>{added > 0 ? `新增 ${added} 条` : '动态内容有更新'} · 点击查看</button>}
       {loading && !data && <Skeleton lines={8} />}
       {data && items.length === 0 && unreadOnly && all.length > 0 && <Empty title="都读完了">“全部”中可回看已读动态。</Empty>}
       {data && all.length === 0 && (
         <Empty title="这段时间没有新动态">
-          暂无收录动态。
+          <ErrorNote error={summary.error} />
+          <p>{summary.data?.note ?? "所选期间暂无匹配动态，可调整时间或筛选条件。"}</p>
+          {summary.data && summary.data.counts.matching < summary.data.counts.in_period && <p>部分期内动态不符合当前评级筛选，可切换“全部”查看。</p>}
+          {summary.data?.progress.filter(p => p.state !== 'observed').map(p => <p key={p.id}>
+            <Link to={`/projects/${p.id}`}>{projects.find(project => project.id === p.id)?.name ?? '项目'}</Link> · {p.label}
+          </p>)}
         </Empty>
       )}
       <div className="feed-list">

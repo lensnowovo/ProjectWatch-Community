@@ -29,8 +29,6 @@ from project_watch.parser_container import (
     validate_parser_image,
     validate_parser_runtime,
 )
-from project_watch.repository import ProjectRepository
-from project_watch.team_auth import TeamAuthStore
 
 
 def test_subprocess_extracts_located_text(tmp_path: Path) -> None:
@@ -140,7 +138,7 @@ def test_rootless_engine_identity_requires_an_exact_security_option() -> None:
     assert not _is_rootless_security_options(["name=rootless", 1])
 
 
-def test_linux_team_service_must_not_run_as_root() -> None:
+def test_linux_service_must_not_run_as_root() -> None:
     with pytest.raises(RuntimeError, match="non-root service user"):
         _require_nonroot_service_uid(0)
     _require_nonroot_service_uid(1000)
@@ -332,24 +330,15 @@ def test_container_output_limit_removes_synthetic_parser(tmp_path: Path, monkeyp
     assert inspection.returncode != 0
 
 
-def test_sqlite_team_worker_uses_subprocess_for_uploaded_material(tmp_path: Path) -> None:
-    path = tmp_path / "team.sqlite3"
-    ProjectRepository(path)
-    auth = TeamAuthStore(path)
-    auth.bootstrap_admin("admin@example.test", "synthetic-admin-password")
-    app = create_app(path, team_auth=auth, team_origin="https://testserver")
+def test_isolated_local_worker_uses_subprocess_for_uploaded_material(tmp_path: Path) -> None:
+    path = tmp_path / "isolated.sqlite3"
+    app = create_app(path, isolated_intake=True)
     assert app.state.intake_worker.isolated
-    with TestClient(app, base_url="https://testserver") as client:
-        logged = client.post(
-            "/api/auth/login",
-            json={"username": "admin@example.test", "password": "synthetic-admin-password"},
-        )
-        csrf = {"X-CSRF-Token": logged.json()["csrf_token"]}
-        project = client.post("/api/projects", json={"name": "Synthetic"}, headers=csrf).json()
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        project = client.post("/api/projects", json={"name": "Synthetic"}).json()
         intake = client.post(
             f"/api/projects/{project['id']}/files",
             files={"file": ("intro.txt", "合成项目资料".encode(), "text/plain")},
-            headers=csrf,
         )
         assert intake.status_code == 202
         assert app.state.intake_worker.process_one().status == "completed"
@@ -359,30 +348,19 @@ def test_sqlite_team_worker_uses_subprocess_for_uploaded_material(tmp_path: Path
         assert fragments[0]["text"] == "合成项目资料"
 
 
-def test_team_worker_records_child_failure_without_fragments(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "team.sqlite3"
-    ProjectRepository(path)
-    auth = TeamAuthStore(path)
-    auth.bootstrap_admin("admin@example.test", "synthetic-admin-password")
-    app = create_app(path, team_auth=auth, team_origin="https://testserver")
+def test_isolated_worker_records_child_failure_without_fragments(tmp_path: Path, monkeypatch) -> None:
+    app = create_app(tmp_path / "isolated.sqlite3", isolated_intake=True)
 
-    def parser_timeout(_path, *, suffix, timeout_seconds, max_output_bytes):
-        assert suffix == ".txt"
-        assert timeout_seconds > 0 and max_output_bytes > 0
+    def parser_timeout(_path, *, suffix, cancel, on_progress):
+        assert suffix == ".txt" and cancel is not None
         raise ExtractionError("parser_timeout")
 
     monkeypatch.setattr("project_watch.intake_worker.extract_document_subprocess", parser_timeout)
-    with TestClient(app, base_url="https://testserver") as client:
-        logged = client.post(
-            "/api/auth/login",
-            json={"username": "admin@example.test", "password": "synthetic-admin-password"},
-        )
-        csrf = {"X-CSRF-Token": logged.json()["csrf_token"]}
-        project = client.post("/api/projects", json={"name": "Synthetic"}, headers=csrf).json()
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        project = client.post("/api/projects", json={"name": "Synthetic"}).json()
         intake = client.post(
             f"/api/projects/{project['id']}/files",
             files={"file": ("intro.txt", b"synthetic", "text/plain")},
-            headers=csrf,
         ).json()
         job = app.state.intake_worker.process_one()
         assert job.status == "failed"

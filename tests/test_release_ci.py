@@ -4,7 +4,6 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -94,7 +93,7 @@ def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
     flow = json.loads((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
     jobs = flow['jobs']
     assert jobs['python']['timeout-minutes'] == 180
-    assert jobs['native']['timeout-minutes'] == 60
+    assert 'native' not in jobs  # the native DSH domain was retired with the DSH executor
     for domain in DOMAINS:
         assert jobs[domain]['needs'] == 'plan'
         assert jobs[domain]['if'] == "needs.plan.outputs." + domain + " == 'true'"
@@ -112,17 +111,6 @@ def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
                           'Frontend build': 'npm --prefix frontend run build',
                           'Node regression': 'node --test tests/*.test.mjs'}.items():
         assert phases['frontend'][name]['run'] == command
-    command = shlex.split(phases['native']['Native DSH with synthetic model gateway']['run'])
-    assert command[:5] == ['python', '-I', '-X', 'utf8', 'scripts/run_offline_tests.py']
-    assert command[command.index('--dsh-runtime') + 1] == '$env:RUNNER_TEMP/dsh'
-    assert command[command.index('--dsh-runtime') + 2:] == [
-        'tests/test_studio_dsh_runtime.py', 'tests/test_studio_dsh_monitor.py',
-        'tests/test_collection_model_continuation.py',
-        'tests/test_bootstrap_collection.py::test_native_collection_role_reads_collects_and_finishes_without_record_tools',
-        'tests/test_event_insight.py::test_worker_delivers_events_then_fresh_fixed_insight_with_no_source_tools[True]',
-        'tests/test_scope_maintenance.py::test_real_worker_scope_without_judgment_and_completed_receipt_replay[True]',
-        'tests/test_question_assessment.py::test_fresh_topic_worker_material_then_independent_question_without_judge_or_revise[True]',
-    ]
     installed = phases['installed']
     names = list(installed)
     assert names.index('Frontend build') < names.index('Build full wheel') < names.index('Fresh installed-wheel smoke') < names.index('Full installed synthetic journey')
@@ -130,11 +118,11 @@ def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
     assert 'python -m venv' in installed['Fresh installed-wheel smoke']['run']
     assert '--full-journey --wheel $wheel.FullName' in installed['Full installed synthetic journey']['run']
     artifacts = [step for d in DOMAINS for step in jobs[d]['steps'] if step.get('id') in {'ci_upload', 'ci_proof_upload'}]
-    assert len({step['with']['name'] for step in artifacts}) == 8
+    assert len({step['with']['name'] for step in artifacts}) == 6
     assert all(step['if'] == 'always()' and step['with']['retention-days'] == 7 for step in artifacts)
     assert {p for step in artifacts if step['id'] == 'ci_upload' for p in step['with']['path'].splitlines()} == {
         '${{ runner.temp }}/offline/pytest.xml', '${{ runner.temp }}/frontend-python/pytest.xml',
-        '${{ runner.temp }}/native-dsh/pytest.xml', '${{ runner.temp }}/installed-smoke/receipt.json',
+        '${{ runner.temp }}/installed-smoke/receipt.json',
         '${{ runner.temp }}/installed-journey/receipt.json',
     }
     rollup = jobs['release_checks']
@@ -143,11 +131,12 @@ def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
     assert rollup['steps'][-1]['run'] == 'python -I -X utf8 scripts/ci_scope.py summary'
 
 
-def test_progressive_installed_harness_uses_actual_worker_and_fixed_consumers(tmp_path):
+def test_installed_round_harness_runs_collect_analyze_report(tmp_path):
     import runpy
-    support = runpy.run_path(str(ROOT / 'tests/progressive_installed_support.py'))
+    support = runpy.run_path(str(ROOT / 'tests/spine_installed_support.py'))
     result = support['run'](tmp_path)
-    assert result['immutable_insight'] and result['counts']['materials'] == 1
+    assert result['jobs'] == ['collect', 'analyze', 'report'] and result['sections']
+    assert result['materials']['paper'] >= 1 and result['materials']['patent'] >= 1
 
 
 def test_candidate_gate_requires_exact_commit_and_never_publishes():

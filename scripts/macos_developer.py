@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-EXTRAS = "dev,ocr,mcp,team,postgres"
+EXTRAS = "dev,ocr,mcp"
 MARKER = "projectwatch-ready.json"
 
 
@@ -133,7 +133,7 @@ def install(repo: Path, environment: Path, info: dict) -> None:
     run_checked([info["npm"], "--prefix", "frontend", "run", "build"], repo)
     run_checked([str(python), "-I", "-m", "pip", "check"], repo)
     run_checked([str(python), "-I", "-B", "-c",
-                 "import project_watch.studio.app, rapidocr, onnxruntime, mcp, psycopg"], repo)
+                 "import project_watch.studio.app, rapidocr, onnxruntime, mcp"], repo)
     if initial != fingerprint(repo):
         raise SetupError("安装期间依赖声明变化，请在新环境重新安装；当前环境未标记就绪")
     if not (repo / "src/project_watch/web/index.html").is_file():

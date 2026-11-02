@@ -24,7 +24,7 @@ def main():
                    'monitor_profile_store', 'company_reading_view', 'literal_metrics', 'evidence_proposals',
                    'holding_input', 'identity_input', 'followup_records'):
         assert (package / (module + '.py')).is_file(), 'Base intake contract must remain available'
-    for module in ('dsh_executor', 'model_settings', 'external_analysis', 'monitor_briefing',
+    for module in ('model_executor', 'model_settings', 'external_analysis', 'monitor_briefing',
                    'monitor_profile', 'company_state', 'reading_jobs', 'candidate_metrics', 'tasks',
                    'holding_snapshots', 'identity_review', 'watch_items'):
         assert not (package / (module + '.py')).exists(), 'Unused legacy executor chain must be absent'
@@ -69,7 +69,9 @@ def main():
         with TestClient(reopened) as client:
             history = client.get(f"/api/studio/projects/{receipt['project_id']}/questions/{receipt['watch_id']}/history").json()
             assert sorted(row['id'] for row in history) == receipt['history_ids']
-            core['recover_after_restart'](client, reopened, failure)
+            # An unclear request stays failed after restart; it is never resent automatically.
+            assert next(j for j in reopened.state.studio_store.jobs(failure['project_id'])
+                        if j['id'] == failure['job_id'])['status'] == 'failed'
         assert 'project_watch.api' not in sys.modules
         assert 'project_watch.reading_worker' not in sys.modules
         print(json.dumps({'installed_at': str(package), 'first_user': 'passed',

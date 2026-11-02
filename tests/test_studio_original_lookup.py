@@ -94,7 +94,7 @@ def test_wrong_or_unsafe_replacements_are_not_read(tmp_path, bad):
     assert result == [] and reads == ['https://blocked.test/report']
 
 
-def test_three_page_bound_includes_donors_and_global_lookup_limit_survives_replay(tmp_path):
+def test_all_scoped_leads_are_read_and_completed_lookups_replay_without_calls(tmp_path):
     pipeline, pid, reads, execution = setup(tmp_path)
     pipeline.article_reader = SimpleNamespace(read=lambda url: reads.append(url) or {
         'status': 'summary_only', 'text': '', 'error_code': 'insufficient_article_text'})
@@ -104,8 +104,8 @@ def test_three_page_bound_includes_donors_and_global_lookup_limit_survives_repla
     leads = [hit(f'blocked-{i}.test', TITLE + str(i)) for i in range(7)]
     for lead in leads:
         pipeline.competition_research.originals(pid, [lead], execution=execution, collectors=collectors)
-    assert len(searches) == 6
-    assert len(reads) <= 21
+    assert len(searches) == 7
+    assert len(reads) == 10  # Seven original leads plus three shared donors, read once.
     # Each company has at most one lookup, even when both replacements also fail.
     before = len(searches), len(reads)
     for lead in leads:
@@ -124,7 +124,7 @@ def test_unknown_lookup_does_not_fall_through_or_resend(tmp_path):
             raise HttpError('request_outcome_unknown')
         return execution.call('search', 'lost-search', lost)
     for _ in range(2):
-        with pytest.raises(HttpError, match='request_outcome_unknown'):
+        with pytest.raises(HttpError, match=r'request_outcome_unknown|unknown_not_resent'):
             pipeline.competition_research.originals(pid, [hit('blocked.test')], execution=execution,
                 collectors=SimpleNamespace(web_search=search))
     assert calls == ['accepted'] and len(reads) == 1
@@ -146,15 +146,18 @@ def test_permission_changed_by_lookup_stops_before_donor_read(tmp_path):
     assert reads == ['https://blocked.test/report']
 
 
-def test_no_search_spend_when_page_budget_is_already_exhausted(tmp_path):
+def test_title_lookup_continues_after_historical_page_budget(tmp_path):
     pipeline, pid, reads, execution = setup(tmp_path, budgets={'page': 1})
     pipeline.article_reader = SimpleNamespace(read=lambda url: reads.append(url) or {
         'status': 'summary_only', 'text': '', 'error_code': 'insufficient_article_text'})
+    searches = []
     def search(*args, **kwargs):
-        raise AssertionError('no reading capacity: do not spend on a title lookup')
+        searches.append(args)
+        return [hit('publisher.test')]
     assert pipeline.competition_research.originals(pid, [hit('blocked.test')], execution=execution,
         collectors=SimpleNamespace(web_search=search)) == []
-    assert len(reads) == 1
+    assert len(searches) == 1 and len(reads) == 2
+    assert execution.budget_used('page') == 2
 
 
 def test_similar_title_with_conflicting_financing_amount_is_not_a_donor():

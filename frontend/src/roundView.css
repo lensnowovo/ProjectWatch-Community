@@ -1,0 +1,31 @@
+.round-view { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 24px; margin: 4px 0 8px; }
+.round-view dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
+.round-view dl > div { display: contents; }
+.round-view dt { color: var(--muted); }
+.round-view dd { margin: 0; }
+.round-view-confirm { display: grid; gap: 8px; max-width: 420px; }
+.round-view-confirm p { margin: 0; color: var(--ink-2); }
+.assumptions-panel { display: grid; gap: 12px; }
+.assumptions-panel table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.assumptions-panel th, .assumptions-panel td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.assumptions-panel th { color: var(--muted); font-weight: 400; font-size: 13px; }
+.assumptions-panel .status { white-space: nowrap; }
+.assumptions-panel .status-weakened { color: var(--wine); }
+.assumptions-panel .status-strengthened { color: var(--ok); }
+.assumptions-panel ul { margin: 4px 0 0; padding-left: 18px; }
+.assumptions-panel .row-actions { white-space: nowrap; }
+.assumptions-panel input[type="text"] { width: 100%; }
+.assumptions-add { display: flex; gap: 8px; }
+.assumptions-add input { flex: 1; }
+.research-relation { font-size: 12px; color: var(--ink-2); }
+.research-relation.relation-subject { color: var(--ok); font-weight: 600; }
+.research-relation.relation-unrelated { color: var(--muted); }
+.research-relation.relation-unreviewed { color: var(--muted); font-style: italic; }
+.research-snippet-clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.round-quality { margin-top: 12px; }
+.round-quality summary { cursor: pointer; color: var(--ink-2); }
+.round-quality-notes { margin: 8px 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.round-quality-table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.round-quality-table th, .round-quality-table td { padding: 4px 16px 4px 0; text-align: left; font-weight: 400; }
+.round-quality-table thead th { color: var(--muted); font-size: 12px; }
+.round-quality-stale ul { margin: 4px 0; padding-left: 18px; }

@@ -7,6 +7,7 @@ clinical scope is not inferred to be inapplicable from an industry label.
 from datetime import datetime, timedelta
 
 from project_watch.studio.collection_plan import CAPABILITIES, MODES, make_plan
+from project_watch.studio.openalex_query import topic_terms
 
 BASE_DIRECTIONS = ('company', 'competitor', 'chain', 'industry', 'policy', 'technology')
 
@@ -42,6 +43,9 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
 
     def add(source, category, queries, *, target=None, historical=False, schedule_due=True,
             query_version='1', priority=1, evidence_reason=''):
+        ordered = (public_plan.get('name_order_policy') == 'confirmed-names-v1'
+                   and source in ('openalex_affiliation', 'europepmc_affiliation', 'europepmc_patent', 'patent_search'))
+        ranks = {q: i for i, q in enumerate(dict.fromkeys(queries)) if isinstance(q, str)}
         decision = decisions.get(source, {})
         if decision:
             if decision.get('capability') not in ('not_applicable', 'disabled'):
@@ -63,6 +67,7 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
                 if decision:
                     capability = decision['capability']
                 candidates.append(dict(source=source, category=category, target_id='scope:' + row['id'],
+                    **({'query_rank': ranks.get(row['query'], len(ranks))} if ordered else {}),
                     query_version='scope-v1', query=row['query'], capability=capability,
                     reason=decision.get('reason') or row['reason'],
                     applicability_evidence_ids=decision.get('evidence_ids') or [row['ref']['evidence_version_id']],
@@ -84,6 +89,7 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
             reason = 'Source capability: ' + capability
         for query in scoped or ['']:
             candidates.append(dict(source=source, category=category, target_id=target or project['id'],
+                                   **({'query_rank': ranks.get(query, len(ranks))} if ordered else {}),
                                    query_version=query_version, query=query, capability=capability,
                                    reason=reason, priority=priority, schedule_due=schedule_due,
                                    applicability_evidence_ids=decision.get('evidence_ids', []),
@@ -114,10 +120,23 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         add('site', 'company', [project.get('website')], historical=True)
         add('cninfo', 'company', [name])
         add('openalex_affiliation', 'paper', public_plan.get('affiliation_names') or [name], historical=True)
-        add('openalex_topic', 'paper', public_plan.get('paper_queries') or directions['technology'])
+        # Topic searches only for terms an English index can match (see openalex_query.topic_terms).
+        topics = [t for q in public_plan.get('paper_queries') or directions['technology'] if (t := topic_terms(q))]
+        add('openalex_topic', 'paper', topics)
+        # Biomedical index does not infer that the company is a drug developer.
+        # Only existing public institution/topic scope is sent; zero is a query
+        # result, not a claim of non-applicability or lack of research.
+        add('europepmc_affiliation', 'paper', public_plan.get('affiliation_names') or [name], historical=True)
+        if public_plan.get('paper_queries') or 'europepmc_topic' in scoped_sources:
+            # Europe PMC quotes every term itself.
+            add('europepmc_topic', 'paper', [t.strip('"') for q in public_plan.get('paper_queries') or [] if (t := topic_terms(q))])
         if public_plan.get('paper_authors') or 'openalex_author' in scoped_sources:
             add('openalex_author', 'paper', public_plan.get('paper_authors') or [])
         add('patent_search', 'patent', public_plan.get('patent_assignees') or [name], historical=True)
+        add('europepmc_patent', 'patent', public_plan.get('patent_index_assignees')
+            or public_plan.get('patent_assignees') or [name], historical=True)
+        if 'google_patent' in scoped_sources:
+            add('google_patent', 'patent', [], historical=True)
         # is_biomed is deliberately not an applicability decision. Sponsor and
         # intervention searches remain separate, including hospital-led studies.
         sponsors, terms = public_plan.get('trial_sponsors') or [], public_plan.get('trial_terms') or []

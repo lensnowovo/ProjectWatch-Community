@@ -41,7 +41,12 @@ PUBLIC_ENDPOINTS = {
     "bocha": "https://api.bochaai.com/v1/web-search",
     "brave": "https://api.search.brave.com/res/v1/web/search",
     "tavily": "https://api.tavily.com/search",
+    "europepmc": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "europepmc_patent": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "google_patent": "https://patents.google.com/patent",
 }
+# One document per page; every other operation keeps 3-5 records.
+SINGLE_DOCUMENT = frozenset(("google_patent",))
 _SENSITIVE = re.compile(r"key|token|cookie|authorization|password|secret", re.I)
 
 
@@ -100,7 +105,40 @@ def trim_response(operation: str, response: Response) -> tuple[str, object, int]
                 if node is not None:
                     ET.SubElement(item, tag, dict(node.attrib)).text = node.text
         return "xml", ET.tostring(rss, encoding="unicode"), len(original)
+    if operation == "google_patent":
+        # The page head title plus this document's own bibliographic block, up
+        # to the first section (abstract, description, claims, citations). The
+        # nested "Other versions" and event items stay, as real decoys.
+        from project_watch.studio.google_patents import parse
+
+        html = response.text()
+        start = html.find("<article")
+        stop = html.find("<section", start)
+        stop = stop if stop >= 0 else html.find("</article>", start)  # already trimmed: idempotent
+        if start < 0 or stop < 0:
+            raise ValueError("unexpected patent page layout")
+        title = re.search(r"<title>.*?</title>", html, re.S)
+        body = ("<html><head>" + (title.group(0) if title else "") + "</head><body>"
+                + html[start:stop] + "</article></body></html>")
+        number = re.search(r'itemprop="publicationNumber">([A-Z0-9]+)<', body).group(1)
+        parse(body, number)  # the trimmed page must still parse as the same document
+        return "html", body, 1
     data = response.json()
+    if operation in ("europepmc", "europepmc_patent"):
+        rows = []
+        for row in ((data.get("resultList") or {}).get("result") or [])[:4]:
+            kept = _pick(row, ("id", "source", "pmid", "pmcid", "doi", "title", "firstPublicationDate",
+                               "pubYear", "isOpenAccess", "license", "affiliation"))
+            if isinstance(row.get("patentDetails"), dict):
+                kept["patentDetails"] = _pick(row["patentDetails"], ("typeCode", "countryCode"))
+            kept["authorList"] = {"author": [{
+                "fullName": a.get("fullName"),
+                "authorAffiliationDetailsList": {"authorAffiliation": [
+                    _pick(x, ("affiliation",)) for x in
+                    ((a.get("authorAffiliationDetailsList") or {}).get("authorAffiliation") or [])[:3]]},
+            } for a in ((row.get("authorList") or {}).get("author") or [])[:80] if isinstance(a, dict)]}
+            rows.append(kept)
+        return "json", {"hitCount": data.get("hitCount"), "resultList": {"result": rows}}, len(rows)
     if operation.startswith("openalex_"):
         records = []
         for work in (data.get("results") or [])[:4]:
@@ -151,7 +189,7 @@ def trim_response(operation: str, response: Response) -> tuple[str, object, int]
 def save_fixture(directory: Path, slug: str, company: str, operation: str,
                  response: Response, redactor: Redactor) -> None:
     fmt, body, count = trim_response(operation, response)
-    if count < 3:
+    if count < (1 if operation in SINGLE_DOCUMENT else 3):
         return  # No invented padding for empty or very short responses.
     if fmt == "xml":
         root = ET.fromstring(body)

@@ -2,16 +2,14 @@
 const el=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
 const button=(text,fn)=>{const n=el('button','text-button',text);n.type='button';n.onclick=fn;return n;};
 
-export function consentPayload(status, {hashes, includeFuture, maxRequests, consent, requestKey}) {
-  const count=Number(maxRequests);
+export function consentPayload(status, {hashes, includeFuture, consent, requestKey}) {
   if(!status.model || !status.automatic_reading_available)throw Error('请先连接 AI 并启动后台整理。');
   if(!status.rule_version || !Number.isInteger(status.model.max_output_tokens) || status.model.max_output_tokens<1)throw Error('请重新打开自动整理窗口，核对最新用量上限。');
   if(consent!==true)throw Error('请确认材料发送范围。');
   if(!includeFuture&&!hashes.length)throw Error('请选择要整理的材料。');
-  if(!Number.isInteger(count)||count<1||count>1000)throw Error('调用上限为 1–1000 次。');
   return {consent:true,config_id:status.model.config_id,request_key:requestKey,
     rule_version:status.rule_version,max_output_tokens:status.model.max_output_tokens,
-    source_hashes:[...new Set(hashes)].sort(),include_future:includeFuture===true,max_requests:count};
+    source_hashes:[...new Set(hashes)].sort(),include_future:includeFuture===true,max_requests:null};
 }
 
 export async function openReadingConsent({projectId,sources,request,onChanged,openSettings}) {
@@ -51,8 +49,8 @@ export async function openReadingConsent({projectId,sources,request,onChanged,op
     const existing=el('details','consent-existing');existing.append(el('summary','','已有授权与用量'));existing.open=true;
     for(const grant of status.authorizations){
       const row=el('div','consent-grant');const matching=grant.config_id===status.model?.config_id&&grant.rule_version===status.rule_version;
-      row.append(el('strong','',({active:'已开启',paused:'已暂停',revoked:'已撤销'})[grant.status]),el('p','reading-note',`${grant.recipient.base_url} · ${grant.model}\n${grant.include_future?'本项目现有及以后加入的全部材料':`选定的 ${grant.source_hashes.length} 个材料版本`} · 已调用 ${grant.requests_used} / ${grant.limits.max_requests} 次`));
-      if(grant.limits.max_cost_cny!==null)row.append(el('p','reading-note',`预算上限 ¥${grant.limits.max_cost_cny} · 预留 ¥${grant.reserved_cny}`));
+      row.append(el('strong','',({active:'已开启',paused:'已暂停',revoked:'已撤销'})[grant.status]),el('p','reading-note',`${grant.recipient.base_url} · ${grant.model}\n${grant.include_future?'本项目现有及以后加入的全部材料':`选定的 ${grant.source_hashes.length} 个材料版本`} · 已调用 ${grant.requests_used} 次`));
+      if(grant.limits.max_cost_cny!==null)row.append(el('p','reading-note',`费用预估 · 预留 ¥${grant.reserved_cny}`));
       if(!matching&&grant.status!=='revoked')row.append(el('p','reading-note','接收方或整理方式已变化，需要重新确认后才能继续。'));
       if(grant.status==='active')row.append(button('暂停',()=>change(grant,'paused')));
       if(grant.status==='paused'&&matching)row.append(button('继续整理',()=>change(grant,'active')));
@@ -70,20 +68,14 @@ export async function openReadingConsent({projectId,sources,request,onChanged,op
   const all=button('选择当前全部材料',()=>{for(const c of choices)c.input.checked=true;});body.append(all);
   const future=check('包括本项目现有及以后加入的全部材料');body.append(future.wrap);
   future.input.onchange=()=>{for(const c of choices)c.input.disabled=future.input.checked;all.disabled=future.input.checked;};
-  const quota=field('本次调用上限 · 长文件可能使用多次调用','number','20');quota.input.min='1';quota.input.max='1000';quota.input.step='1';body.append(quota.wrap);
-  const money=el('details','consent-existing');money.append(el('summary','','另设金额上限（可选）'));
-  const prices=[field('预算上限（元）','number'),field('输入价格（元 / 百万 tokens）','number'),field('输出价格（元 / 百万 tokens）','number')];
-  for(const p of prices){p.input.min='0.000001';p.input.step='any';money.append(p.wrap);}body.append(money);
-  body.append(el('p','reading-note','额度用完即停止；暂停后不再发送新请求，已发送的请求无法撤回。金额按你填写的价格保守估算，以服务商账单为准。'));
+  body.append(el('p','reading-note','调用不设次数或金额上限。暂停后不再发送新请求，已发送的请求无法撤回。'));
   const confirm=check('我同意将上述范围的材料发送给所示服务，用于本项目内容整理。');body.append(confirm.wrap);
   const save=el('button','primary-button','确认并开启');save.type='submit';footer.prepend(save);
   form.onsubmit=async event=>{
     event.preventDefault();if(busy)return;error.textContent='';let payload;
     try{
       if(!token.input.value)throw Error('请填写本机管理口令。');
-      payload=consentPayload(status,{hashes:choices.filter(c=>c.input.checked).map(c=>c.hash),includeFuture:future.input.checked,maxRequests:quota.input.value,consent:confirm.input.checked,requestKey:'pending'});
-      if(prices.some(p=>p.input.value)){if(prices.some(p=>!p.input.value||!Number.isFinite(Number(p.input.value))||Number(p.input.value)<=0))throw Error('请填写完整的预算和输入、输出价格，且均大于零。');
-        [payload.max_cost_cny,payload.input_cny_per_million,payload.output_cny_per_million]=prices.map(p=>p.input.value);}
+      payload=consentPayload(status,{hashes:choices.filter(c=>c.input.checked).map(c=>c.hash),includeFuture:future.input.checked,consent:confirm.input.checked,requestKey:'pending'});
       const signature=JSON.stringify(payload);if(signature!==lastSignature){requestKey=crypto.randomUUID();lastSignature=signature;}payload.request_key=requestKey;
     }catch(err){error.textContent=err.message;return;}
     busy=true;save.disabled=true;close.disabled=true;

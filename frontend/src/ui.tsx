@@ -35,6 +35,11 @@ export function relTime(iso?: string | null): string {
 
 /** When an item can count as news: its date, but never later than when it was collected (a paper's
  * scheduled issue date or a planned milestone is not "the latest"). */
+/** Hover note for a date that did not come from the page itself. */
+export function dateNote(extra?: Record<string, unknown> | null): string | undefined {
+  return extra?.date_source === 'search' ? '日期来自搜索服务提供的页面信息，未在原文中核对' : undefined;
+}
+
 export function seenAt(item: { published_at?: string | null; collected_at: string }): string {
   const published = item.published_at ?? item.collected_at;
   return published > item.collected_at ? item.collected_at : published;
@@ -116,7 +121,6 @@ const CODE_MESSAGE: Record<string, string> = {
   model_output_truncated: "模型输出不完整，请在设置中提高单次回复上限后重试。",
   model_http_failure: "模型服务返回错误，请稍后重试。",
   model_access_denied: "模型服务拒绝访问，请检查密钥。",
-  dsh_unavailable: "DSH 研究引擎不可用，自动研究已暂停，已有结果保留。请到设置 → 研究引擎查看。",
   commercial: "专业来源暂时无法读取，已保留上次结果。",
 };
 

@@ -5,9 +5,11 @@ remain held through backup and pointer publication. Files not in a manifest surv
 
 Every new file is hashed exactly once, then moved (not copied) into place when the
 payload sits on the same volume: on Windows each first read of a newly written file
-is scanned by antivirus, so re-reading copies doubled install time. Large shared
-runtimes (DSH, Node) live in ``runtimes/<content id>`` and are reused untouched by
-later versions that carry the same content.
+is scanned by antivirus, so re-reading copies doubled install time. Shared
+runtimes live in ``runtimes/<content id>`` and are reused untouched by later
+versions that carry the same content. Current bundles carry none; a DSH/Node
+runtime from an earlier version stays unused on disk until uninstall removes it
+together with the versions that list it.
 """
 from __future__ import annotations
 

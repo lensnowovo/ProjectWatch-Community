@@ -32,12 +32,16 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
                              (project_id,)).fetchone()
         if not project:
             return _result('inactive', None, 0, 0)
-        job = db.execute("SELECT id,status,kind FROM studio_jobs WHERE project_id=? AND kind IN ('external','external_followup') "
-                         "ORDER BY created_at DESC,rowid DESC LIMIT 1", (project_id,)).fetchone()
+        # The round in progress if any, else the latest; legacy external rounds remain history.
+        job = db.execute("SELECT id,status,kind FROM studio_jobs WHERE project_id=? AND kind IN "
+                         "('collect','analyze','report','external','external_followup') "
+                         "ORDER BY status IN ('queued','running') DESC,created_at DESC,rowid DESC LIMIT 1",
+                         (project_id,)).fetchone()
         plan = db.execute('SELECT data FROM studio_plan WHERE project_id=?', (project_id,)).fetchone()
         pending = db.execute('SELECT count(*) FROM studio_items WHERE project_id=? AND triaged=0', (project_id,)).fetchone()[0]
-        # One external job opens one round (its follow-up finishes it); recovery reuses the same job id.
-        rounds = db.execute("SELECT count(*) FROM studio_jobs WHERE project_id=? AND kind='external'", (project_id,)).fetchone()[0]
+        # One collect (formerly one external) job opens one round.
+        rounds = db.execute("SELECT count(*) FROM studio_jobs WHERE project_id=? AND kind IN ('collect','external')",
+                            (project_id,)).fetchone()[0]
         plan_data = json.loads(plan[0]) if plan else {}
         report = plan_data.get('last_report') or {}
         collection_report = plan_data.get('collection_report') or {}
@@ -47,6 +51,17 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         dsh_coverage = db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='dsh_coverage'",
                                  (job['id'],)).fetchone() if job else None
         dsh_partial = bool(dsh_coverage and json.loads(dsh_coverage[0]).get('partial'))
+        from project_watch.studio.execution import JobExecution
+
+        update = JobExecution(store, {'id': job['id']}).read_checkpoint('update_run_state_v1', db=db) if job else None
+        update_partial = bool(update and update.get('status') != 'complete')
+        from project_watch.studio import collect_job
+
+        # Collection coverage only; analysis has its own state in the round view.
+        latest = db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='collect' AND status='done' "
+                            'ORDER BY created_at DESC,rowid DESC LIMIT 1', (project_id,)).fetchone()
+        collected = JobExecution(store, {'id': latest[0]}).read_checkpoint(collect_job.RESULT, db=db) if latest else None
+        round_partial = bool(collected and collected.get('status') != 'complete')
     rows = [row for row in report.values() if isinstance(row, dict)]
     failures = sum(len(row.get('errors') or []) for row in rows)
     checked = sum(row.get('checked', 0) for row in rows if type(row.get('checked', 0)) is int)
@@ -60,9 +75,11 @@ def read(store, project_id: str, *, days: int = 60) -> dict:
         state = 'partial'
     elif job and job['status'] in ('queued', 'running', 'failed'):
         state = job['status']
-    elif pending or failures or dsh_partial or collection_partial:
+    elif collected and collected.get('status') == 'failed':
+        state = 'failed'
+    elif pending or failures or dsh_partial or collection_partial or update_partial or round_partial:
         state = 'partial'
-    elif not completed_at or not checked:
+    elif not completed_at or not (checked or collected):
         state = 'unobserved'
     else:
         try:

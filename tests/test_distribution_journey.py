@@ -115,15 +115,24 @@ def test_all_search_failures_keep_visible_non_success_progress(journey, failure)
     assert '未见重要变化' not in detail['monitoring_progress']['empty_text']
 
 
-def test_quota_exhaustion_never_stamps_a_completed_round(journey):
+def _collected(app, pid):
+    from project_watch.studio import collect_job
+
+    with app.state.studio_pipeline.store._connect() as db:
+        job_id = db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='collect'", (pid,)).fetchone()[0]
+    return collect_job.summary(app.state.studio_pipeline.store, job_id)
+
+
+def test_quota_exhaustion_is_a_partial_round_with_the_failed_source_named(journey):
     client, app, transport = journey
     configure(client)
     transport.search_failure = 'quota'
     transport.news_failure = 'quota'
-    _pid, detail = run_name_journey(client, app)
-    assert detail['monitoring_progress']['state'] == 'partial'  # Known baseline, not a blank result.
-    assert detail['plan']['last_report']['company']['errors']
-    assert detail['project']['last_external_at'] is None
+    pid, detail = run_name_journey(client, app)
+    # Open-data sources still collected; search is named as not collected, not a blank result.
+    assert detail['monitoring_progress']['state'] == 'partial'
+    result = _collected(app, pid)
+    assert result['status'] == 'partial' and any(r['source'] == 'search' for r in result['not_collected'])
 
 
 def test_network_failure_updates_source_health(journey):
@@ -131,12 +140,12 @@ def test_network_failure_updates_source_health(journey):
     configure(client)
     transport.search_failure = 'offline'
     transport.news_failure = 'offline'
-    _pid, detail = run_name_journey(client, app)
-    assert detail['monitoring_progress']['state'] == 'failed', detail['monitoring_progress']
-    assert detail['project']['last_external_at'] is None
-    assert any(j['error'] for j in detail['jobs'])
+    pid, detail = run_name_journey(client, app)
+    assert detail['monitoring_progress']['state'] == 'partial', detail['monitoring_progress']
+    assert {r['reason'] for r in _collected(app, pid)['not_collected'] if r['source'] == 'search'} == {'connection_failed'}
     health = app.state.studio_pipeline.health.read(detail['project']['id'])
-    assert health['coverage'] == 'unavailable', health
+    assert health['coverage'] == 'partial', health
+    assert {r['source_kind']: r['status'] for r in health['sources']}['company'] == 'unavailable'
 
 
 def test_news_failure_message_never_echoes_network_exception(journey):

@@ -7,7 +7,7 @@ export function monitoringRevision(detail: ProjectDetail) {
 }
 
 export function insightRevision(detail: ProjectDetail) {
-  return `${monitoringRevision(detail)}|${(detail.jobs ?? []).filter(j => j.kind === "insight")
+  return `${monitoringRevision(detail)}|${(detail.jobs ?? []).filter(j => (j.kind === "insight" || j.kind === "analyze"))
     .map(j => `${j.id}:${j.status}:${j.finished_at ?? ""}`).join("|")}`;
 }
 
@@ -39,6 +39,7 @@ export const JOB_LABEL: Record<string, string> = {
   brief: "生成简报", public_profile: "补充公开档案", landscape: "整理竞争与行业",
   business: "整理产品与用途", competition: "更新竞对资料", details: "整理商业关系与政策条件",
   commercial: "更新专业来源", insight: "深度分析",
+  collect: "收录公开信息", analyze: "分析本轮信息", report: "整理本轮动态",
 };
 export const isMoving = (state: string) => state === "running" || state === "waiting_response" || state === "stopping";
 export const needsAttention = (state: string) => ["failed", "needs_confirmation", "stalled", "partial", "blocked", "offline", "recovering", "unavailable"].includes(state);
@@ -75,6 +76,8 @@ export function unresolvedJobs<T extends Job & { project_id?: string }>(jobs: T[
 
 /** A quiet reminder is not a successful outcome. Never infer a retry from partial coverage. */
 export function jobReason(job: Job) {
+  if (job.runtime?.continuation_wait) return '已保存完成的批次；后续批次尚未发送。同项目其他请求处理后，将沿原任务继续。';
+  if (job.runtime?.blocking_jobs?.length) return '本次未执行，先前请求结果待核；已有结果保留。';
   const state = job.runtime?.state ?? job.status;
   if (state === "partial") return job.runtime?.label?.trim() || "部分内容已完成，其余暂未取得结果。";
   if (state === "needs_confirmation") return job.runtime?.label?.includes('模型服务出错')

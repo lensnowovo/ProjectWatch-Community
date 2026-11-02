@@ -4,7 +4,6 @@ import json
 import pytest
 
 from project_watch.studio.app import create_studio_app
-from project_watch.studio.dsh_bootstrap import PublicBootstrap
 from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import Http, HttpError, Response
 from project_watch.studio.settings import ModelConfig, SearchConfig, SettingsStore, StudioSettings
@@ -32,13 +31,14 @@ def collector(handler, mode="auto"):
     return Collectors(Http(send), config), seen
 
 
-def test_deepseek_preferred_content_retained_date_not_promoted():
+def test_deepseek_preferred_content_retained_and_page_date_labelled():
     c, seen = collector(lambda *a: response({"results": [page()]}))
     hit = c.web_search("Synthetic Optics", count=10)[0]
     assert len(seen) == 1 and seen[0][0].endswith("/tools/search")
     assert seen[0][1] == {"query": "Synthetic Optics", "count": 10, "need_content": True}
     assert hit["extra"]["search_content"] == "2025年意向订单500万元。"
-    assert hit["published_at"] is None
+    # No date in the URL or the page text: the provider's page date is used and labelled as such.
+    assert hit["published_at"] == "2026-01-01T00:00:00+00:00" and hit["extra"]["date_source"] == "search"
     assert hit["extra"]["provider_date"] == "2026-01-01T00:00:00Z"
 
 
@@ -99,57 +99,10 @@ def test_combined_and_legacy_modes_preserved():
     assert "bochaai" in seen[0][0]
 
 
-def make_loop(tmp_path, content, *, no_content=False):
-    app = create_studio_app(tmp_path, start_worker=False)
-    pipe = app.state.studio_pipeline
-    p = pipe.repository.create_project("Synthetic Optics")
-    pipe.store.upsert_project(p.id, {"legal_name": "Synthetic Optics"}, consent=True)
-    pipe.store.enqueue(p.id, "external")
-    job = pipe.store.claim()
-    execution = JobExecution(pipe.store, job)
-    calls = []
-    def transport(method, url, headers, body, timeout):
-        calls.append(url)
-        return response({"content": content}) if url.endswith("/fetch") else response(
-            {"results": [page(content="" if no_content else content),
-                         page(url="https://example.com/product#page3", content="" if no_content else content)]})
-    http = execution.http(Http(transport), lambda url: ("page" if url.endswith("/fetch") else "search", "synthetic"))
-    class Reader:
-        def read(self, url):
-            raise AssertionError("cached body must not request another origin")
-    c = Collectors(http, SearchConfig("deepseek", "synthetic-key"))
-    return PublicBootstrap(pipe, execution, c, Reader()), calls
 
 
-def test_cached_body_is_windowed_without_losing_tail_or_requesting_again(tmp_path):
-    text = "甲" * 30005 + "2025年意向订单500万元。"
-    loop, calls = make_loop(tmp_path, text)
-    results = loop.tool("pw_search", {"query": "Synthetic Optics", "category": "company"})
-    assert len(results["sources"]) == 1 and results["sources"][0]["body_available"]
-    assert len(loop.source("S1")["locators"]) == 2
-    assert text not in json.dumps(results, ensure_ascii=False)
-    window = loop.tool("pw_read", {"source_id": "S1"})
-    assert len(window["excerpt"]) == 12000 and window["next_offset"] == 12000
-    tail = loop.tool("pw_read", {"source_id": "S1", "offset": 29995})
-    assert tail["excerpt"].endswith("2025年意向订单500万元。") and tail["next_offset"] is None
-    loop.tool("pw_record", {"source_id": "S1", "kind": "business", "label": "订单",
-                           "quote": "2025年意向订单500万元。", "text": "2025年意向订单500万元。"})
-    assert len(calls) == 1 and tail["read_scope"] == "partial"
-    from project_watch.studio.dsh_bootstrap import RecordValidationError
-    with pytest.raises(RecordValidationError) as error:
-        loop.tool("pw_record", {"source_id": "S1", "kind": "business", "label": "订单",
-                               "quote": "2025年意向订单500万元。", "text": "2025年订单500万元。"})
-    assert any(issue["code"] == "missing_qualifications" for issue in error.value.issues)
-    assert loop.execution.usage()["search"]["requests"] == 1
 
 
-def test_fetch_cached_and_journaled_separately(tmp_path):
-    loop, calls = make_loop(tmp_path, "Synthetic Optics 开发光学模组。", no_content=True)
-    loop.tool("pw_search", {"query": "Synthetic Optics", "category": "company"})
-    loop.tool("pw_read", {"source_id": "S1"})
-    loop.tool("pw_read", {"source_id": "S1"})
-    assert len(calls) == 2 and calls[-1].endswith("/fetch")
-    assert loop.execution.usage()["page"]["requests"] == 1
 
 
 def test_settings_keep_old_keys_and_mask_new_key(tmp_path):
@@ -162,16 +115,6 @@ def test_settings_keep_old_keys_and_mask_new_key(tmp_path):
     assert len(store.load().search.enabled()) == 4
 
 
-def test_deepseek_project_cache_survives_restart(tmp_path):
-    from project_watch.studio.query_ledger import ProjectQueryCache
-
-    loop, calls = make_loop(tmp_path, "甲" * 45000)
-    signature = ("deepseek", "synthetic-account", "Synthetic", False, 10)
-    cache = ProjectQueryCache(loop.store, loop.project_id, purpose="external")
-    cache.get(signature, lambda: loop.collectors.web_search("Synthetic"))
-    restored = ProjectQueryCache(loop.store, loop.project_id, purpose="competition")
-    hits, cached = restored.get(signature, lambda: pytest.fail("must reuse completed search"))
-    assert cached and len(hits[0]["extra"]["search_content"]) == 45000 and len(calls) == 1
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1/a", "http://[::1]/a", "https://service.internal/a",
@@ -187,7 +130,7 @@ def test_model_and_search_on_same_host_are_classified_separately(tmp_path):
     pipe = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
     project = pipe.repository.create_project("Synthetic")
     pipe.store.upsert_project(project.id, {"legal_name": "Synthetic"}, consent=True)
-    pipe.store.enqueue(project.id, "external")
+    pipe.store.enqueue(project.id, "collect")
     execution = JobExecution(pipe.store, pipe.store.claim())
     pipe._execution_state.current = execution
     pipe.http_factory = lambda _: Http(lambda *a: response({"usage": {"prompt_tokens": 2, "completion_tokens": 1}}))
@@ -201,16 +144,3 @@ def test_model_and_search_on_same_host_are_classified_separately(tmp_path):
     assert sorted((r["kind"], r["input_tokens"]) for r in rows) == [("model", 2), ("page", None), ("search", None)]
 
 
-def test_bootstrap_child_is_claimable_only_after_parent_finishes(tmp_path, monkeypatch):
-    from project_watch.studio import dsh_runtime
-
-    loop, _ = make_loop(tmp_path, "Synthetic Optics")
-    monkeypatch.setenv("PROJECT_WATCH_DSH_RUNTIME", "synthetic")
-    monkeypatch.setenv("PROJECT_WATCH_DSH_MONITOR", "1")
-    monkeypatch.setattr(dsh_runtime, "run_bootstrap", lambda *a: {})
-    job = loop.execution.job
-    loop.pipeline.run(job)
-    assert loop.store.claim() is None
-    loop.store.finish(job["id"], lease_token=job["lease_token"])
-    child = loop.store.claim()
-    assert child["kind"] == "external_followup" and child["input_version"] == job["id"]

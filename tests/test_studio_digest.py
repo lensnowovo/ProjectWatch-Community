@@ -85,7 +85,7 @@ def test_digest_groups_events_by_project_and_lists_quiet_ones(app):
     text = dg.digest_markdown(data)
     assert "## 光启视界" in text and "【重大】公司" in text
     assert "[光启视界完成3亿元B轮融资](https://direct.example/1)" in text and "意义：资金可覆盖" in text
-    assert "已收录信息未见重要变化：合成医药" in text
+    assert "本期未列入重要变化的项目：合成医药" in text
     compact = dg.digest_markdown(data, compact=True)
     assert "意义" not in compact and "无明显变化" not in compact
 

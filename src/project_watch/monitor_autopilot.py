@@ -142,8 +142,6 @@ class MonitorAutopilot:
                     with suppress(ValueError, ReadingDenied):
                         self.analysis.connect(row, strategy)
                 continue
-            if model.disclosure().get('remaining_runs',0) <= 0:
-                return None
             claimed = self.ledger.claim(row['job_id'])
             if claimed is None:
                 continue

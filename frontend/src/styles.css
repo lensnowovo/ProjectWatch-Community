@@ -447,6 +447,9 @@ select { width: auto; cursor: pointer; }
 .dot-major { background: var(--wine); box-shadow: 0 0 0 3px var(--wine-soft); }
 .dot-notable { background: var(--brass); }
 .dot-routine { background: var(--line-strong); }
+.dot-pending { border: 1px solid var(--line-strong); background: transparent; }
+.imp-pending { color: var(--muted); }
+.ns-pending { background: repeating-linear-gradient(45deg, var(--line-strong) 0 2px, transparent 2px 5px); }
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--brass); animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
 .spinner-wrap { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
@@ -2309,14 +2312,22 @@ input.search, .search, .more-search { min-height: var(--control-h); border-radiu
 }
 
 .tabs { align-items: center; }
-/* 移出关注: quiet action with an inline confirmation. */
+/* 移出关注: quiet trigger; confirmation is outside table/card layout. */
 .remove-wrap { position: relative; display: inline-flex; }
 .btn-remove { color: var(--muted); }
 .btn-remove:hover { color: var(--wine); }
-.remove-confirm { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; width: 280px; padding: 16px 16px; border-radius: 10px;
-  background: var(--paper); border: 1px solid var(--line-strong); box-shadow: 0 16px 36px -18px rgba(0, 0, 0, .45); display: grid; gap: 12px; }
-.remove-confirm p { margin: 0; font-size: 13px; line-height: 1.65; color: var(--ink-2); }
-.remove-confirm div { display: flex; gap: 8px; justify-content: flex-end; }
+.remove-project-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px);
+  margin: auto; padding: 28px; overflow: auto; white-space: normal; text-align: left; overflow-wrap: anywhere;
+  color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 12px;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .45); }
+.remove-project-dialog::backdrop { background: rgba(15, 16, 18, .34); backdrop-filter: blur(1px); }
+.remove-project-dialog h2 { margin: 0 0 20px; font-family: var(--serif); font-size: 22px; line-height: 1.3; }
+.remove-project-copy { display: grid; gap: 12px; font-size: 14px; line-height: 1.7; color: var(--ink-2); }
+.remove-project-copy p { margin: 0; }
+.remove-project-copy .remove-project-name { font-size: 16px; font-weight: 600; color: var(--ink); }
+.remove-project-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.remove-project-actions .btn { min-height: 40px; }
+@media (max-width: 480px) { .remove-project-dialog { padding: 22px; } }
 .btn.btn-danger { background: var(--wine); border-color: var(--wine); color: #fff; }
 .btn.btn-danger:hover { filter: brightness(1.1); }
 .removed-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
@@ -2329,6 +2340,7 @@ input.search, .search, .more-search { min-height: var(--control-h); border-radiu
 .portfolio .cell-actions { width: 1%; white-space: nowrap; text-align: right; }
 .portfolio tr .btn-row-remove { opacity: 0; transition: opacity .15s; }
 .portfolio tr:hover .btn-row-remove, .portfolio tr:focus-within .btn-row-remove, .btn-row-remove[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .portfolio tr .btn-row-remove { opacity: 1; } }
 .pc-actions { display: inline-flex; align-items: center; gap: 8px; }
 .removed-projects { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 16px; }
 .removed-projects summary { cursor: pointer; font-size: 14px; color: var(--ink-2); display: flex; gap: 12px; align-items: baseline; }
@@ -3115,7 +3127,7 @@ g[role="button"]:hover > .bar { fill: color-mix(in srgb, var(--brass) 70%, var(-
 .portfolio { table-layout: fixed; width: 100%; }
 .portfolio col.pcol-company { width: 15%; } .portfolio col.pcol-judge { width: 25%; } .portfolio col.pcol-todo { width: 10%; }
 .portfolio col.pcol-major { width: 7%; } .portfolio col.pcol-unread { width: 6%; } .portfolio col.pcol-rev { width: 10%; }
-.portfolio col.pcol-runway { width: 8%; } .portfolio col.pcol-recent { width: 16%; } .portfolio col.pcol-act { width: 3%; }
+.portfolio col.pcol-runway { width: 8%; } .portfolio col.pcol-recent { width: auto; } .portfolio col.pcol-act { width: 76px; }
 .portfolio td, .portfolio th { vertical-align: top; }
 .portfolio td .truncate-2 { overflow-wrap: anywhere; }
 /* The company cell holds a name and one line of context, so a long industry string cannot

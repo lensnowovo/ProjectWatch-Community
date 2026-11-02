@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from project_watch.local_ocr import ocr_capabilities
 from project_watch.static_files import ProductStaticFiles
 from project_watch.studio import digest as dg
-from project_watch.studio import finance, review
+from project_watch.studio import finance, review, spine
 from project_watch.studio.agent_access import attach_agent_routes
 from project_watch.studio.application import StudioApplication
 from project_watch.studio.direct_operations import OperationBlocked
@@ -30,7 +30,7 @@ from project_watch.studio.public_profile import company_trials
 from project_watch.studio.resolve import resolve_company
 from project_watch.studio.settings import SearchConfig, SettingsStore, SettingsUnavailable
 from project_watch.studio.sources import Collectors
-from project_watch.studio.store import FollowupSuperseded, StudioStore
+from project_watch.studio.store import StudioStore
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 DRAFT_TTL_SECONDS = 6 * 3600
@@ -108,17 +108,6 @@ class RefreshRequest(BaseModel):
     kind: Literal["internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight"] = "external"
 
 
-class TopicRequest(BaseModel):
-    watch_id: str = Field(min_length=1, max_length=64)
-    expected_version: str = Field(min_length=1, max_length=64)
-
-
-class RecoveryRequest(BaseModel):
-    expected_version: str = Field(min_length=1, max_length=64)
-    idempotency_key: str = Field(min_length=8, max_length=100)
-    accept_duplicate_cost: bool = Field(strict=True)
-
-
 class DirectRetryRequest(BaseModel):
     accept_duplicate_cost: bool = Field(strict=True)
 
@@ -153,6 +142,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     plan_templates.load_local(data_dir / "plan_templates")  # instance-local industry methods (e.g. converted NEI)
     pipeline = Pipeline(repository, store, settings_store)
     pipeline.monitoring_plan.migrate_framework()  # once: earlier eight sections → four rings, nine dimensions
+    # Unfinished jobs of retired kinds end as 'archived'; their requests stay in the journal, never resent.
+    from project_watch.studio.dispatch import archive_legacy
+
+    archive_legacy(store)
     # Only the composition root may import optional private implementations.
     validator = None
     try:
@@ -186,7 +179,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         pipeline.insight_available = all((race_plugin, red_flags_plugin, track_plugin, techroutes_plugin))
         validator = assess_relation
         pipeline.relationships.assessment_validator = validator
-    studio_worker = StudioWorker(pipeline)
+    studio_worker = StudioWorker(pipeline, lanes=True)
     app.state.studio_store = store
     app.state.studio_pipeline = pipeline
     app.state.studio_worker = studio_worker
@@ -210,10 +203,11 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     async def drain_admission(request, call_next):
         nonlocal active_writes
         is_write = request.url.path.startswith('/api/') and request.method not in ('GET', 'HEAD', 'OPTIONS')
-        counted = is_write and request.url.path != '/api/studio/runtime/drain'
+        exit_control = request.url.path in ('/api/studio/runtime/drain', '/api/desktop/exit')
+        counted = is_write and not exit_control
         if (draining.is_set() and request.url.path.startswith('/api/')
                 and request.method not in ('GET', 'HEAD', 'OPTIONS')
-                and request.url.path != '/api/studio/runtime/drain'):
+                and not exit_control):
             return JSONResponse(status_code=503, content={'detail': '正在停止后台，请稍后重新启动再操作。',
                                                           'code': 'runtime_draining'})
         if counted:
@@ -277,25 +271,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             return SettingsStore.public_view(settings_store.update(body))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-
-    @app.get("/api/studio/settings/executor")
-    def get_executor():
-        from project_watch.studio import public_executor
-
-        return public_executor.current(data_dir)
-
-    @app.put("/api/studio/settings/executor")
-    def put_executor(body: dict):
-        from project_watch.studio import public_executor
-
-        if type(body.get('enabled')) is not bool:
-            raise HTTPException(422, 'enabled 必须是 true 或 false')
-        if not public_executor.current(data_dir)['configurable']:
-            raise HTTPException(409, {'code': 'executor_not_configurable',
-                                      'message': '当前以开发方式运行，执行方式由环境变量决定。'})
-        # Saved only; the running worker keeps its executor until the app restarts.
-        public_executor.write_choice(data_dir, body['enabled'])
-        return public_executor.current(data_dir)
 
     @app.get('/api/studio/projects/{project_id}/commercial')
     def commercial_view(project_id: str):
@@ -652,7 +627,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                                                reference=stored.display_name,
                                                content_sha256=stored.sha256, db=db)
                 repository.enqueue_intake(project.id, source.id, db=db)
-            store.enqueue(project.id, "external", db=db)
+            spine.request_round(store, project.id, 'created', db=db)
             return {'id': project.id}
 
         try:
@@ -699,6 +674,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         from project_watch.studio.milestones import read as read_milestones
         from project_watch.studio.observations import read as read_observations
         from project_watch.studio.progress import read as read_progress
+        from project_watch.studio.research_sources import research_source_counts
         from project_watch.studio.runtime_health import project_jobs
 
         project = project_or_404(project_id)
@@ -717,7 +693,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         metrics = store.list_metrics(project_id)
         detail_result = pipeline.structured_facts.get(project_id)
         from project_watch.studio.agent_results import project_projection
-        from project_watch.studio.collection_dsh import latest_report
 
         return project_projection(store, project_id, {
             "project": project,
@@ -732,7 +707,9 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "trials": company_trials(project, store.list_items(project_id=project_id, category="trial", limit=100)),
             "brief": store.get_brief(project_id),
             "plan": plan,
-            "collection_report": latest_report(store, project_id),
+            "collection_report": None,  # per-source receipts now live in the round view (/round)
+            # Counts what the pages count; unmatched verdicts are listed apart as 待核实.
+            "research_source_counts": research_source_counts(store, project_id, review=('confirmed', 'pending')),
             "metrics": metrics,
             "finance": finance.view(metrics),
             "landscape": _landscape_view(project_id),
@@ -805,7 +782,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         project = project_or_404(project_id)
         store.upsert_project(project_id, {**project, "legal_name": project.get("legal_name") or project["name"]},
                              consent=True)
-        store.enqueue(project_id, "external")
+        spine.request_round(store, project_id, 'manual')
         return store.get_project(project_id)
 
     @app.post("/api/studio/projects/{project_id}/files", status_code=202)
@@ -841,39 +818,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         store.reset_analyzed(project_id)
         return {"status": retried.status}
 
-    @app.get('/api/studio/projects/{project_id}/research-topic/{watch_id}')
-    def research_topic_result(project_id: str, watch_id: str):
-        from project_watch.studio.dsh_topic import latest_topic
-
-        project_or_404(project_id)
-        try:
-            return latest_topic(store, project_id, watch_id, pipeline=pipeline)
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(409, '专题结果暂时无法核验，请保留原任务并检查本地回执') from exc
-
-    @app.post('/api/studio/projects/{project_id}/research-topic', status_code=202)
-    def research_topic(project_id: str, body: TopicRequest):
-        from project_watch.studio.dsh_runtime import runtime_entry
-        from project_watch.studio.dsh_topic import enqueue_topic
-        from project_watch.studio.public_executor import require_available
-
-        project_or_404(project_id)
-        try:
-            require_available()
-            root = os.environ.get('PROJECT_WATCH_DSH_RUNTIME')
-            if not root or os.environ.get('PROJECT_WATCH_DSH_MONITOR') != '1':
-                raise ValueError('专题研究需要启用 DSH 监控')
-            if not runtime_entry(Path(root)).is_file():
-                raise ValueError('DSH 运行时不可用')
-            settings = settings_store.load()
-            if not settings.model.ready or not settings.search.ready_providers():
-                raise ValueError('请先配置模型与搜索服务')
-            return enqueue_topic(pipeline, project_id, body.watch_id, body.expected_version)
-        except (ValueError, OSError) as exc:
-            raise HTTPException(409, str(exc)) from exc
-
     @app.post("/api/studio/projects/{project_id}/refresh", status_code=202)
     def refresh(project_id: str, body: RefreshRequest):
         project = project_or_404(project_id)
@@ -881,16 +825,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             raise HTTPException(409, '此项目由已有 Agent 更新。请到“连接 Agent”复制研究指令，不会调用内置 API。')
         if not project.get("activated"):
             raise HTTPException(409, "项目尚未启动监控")
-        if body.kind == 'external_followup':
-            if project['status'] != 'active':
-                raise HTTPException(409, '请先恢复监控')
-            try:
-                return store.retry_external_followup(project_id)
-            except FollowupSuperseded:
-                # Stale receipts are not resumed; the owner's rerun starts a round on current inputs.
-                return store.enqueue(project_id, 'external')
-            except ValueError as exc:
-                raise HTTPException(409, str(exc)) from exc
+        if body.kind in ('external', 'external_followup'):
+            # One round: collect, then analysis and report on the collected batch.
+            # Earlier unsettled requests are accounted per request, never a reason to refuse.
+            return spine.request_round(store, project_id, 'manual')
         if body.kind == 'commercial':
             if project['status'] != 'active':
                 raise HTTPException(409, '请先恢复监控')
@@ -912,11 +850,10 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                                           'message': '当前安装未包含深度分析生成器；已有记录仍可查看'})
             if not settings_store.load().model.ready:
                 raise HTTPException(409, '请先在设置中连接 AI 模型')
-            from project_watch.studio import insight
-
-            if insight.held(store, project_id):
-                raise HTTPException(409, '该项目有结果不明的模型请求等待确认恢复；请先处理原任务')
-            return store.enqueue(project_id, 'insight', input_version='manual:' + uuid.uuid4().hex)
+            if project['status'] != 'active':
+                raise HTTPException(409, '请先恢复监控')
+            # Analysis on a fresh snapshot of saved material; it never collects.
+            return store.enqueue(project_id, 'analyze', input_version='manual:' + uuid.uuid4().hex)
         if body.kind == "internal":
             store.reset_analyzed(project_id)
         if body.kind == 'details':
@@ -984,6 +921,9 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             app.state.reading_worker.request_stop()
         return runtime_health()
 
+    # Only the desktop owner attaches process-control routes.
+    app.state.request_desktop_drain = drain_runtime
+
     @app.post("/api/studio/tasks/{job_id}/dismiss", status_code=204)
     def dismiss_task(job_id: str):
         """Quiet an incomplete outcome's reminder; never mark it successful or retry it."""
@@ -1024,7 +964,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         project_or_404(project_id)
         with closing(store._connect()) as db:
             job = db.execute("SELECT id, status, error, created_at, started_at, finished_at FROM studio_jobs "
-                             "WHERE project_id=? AND kind='insight' ORDER BY created_at DESC, rowid DESC LIMIT 1", (project_id,)).fetchone()
+                             "WHERE project_id=? AND kind='analyze' ORDER BY created_at DESC, rowid DESC LIMIT 1", (project_id,)).fetchone()
         from project_watch.studio.agent_results import insight_history, insight_projection
 
         return {"record": insight_projection(store, project_id, insight.load(store, project_id)), "history": insight_history(store, project_id, insight.history(store, project_id)),
@@ -1044,13 +984,6 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         if found is None:
             raise HTTPException(404, "事件不存在")
         return found
-
-    @app.get('/api/studio/projects/{project_id}/recovery')
-    def project_recovery_preview(project_id: str):
-        from project_watch.studio.recovery import project_preview
-
-        project_or_404(project_id)
-        return project_preview(pipeline, project_id)
 
     @app.get('/api/studio/projects/{project_id}/events/{event_id}/merges')
     def event_merges(project_id: str, event_id: str):
@@ -1072,29 +1005,25 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         except (ValueError, HttpError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
-    @app.get('/api/studio/projects/{project_id}/jobs/{job_id}/recovery')
-    def recovery_preview(project_id: str, job_id: str):
-        from project_watch.studio.recovery import preview
-
-        project_or_404(project_id)
-        try:
-            return preview(pipeline, project_id, job_id)
-        except KeyError as exc:
-            raise HTTPException(404, '任务不存在') from exc
-
-    @app.post('/api/studio/projects/{project_id}/jobs/{job_id}/recovery', status_code=202)
-    def recovery_authorize(project_id: str, job_id: str, body: RecoveryRequest):
-        from project_watch.studio.recovery import authorize
-
-        project_or_404(project_id)
-        try:
-            return authorize(pipeline, project_id, job_id, **body.model_dump())
-        except KeyError as exc:
-            raise HTTPException(404, '任务不存在') from exc
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-
     # ------------------------------------------------------------- feed
+    @app.get("/api/studio/projects/{project_id}/research-sources")
+    def research_sources(project_id: str, category: str, limit: int = 40, offset: int = 0,
+                         revision: str | None = None):
+        from project_watch.studio.research_sources import SourceRevisionChanged
+        from project_watch.studio.research_sources import research_sources as source_page
+
+        project_or_404(project_id)
+        try:
+            return source_page(store, project_id, category, limit=limit, offset=offset, revision=revision)
+        except SourceRevisionChanged:
+            return JSONResponse(status_code=409, content={'code': 'research_sources_changed', 'detail': '来源已更新，正在重新读取'})
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    from project_watch.studio import spine_api
+
+    spine_api.attach(app, store, project_or_404)
+
     @app.get("/api/studio/projects/{project_id}/discovered-sources")
     def discovered_sources(project_id: str, limit: int = 20, offset: int = 0):
         from project_watch.studio.collection_view import discovered_sources as source_page
@@ -1110,13 +1039,24 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         return store.list_items(project_id=project_id, category=category, importance=importance,
                                 since_days=days, limit=limit, offset=max(0, offset))
 
+    @app.get("/api/studio/events/summary")
+    def event_window_summary(days: int = 7, project_id: str | None = None,
+                             category: str | None = None, importance: str | None = None):
+        from project_watch.studio import news_window
+
+        if days not in (7, 14, 30, 90):
+            raise HTTPException(400, "只支持 7/14/30/90 天")
+        summary = news_window.summarize(store, days, project_id=project_id,
+                                       category=category, importance=importance)
+        return {**summary, "note": news_window.explanation(summary)}
+
     @app.get("/api/studio/events")
     def events(project_id: str | None = None, category: str | None = None,
                importance: str | None = None, days: int | None = None,
                limit: int = 50, offset: int = 0):
         limit = max(1, min(limit, 200))
         return store.list_events(project_id=project_id, category=category, importance=importance,
-                                 since_days=days, limit=limit, offset=max(0, offset))
+                                 since_days=days, dated_only=True, limit=limit, offset=max(0, offset))
 
     @app.patch("/api/studio/events/{event_id}")
     def patch_event(event_id: str, body: ItemPatch):

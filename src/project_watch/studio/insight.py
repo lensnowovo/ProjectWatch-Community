@@ -20,7 +20,7 @@ VERDICTS: dict[str, dict[str, str]] = {
 }
 
 SOURCE_LABEL = {"D": "内部资料", "M": "财务指标", "F": "融资数据库", "N": "公司新闻", "C": "竞品动态", "I": "行业与政策", "A": "论文",
-                "P": "专利", "T": "临床试验", "L": "竞争与行业整理", "W": "公开档案"}
+                "P": "专利", "T": "临床试验", "L": "竞争与行业整理", "W": "公开档案", "S": "公开候选材料"}
 
 def counts(numbered: dict) -> dict[str, int]:
     out: dict[str, int] = {}
@@ -34,7 +34,8 @@ def load(store, project_id: str) -> dict | None:
     if record and record.get('artifact_key'):
         dependency = store.evidence.dependencies.get(project_id, record['artifact_key'])
         record.update(dependency=dependency, status=(dependency or {}).get('status', 'stale'))
-    return record
+    from project_watch.studio.section_analysis import project
+    return project(store, project_id, record)
 
 
 def history(store, project_id: str) -> list[dict]:
@@ -52,6 +53,29 @@ def history(store, project_id: str) -> list[dict]:
                 result.append(dict(version_id=version['id'], generated_at=version['generated_at'], headline=analysis['headline'],
                     position=analysis['position']['verdict'], maturity=analysis['technology']['maturity'],
                     consensus=analysis['technology']['consensus'], industry=analysis['industry']['verdict']))
+            from project_watch.studio import material_snapshot
+            rows = db.execute("SELECT record FROM studio_insight_versions WHERE project_id=? "
+                "AND artifact_key LIKE 'snapshot-section:%' ORDER BY created_at,rowid", (project_id,)).fetchall()
+            sections, groups = {}, {}
+            for row in rows:
+                version = json.loads(row[0])
+                try:
+                    for eid in version['evidence_ids']:
+                        material_snapshot._permitted(db, project_id, eid)
+                except ValueError:
+                    continue
+                sections[version['section']] = version
+                values = {key: record['analysis'] for key, record in sections.items()}
+                groups[version['job_id']] = dict(version_id=version['id'], generated_at=version['generated_at'],
+                    headline='', position=values.get('position', {}).get('verdict', 'unclear'),
+                    maturity=values.get('technology', {}).get('maturity', 'unclear'),
+                    consensus=values.get('technology', {}).get('consensus', 'unclear'),
+                    industry=values.get('industry', {}).get('verdict', 'unclear'),
+                    operations=values.get('operations', {}).get('verdict', 'unclear'),
+                    chain=values.get('chain', {}).get('verdict', 'unclear'),
+                    section_versions={key: dict(version_id=record['id'], generated_at=record['generated_at'])
+                                      for key, record in sections.items()})
+            result.extend(groups.values())
     return sorted(result, key=lambda r: r['generated_at'], reverse=True)[:10]
 
 
@@ -76,14 +100,3 @@ def save(store, project_id: str, analysis: dict, gathered: dict, model: str = ""
             db.execute('INSERT INTO studio_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                        (key, json.dumps(value, ensure_ascii=False)))
     return record
-
-def held(store, project_id: str) -> bool:
-    """A paid model request with an unknown outcome holds the whole project until its owner confirms recovery.
-
-    Deep analysis is another model round; it must not bypass that hold (project-wide, like question rounds).
-    """
-    from project_watch.studio.recovery import UNRESOLVED
-
-    with closing(store._connect()) as db:
-        return bool(db.execute(f"SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-                               f"WHERE j.project_id=? AND c.kind='model' AND {UNRESOLVED} LIMIT 1", (project_id,)).fetchone())

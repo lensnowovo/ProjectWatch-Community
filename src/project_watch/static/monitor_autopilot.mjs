@@ -23,7 +23,7 @@ export async function openMonitorAutopilot({projectId,sources,request,onChanged,
     const data=await request(route);if(!dialog.isConnected)return;
     statusBox.replaceChildren();
     for(const w of data.workflows||[]){const row=el('div','consent-grant');row.append(el('strong','',workflowCopy(w.state)),el('p','reading-note',`${sources.find(s=>s.id===w.source_id)?.reference||'BP'} · 已调用 ${w.requests_used} 次`));
-      if(w.analysis?.enabled)row.append(el('p','reading-note',`消息解读 ${w.analysis.requests_used} / ${w.analysis.max_requests} 次${w.state==='paused'?' · 已暂停':''}`));
+      if(w.analysis?.enabled)row.append(el('p','reading-note',`消息解读 已调用 ${w.analysis.requests_used} 次${w.state==='paused'?' · 已暂停':''}`));
       if(!w.analysis?.read_articles&&!['paused','material_changed','strategy_changed'].includes(w.state))row.append(action(w.analysis?.enabled?'启用正文解读':'接通消息解读',()=>run(async()=>{view=await send(`${route}/${w.id}/analysis-preview`,{});showDisclosure(true);})));
       if(w.state==='activation_failed')row.append(action('重试建立监控（不重读 BP）',()=>run(async()=>{await send(`${route}/${w.id}/retry-activation`,{});await status();await onChanged();})));
       if(w.state!=='paused')row.append(action('暂停',()=>run(async()=>{await send(`${route}/${w.id}/pause`,{});await status();await onChanged();})));statusBox.append(row);}
@@ -68,7 +68,7 @@ export async function openMonitorAutopilot({projectId,sources,request,onChanged,
   function showDisclosure(existing){
     disclosure.replaceChildren();
     disclosure.append(el('h3','','本次使用范围'),el('p','reading-note',`${view.recipient.base_url} · ${view.recipient.model}\n${view.bp_reused?'沿用已有 BP 工作流，不重复调用':`${view.packet.excerpts.length} 段内容 · BP 理解最多调用 1 次${existing?'（模型或理解规则已更新）':''}`}`),el('p','reading-note',view.notice));
-    if(view.analysis){const detail=el('details','consent-existing');detail.append(el('summary','',`消息解读使用的 ${view.analysis.material_refs.length} 段 BP 原文`));for(const ref of view.analysis.material_refs)detail.append(el('p','reading-note',`${ref.locator}\n${ref.text}`));disclosure.append(el('p','reading-note',`${view.analysis.public_source_note} 解读最多 ${view.analysis.max_requests} 次，重启不重置；BP 换版后停止。仅使用下面的 BP 片段，不读取其他材料。原有摘要解读保留，本次正文解读单独计数。`),detail);}
+    if(view.analysis){const detail=el('details','consent-existing');detail.append(el('summary','',`消息解读使用的 ${view.analysis.material_refs.length} 段 BP 原文`));for(const ref of view.analysis.material_refs)detail.append(el('p','reading-note',`${ref.locator}\n${ref.text}`));disclosure.append(el('p','reading-note',`${view.analysis.public_source_note} 调用次数不设上限；BP 换版后停止。仅使用下面的 BP 片段，不读取其他材料。原有摘要解读保留，本次正文解读单独计数。`),detail);}
     const label=el('label','consent-check'),consent=el('input');consent.type='checkbox';label.append(consent,el('span','','确认这些片段可外发至上述模型，其中公司及产品名称可用于公开检索。'));disclosure.append(label);
     disclosure.append(action(existing?'接通解读':'开始监控',()=>run(async()=>{if(!view||!consent.checked)throw Error('请先确认本次发送范围。');await send(route,{packet:view.packet,model_consent:true,public_consent:true,automatic_analysis:view.automatic_analysis,disclosure_digest:view.disclosure_digest});invalidate();await status();await onChanged();})));
     disclosure.scrollIntoView({block:'nearest',behavior:'smooth'});

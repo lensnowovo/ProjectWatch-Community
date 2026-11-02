@@ -418,7 +418,7 @@ def test_unreadable_reports_fall_back_to_twin_text_or_search_summary(tmp_path):
     assert coverage["outlets"] == [{"host": "walled.example", "read": 0, "total": 2}]
 
 
-def test_body_budget_does_not_hide_unread_reports_from_coverage(tmp_path, monkeypatch):
+def test_unreadable_reports_keep_their_summary_and_stay_in_coverage(tmp_path):
     from project_watch.repository import ProjectRepository
     from project_watch.studio import pipeline as module
     from project_watch.studio.settings import SettingsStore
@@ -431,10 +431,10 @@ def test_body_budget_does_not_hide_unread_reports_from_coverage(tmp_path, monkey
     store.add_items(project.id, "company", [
         {"key": str(i), "title": f"新闻{i}", "url": f"https://budget.example/{i}", "source": "搜索",
          "snippet": snippet, "published_at": None} for i, snippet in enumerate([long_summary, "短摘要"])])
-    monkeypatch.setattr(module, "BODY_FETCH_LIMIT", 0)
     pipeline = module.Pipeline(repo, store, SettingsStore(tmp_path / "settings.json"), article_reader=_Reader())
-    assert pipeline.fetch_bodies(project.id, lambda _: None) == 0
-    assert {r["body_status"] for r in store.untriaged(project.id)} == {"search_summary", "not_read"}
+    assert pipeline.fetch_bodies(project.id, lambda _: None) == 0  # neither page yields article text
+    statuses = {r["body_status"] for r in store.untriaged(project.id)}
+    assert "search_summary" in statuses and len(statuses) == 2  # the long summary is kept, labelled as such
     coverage = store.body_coverage(project.id)
     assert coverage["total"] == 2 and coverage["summary"] == coverage["none"] == 1
 

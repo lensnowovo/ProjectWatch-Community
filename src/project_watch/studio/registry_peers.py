@@ -301,7 +301,7 @@ def registry_queries(profiles):
             query = {'intervention': intervention, 'location': location}
             if query not in queries:
                 queries.append(query)
-    return queries[:MAX_REQUESTS]
+    return queries
 
 
 def _clean(value, limit=None):

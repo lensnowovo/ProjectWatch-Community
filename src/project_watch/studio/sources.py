@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
+from project_watch.studio import publication_dates
 from project_watch.studio.http import Http, HttpError
 from project_watch.studio.settings import RegistryConfig, SearchConfig
 
@@ -117,21 +118,50 @@ def _iso(value) -> str | None:
     return None
 
 
+def _source_name(value: str) -> str:
+    """Some search providers return the site name as UTF-8 hex (e.g. 人民网 → e4babae6b091e7bd91)."""
+    text = (value or "").strip()
+    if len(text) >= 6 and len(text) % 2 == 0 and re.fullmatch(r"[0-9a-f]+", text):
+        try:
+            decoded = bytes.fromhex(text).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return text
+        # Non-ASCII text, or plain words (e.g. "ASCO Publications"), not binary noise.
+        if decoded.isprintable() and (not decoded.isascii() or re.fullmatch(r"[A-Za-z][\w .,&'()-]*[A-Za-z.)]", decoded)):
+            return decoded
+    return text
+
+
 def _item(kind: str, title: str, url: str, *, source: str, snippet: str = "",
           published_at=None, extra: dict | None = None) -> dict:
+    extra = dict(extra or {})
+    if _iso(published_at) is None:
+        head = extra.get("search_content") or snippet or ""
+        published_at, origin = publication_dates.derive(url, head, extra.get("provider_date"))
+        if origin:
+            extra["date_source"] = origin
     return {
         "kind": kind,
         "title": " ".join((title or "").split())[:300],
         "url": (url or "")[:2048],
-        "source": (source or "")[:120],
+        "source": _source_name(source)[:120],
         "snippet": " ".join((snippet or "").split())[:1200],
         "published_at": _iso(published_at),
-        "extra": extra or {},
+        "extra": extra,
         "key": item_key(url, title),
     }
 
 
 CN_REGULATORY_HOSTS = ("chinadrugtrials.org.cn", "cde.org.cn", "nmpa.gov.cn")
+# Registration / acceptance / approval pages; other regulator pages (news, notices) are policy.
+_REGISTRATION = re.compile(r"CTR\d{4,}|临床试验|试验登记|登记信息|受理号|受理|获批|批准|上市许可|注册证|默示许可|突破性治疗|优先审评")
+
+
+def regulatory_kind(url: str, title: str, snippet: str = "") -> str:
+    """trial for the trial registry or a registration/approval page; policy for other regulator pages."""
+    if _host_in(url, ("chinadrugtrials.org.cn",)) or _REGISTRATION.search(f"{title or ''} {snippet or ''}"):
+        return "trial"
+    return "policy"
 REGISTRY_CHANGE_DAYS = 730  # older registry changes are history, not news
 
 
@@ -225,7 +255,7 @@ class Collectors:
             for r in self.web_search(f"site:{site} {name}", count=8):
                 if _host_in(r["url"], CN_REGULATORY_HOSTS) and r["key"] not in seen:
                     seen.add(r["key"])
-                    out.append(dict(r, kind="trial", source=r["source"] or site))
+                    out.append(dict(r, kind=regulatory_kind(r["url"], r["title"], r.get("snippet", "")), source=r["source"] or site))
         return out
 
     # ---------- China: business registry changes (Tianyancha key) ----------
@@ -514,15 +544,12 @@ class Collectors:
 
     # ---------- papers (free) ----------
     def openalex(self, query: str, *, affiliation: bool = False, author: bool = False, per_page: int = 15) -> list[dict]:
+        from project_watch.studio.openalex_query import get_results, scope_params
+
         params = {"per-page": per_page, "sort": "publication_date:desc",
                   "select": "id,doi,display_name,publication_date,primary_location,authorships,cited_by_count,abstract_inverted_index"}
-        if affiliation:
-            params["filter"] = f"raw_affiliation_strings.search:{query}"
-        elif author:
-            params["filter"] = f"raw_author_name.search:{query}"
-        else:
-            params["search"] = query
-        data = self.http.get_json("https://api.openalex.org/works?" + urlencode(params))
+        params.update(scope_params(query, 'affiliation' if affiliation else 'author' if author else 'topic'))
+        data = get_results(self.http, "https://api.openalex.org/works?" + urlencode(params))
         items = []
         for work in data.get("results") or []:
             if not isinstance(work, dict):

@@ -22,7 +22,7 @@ import { TrackBoard } from "../track";
 import { TechRoutes } from "../tech";
 import { projectWork, needsAttention, isMoving } from "../workState";
 import { ProjectActivity, useVisiblePoll } from "../Operational";
-import { RecoveryDialog } from '../RecoveryDialog';
+import { RoundProgress } from '../roundView';
 import { IndustryJudgment, TechnologyJudgment } from "../judgment";
 import { insightRevision, workRevision } from "../workState";
 import { ClinicalView, PapersView, PatentsView } from "../researchPages";
@@ -31,6 +31,7 @@ import { FinanceAnalysisView } from "../financeAnalysis";
 import { useDossierMotion } from '../DossierMotion';
 import { ScopeReading, scopeRelations, scopeReports } from '../ScopeReading';
 import { externalCollection } from '../externalCollection';
+import { hasClinicalScope } from '../externalNavigation';
 
 /** Five sections (8945); each holds one or more of the original pages, which stay the URL's ?tab= values so every
  * existing link keeps working. */
@@ -100,8 +101,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
         ))}
       </nav>
       </div>
-      {section.id === "external" && <CategoryStrip key={data.project.id} detail={data} page={tab} go={setTab} />}
-      {section.id === "external" && <DiscoveredSources key={data.project.id} projectId={data.project.id}
+      {section.id === "external" && <CategoryStrip key={`categories:${data.project.id}`} detail={data} page={tab} go={setTab} />}
+      {section.id === "external" && <DiscoveredSources key={`sources:${data.project.id}`} projectId={data.project.id}
         revision={data.collection_report?.observed_at ?? commercialRevision} />}
       {section.id === "internal" && <PageStrip label="内部信息分区" page={tab} go={setTab} cells={internalCounts(data)} />}
       {section.pages.length > 1 && section.id !== "external" && section.id !== "internal" && <nav className="subtabs" aria-label={`${section.label}分区`}>
@@ -153,15 +154,17 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
   };
   const [error, setError] = useState<unknown>(null);
   const toast = useToast();
+  const [refreshing, setRefreshing] = useState(false);
   const refresh = async () => {
-    setError(null);
+    if (refreshing) return;
+    setError(null); setRefreshing(true);
     try {
       await api.refresh(project.id, "external");
       toast("已加入更新队列");
       onReload();
     } catch (e) {
       setError(e);
-    }
+    } finally { setRefreshing(false); }
   };
   const toggle = async () => {
     const next = project.status === "paused" ? "active" : "paused";
@@ -179,7 +182,7 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
       <ProjectHeader detail={detail} goto={goto} actions={removed ? null : <>
         <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>
         {project.execution_mode === "agent" ? <Link className="btn" to={`/agents?project=${project.id}`}>用 Agent 更新</Link> : <>
-          <button className="btn" onClick={refresh} disabled={!project.activated}>立即更新</button>
+          <button className="btn" onClick={refresh} disabled={!project.activated || refreshing}>{refreshing ? '正在检查…' : '立即更新'}</button>
           <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
         </>}
       </>} status={status} />
@@ -190,26 +193,17 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
 }
 
 export function Progress({ detail, onReload }: { detail: ProjectDetail; onReload: () => void }) {
-  const [recovering, setRecovering] = useState(false);
   const work = projectWork(detail);
   const failed = work.failures.find(j => j.status === "failed");
-  const recoveryIndex = useAsync(() => api.recoveryProject(detail.project.id),
-    [detail.project.id, detail.jobs.map(j => `${j.id}:${j.status}`).join('|')]);
-  const pendingRecovery = !!recoveryIndex.data?.items.length;
-  const activeCount = detail.jobs.filter(j => j.status === "running" || j.status === "queued").length;
-  useEffect(() => { setRecovering(false); }, [detail.project.id, failed?.id, activeCount]);
   return <div className="progress op-project-progress">
     <ProjectActivity detail={detail} />
-    {(needsAttention(work.state) || work.stop || pendingRecovery) && <div className="op-help muted small">
+    {(needsAttention(work.state) || work.stop) && <div className="op-help muted small">
       已有结果保留。
       {work.stop ? <span>{errorMessage(work.stop.error)}</span>
         : failed?.error && <span>{errorMessage(failed.error)}</span>}
-      {pendingRecovery && <span>仍有待确认请求，完整链路尚未恢复。</span>}
-      {(failed || pendingRecovery) && <button className="link" onClick={() => setRecovering(true)}>查看恢复选项 →</button>}
-      {(work.state === "needs_confirmation" || work.stop?.state === "needs_confirmation") && " 不会自动重发结果不明的请求。"}
     </div>}
-    {recovering && <RecoveryDialog key={detail.project.id} projectId={detail.project.id} job={failed}
-      onClose={() => setRecovering(false)} onQueued={onReload} />}
+    {/* Stage by stage: collected material is visible before analysis; a failed analysis can be redone from it. */}
+    <RoundProgress projectId={detail.project.id} onReload={onReload} />
     {work.state === "agent" && <Link to={`/agents?project=${detail.project.id}`}>连接 Agent →</Link>}
     {detail.brief?.origin && <span className="muted small">{detail.brief.origin.producer} · 本批由外部 Agent 写回</span>}
     {detail.detail_summary?.status === "partial" && !work.moving && <span className="muted small">
@@ -517,12 +511,16 @@ const STRIP: { page: Tab; label: string; cats: Category[]; always: true }[] = [
 export function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
   const {data:plan,error,loading}=useAsync(()=>api.monitoringPlan(detail.project.id),[detail.project.id,workRevision(detail)]);
   const chainCount=plan&&!error&&!loading?scopeReports(plan,scopeRelations(plan,detail.project.id,'chain')).length:null;
-  const cells = STRIP.map((s) => {
+  // Preserve an explicitly opened historical clinical URL, even before its scope loads.
+  const cells = STRIP.filter(s => s.page !== 'trials' || hasClinicalScope(detail) || page === 'trials').map((s) => {
     const collection=externalCollection(detail, s.page==='chain'?['chain']:s.page==='industry'?['industry','policy','technology']:s.cats);
+    const counts = {...detail.counts, ...detail.research_source_counts};
+    const empty = s.cats.every(c => !(counts[c] ?? 0));
+    const professional = ['trials', 'papers', 'patents'].includes(s.page);
     return ({ ...s,
-    n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (detail.counts[c] ?? 0), 0),
-    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):s.cats.every(c => !(detail.counts[c]??0))?collection.label:undefined,
-    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':s.cats.every(c => !(detail.counts[c]??0))?`本栏目暂无收录。${collection.description}`:undefined,
+    n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (counts[c] ?? 0), 0),
+    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):empty?collection.label:professional?'来源':undefined,
+    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':empty?`本栏目暂无收录。${collection.description}`:professional?'已保存的公开相关来源，检索命中不代表公司归属。':undefined,
   }); });
   return <PageStrip label="外部信息分区" page={page} go={go} cells={cells} />;
 }

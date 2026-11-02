@@ -16,7 +16,7 @@ def test_worker_runtime_state_is_read_only(tmp_path, monkeypatch):
     pipeline = app.state.studio_pipeline
     pid = pipeline.repository.create_project('Synthetic Runtime').id
     pipeline.store.upsert_project(pid, {}, consent=True)
-    pipeline.store.enqueue(pid, 'external')
+    pipeline.store.enqueue(pid, 'collect')
     before = pipeline.store.jobs(pid)
     monkeypatch.setattr(pipeline, 'tools', lambda: pytest.fail('read must not call providers'))
     monkeypatch.setattr(pipeline.store, 'enqueue', lambda *_a, **_k: pytest.fail('read must not schedule'))

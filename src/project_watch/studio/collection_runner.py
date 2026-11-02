@@ -1,6 +1,8 @@
 """Serial host dispatch and ingestion under an existing job execution guard."""
 from project_watch.studio.http import HttpError
 
+STOP = frozenset(("project_paused", "project_not_consented"))
+
 
 def run_collection(ledger, *, collect, ingest, guard):
     """Run frozen pending units with durable fetched payloads before ingestion.
@@ -16,8 +18,6 @@ def run_collection(ledger, *, collect, ingest, guard):
     for unit in plan['units']:
         guard()
         old = next((r for r in ledger.receipts if r['unit_id'] == unit['id']), None)
-        if old and old['outcome'] == 'unknown':
-            raise HttpError('request_outcome_unknown')
         if unit['disposition'] != 'pending' or (old and old['outcome'] != 'running'):
             continue
         receipt = dict(round_id=plan['round_id'], unit_id=unit['id'], outcome='running')
@@ -45,25 +45,25 @@ def run_collection(ledger, *, collect, ingest, guard):
                                          next_cursor=payload.get('next_cursor'),
                                          **{key: payload[key] for key in ('pages_completed', 'visited_cursors') if key in payload},
                                          source_scope={key: payload[key] for key in
-                                                       ('coverage_kind', 'per_request_limit', 'window_applied')
+                                                       ('coverage_kind', 'per_request_limit', 'window_applied', 'dropped_records')
                                                        if key in payload},
                                          cache_provenance=payload.get('cache_provenance', [])))
         except HttpError as exc:
-            # A pause or a lease/config boundary is not a source result. Existing
-            # request journal recovery remains the only retry authority.
-            unknown = exc.code == 'request_outcome_unknown' or any(
-                value['unknown'] for value in execution.usage().values())
-            if unknown:
-                ledger.record(receipt | dict(outcome='unknown', reason='request_outcome_unknown'))
+            # A pause or missing consent stops the round. Everything else is this
+            # source's own outcome: an unclear request is recorded (never resent),
+            # a definite "not sent" (backoff, monthly budget, in flight) or a
+            # failed read leaves the other sources to run (dispatch.py).
+            if exc.code in STOP:
                 raise
-            if exc.code == 'request_budget':
+            if exc.code == 'request_outcome_unknown':
+                ledger.record(receipt | dict(outcome='unknown', reason=exc.code))
+            elif exc.code == 'request_budget':
                 ledger.record(receipt | dict(outcome='budget_deferred', reason=exc.code))
-                # One budget may be exhausted while another source is affordable;
-                # each subsequent admission still uses the execution budget gate.
-                continue
-            if exc.code in ('project_paused', 'provider_backoff'):
-                raise
-            ledger.record(receipt | dict(outcome='failed', reason=exc.code))
+            else:
+                ledger.record(receipt | dict(outcome='failed', reason=exc.code))
+        except (ConnectionError, TimeoutError) as exc:
+            # The journal already marked the request unknown (or a failed read).
+            ledger.record(receipt | dict(outcome='unknown', reason=type(exc).__name__))
         execution.yield_if_due()
     return ledger.coverage()
 

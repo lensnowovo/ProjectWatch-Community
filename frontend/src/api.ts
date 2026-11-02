@@ -180,6 +180,8 @@ export interface DocChange {
   texts: DocChangeEntry[];
 }
 export interface Item {
+  importance_status?: 'pending' | 'assessed';
+  importance_reason?: string;
   id: string;
   project_id: string;
   project_name: string;
@@ -210,6 +212,9 @@ export interface EventSource {
   body_status: string;
 }
 interface EventDTO {
+  news_date?: string | null;
+  importance_status?: 'pending' | 'assessed';
+  importance_reason?: string;
   id: string;
   project_id: string;
   project_name: string;
@@ -227,8 +232,9 @@ interface EventDTO {
   source_count: number;
 }
 const eventToItem = (e: EventDTO): Item => ({
+  importance_status: e.importance_status, importance_reason: e.importance_reason,
   id: e.id, project_id: e.project_id, project_name: e.project_name, category: e.category,
-  title: e.title, url: e.url, source: e.source, snippet: "", published_at: e.event_at ?? (e.sources[0]?.extra?.agent_result ? e.sources[0]?.published_at : null),
+  title: e.title, url: e.url, source: e.source, snippet: "", published_at: e.news_date !== undefined ? e.news_date : e.event_at ?? (e.sources[0]?.extra?.agent_result ? e.sources[0]?.published_at : null),
   collected_at: e.created_at, importance: e.importance, summary: e.summary, impact: e.impact,
   status: e.status, extra: { ...e.sources[0]?.extra, date_basis: e.event_at ? "event" : "reported" }, sources: e.sources, source_count: e.source_count,
 });
@@ -263,10 +269,13 @@ export interface InsightAnalysis {
   gaps: string[];
   cited: InsightRef[];
 }
-export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] }
+export interface ChainStage { stage: string; players: string[] }
+export interface RingJudgment { verdict: string; confidence: Confidence; summary: string; for: InsightPoint[]; against: InsightPoint[]; change_if: string[];
+  /** chain only: general up/downstream stages written from industry knowledge, not sourced facts. */
+  outline?: { upstream: ChainStage[]; downstream: ChainStage[] } }
 export interface InsightView {
   generation_available?: boolean;
-  record: { id?: string; status?: string; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
+  record: { id?: string; status?: string; section_versions?: Record<string, {version_id: string; generated_at: string; status: string}>; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
   history: { generated_at: string; headline: string; position: string; maturity: string; consensus: string; industry: string }[];
   job: { id: string; status: Job["status"]; error: string | null; created_at: string } | null;
   model_ready: boolean;
@@ -287,16 +296,6 @@ export interface PlanItem {
   scope_kind?: "" | "relation" | "question"; relation_type?: string; relation_target?: string; relation_aliases?: string[];
   /** Display module and its parameters (see plan_templates.MODULES). */
   view: string; view_params: Record<string, unknown>;
-}
-export interface TopicResearchView {
-  job: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
-  assessment_job?: Pick<Job, 'id' | 'status' | 'created_at' | 'finished_at'> | null;
-  question: { text: string; exit_rule: string; lifecycle_version: string } | null;
-  scope_changed: boolean;
-  result: { status: 'partial' | 'complete' | 'pending'; collection_status: 'partial' | 'complete' | null;
-    answer_status: 'answered' | 'insufficient' | 'unresolved'; text: string; gaps: string[];
-    knowledge_state?: 'answered' | 'unresolved' | 'unknown' | 'needs_recheck'; closure?: string;
-    sources: { ref: string; title: string; url: string; date: string; context: string; context_kind: string }[] } | null;
 }
 export interface ModuleHit { id?: string; title: string; url?: string; date: string; importance?: string; source?: string; planned?: boolean }
 export type PlanModule =
@@ -366,6 +365,8 @@ export interface MonitoringPlanView {
 }
 
 export interface JobRuntime {
+  blocking_jobs?: string[];
+  continuation_wait?: boolean;
   activity?: {
     records_saved?: number | null;
     model_requests: number; model_completed: number; search_completed: number;
@@ -401,25 +402,12 @@ export interface Job {
   runtime?: JobRuntime;
   dismissed?: boolean;
   id: string;
-  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope" | "assessment";
+  kind: "internal" | "external" | "external_followup" | "brief" | "public_profile" | "landscape" | "business" | "competition" | "details" | "commercial" | "insight" | "scope" | "assessment" | "collect" | "analyze" | "report";
   status: "queued" | "running" | "done" | "failed";
   stage: string;
   error: string;
   created_at: string;
   finished_at: string | null;
-}
-export interface RecoveryPreview {
-  job_id: string;
-  kind: Job['kind'];
-  version: string;
-  can_recover: boolean;
-  reason: string;
-  requests: Record<string, number>;
-  requires_duplicate_cost_consent: boolean;
-  job_status: string;
-  mode: 'resume' | 'checkpoint_continuation' | 'model_continuation';
-  notice: string;
-  continuation_job_id?: string | null;
 }
 export interface Plan {
   company_queries: string[];
@@ -474,6 +462,7 @@ export interface CollectionReport {
 }
 
 export interface ProjectDetail {
+  research_source_counts?: Partial<Record<'paper' | 'patent' | 'trial', number>>;
   collection_report?: CollectionReport | null;
   /** Read-only saved content revisions, not progress percentages or task outcomes. */
   dossier_saved?: { version: 1; relations: { revision: string; count: number }; judgment: { revision: string; count: number } };
@@ -621,7 +610,7 @@ export interface SettingsView {
 export interface CommercialView {
   investment_status: "watching" | "invested";
   private: boolean;
-  daily_queries: { used: number; limit: number; remaining: number };
+  daily_queries: { used: number; limit: number | null; remaining: number | null; historical_limit?: number };
   different_conventions: boolean;
   notice: string;
   records: { kind: "funding" | "news"; company: string; provider: string; title: string; date: string;
@@ -661,12 +650,20 @@ export interface DigestProject {
   monitoring_progress?: MonitoringProgress;
 }
 export interface Digest {
+  window_summary?: NewsWindowSummary;
+  window_note?: string;
   days: number; start: string; end: string; projects: DigestProject[]; quiet: string[];
   incomplete?: DigestPending[];
   totals: { projects: number; major: number; notable: number; doc_changes: number };
   markdown: string;
   attention?: Attention;
   notify: { ready: boolean; last: { at: string; sent: string[]; error: string } | null };
+}
+export interface NewsWindowSummary {
+  counts: { total: number; in_period: number; matching: number; undated: number; future: number; older: number;
+    pending: number; routine: number; major: number; notable: number };
+  progress: (MonitoringProgress & { id: string })[];
+  note?: string;
 }
 export type AttentionKind = "crosscheck" | "silence" | "watch" | "site";
 export interface AttentionEntry {
@@ -743,6 +740,7 @@ export interface Signals {
 export type FeedbackKind = "irrelevant" | "wrong_entity" | "bad_source" | "importance";
 
 export class ApiError extends Error {
+  code?: string;
   operationId?: string;
   operationStatus?: string;
 }
@@ -764,6 +762,7 @@ async function request<T>(method: string, url: string, body?: unknown, signal?: 
       : Array.isArray(detail) ? detail.map((d: { msg: string }) => d.msg).join("；")
       : `请求失败（${response.status}）`;
     const error = new ApiError(message);
+    if (typeof data?.code === 'string') error.code = data.code;
     if (data?.code === "operation_held" && typeof data.operation_id === "string") {
       error.operationId = data.operation_id;
       error.operationStatus = data.operation_status;
@@ -835,16 +834,9 @@ export interface UpdateView {
   handoff: string;
 }
 
-/** Which public-research executor the running app uses; a saved switch takes effect on restart. */
-export interface ExecutorView {
-  executor: "dsh" | "classic" | "unavailable";
-  source: "bundled" | "custom" | "environment" | "setting" | "default" | "upgrade_preserved";
-  reason: string | null; reason_text: string | null;
-  dsh_version: string; node_version: string | null;
-  configurable: boolean; saved_enabled: boolean | null;
-}
-
 export const api = {
+  desktopIdentity: () => request<{ instance: string; exit_available?: boolean; exit_requested?: boolean }>("GET", "/api/desktop/identity"),
+  exitDesktop: (instance: string) => request<{ instance: string; status: "exit_requested" }>("POST", "/api/desktop/exit", { instance }),
   updates: () => request<UpdateView>("GET", "/api/studio/updates"),
   checkUpdates: () => request<UpdateView>("POST", "/api/studio/updates/check"),
   selectCompetitor: (id: string, expectedVersion: number, name: string, decision: "include" | "exclude" | "reset", peerId?: string) =>
@@ -876,8 +868,6 @@ export const api = {
     entity: { legal_name: name }, consent: true, execution_mode: "agent", draft_ids: drafts,
   }),
   saveSettings: (patch: unknown) => request<SettingsView>("PUT", "/api/studio/settings", patch),
-  executor: () => request<ExecutorView>("GET", "/api/studio/settings/executor"),
-  saveExecutor: (enabled: boolean) => request<ExecutorView>("PUT", "/api/studio/settings/executor", { enabled }),
   testSettings: () =>
     request<Record<string, { ok: boolean | null; message: string }>>("POST", "/api/studio/settings/test"),
   testSetup: () =>
@@ -921,11 +911,17 @@ export const api = {
   insight: (id: string) => request<InsightView>("GET", `/api/studio/projects/${id}/insight`),
   eventContext: (projectId: string, eventId: string) => request<EventContext>("GET", `/api/studio/projects/${projectId}/events/${encodeURIComponent(eventId)}/context`),
   monitoringPlan: (id: string) => request<MonitoringPlanView>("GET", `/api/studio/projects/${id}/monitoring-plan`),
-  topicResearch: (id: string, watchId: string) => request<TopicResearchView>('GET',
-    `/api/studio/projects/${id}/research-topic/${encodeURIComponent(watchId)}`),
-  startTopicResearch: (id: string, watchId: string, version: string) => request<Job>('POST',
-    `/api/studio/projects/${id}/research-topic`, { watch_id: watchId, expected_version: version }),
   discoveredSources: (id: string, offset = 0) => request<DiscoveredSourcePage>('GET', `/api/studio/projects/${id}/discovered-sources?offset=${offset}`),
+  projectRound: (id: string) => request<ProjectRound>('GET', `/api/studio/projects/${id}/round`),
+  reanalyze: (id: string) => request<Job>('POST', `/api/studio/projects/${id}/reanalyze`, { accept_duplicate_cost: true }),
+  assumptions: (id: string, includeRetired = false) =>
+    request<{ items: Assumption[] }>('GET', `/api/studio/projects/${id}/assumptions${includeRetired ? '?include_retired=true' : ''}`),
+  addAssumption: (id: string, text: string) => request<Assumption>('POST', `/api/studio/projects/${id}/assumptions`, { text }),
+  patchAssumption: (id: string, assumptionId: string, change: { text?: string; status?: 'active' | 'retired' }) =>
+    request<Assumption>('PATCH', `/api/studio/projects/${id}/assumptions/${encodeURIComponent(assumptionId)}`, change),
+  warning: (id: string) => request<EarlyWarning | null>('GET', `/api/studio/projects/${id}/warning`),
+  researchSources: (id: string, category: ResearchCategory, offset = 0, revision?: string) =>
+    request<ResearchSourcePage>('GET', `/api/studio/projects/${id}/research-sources?${new URLSearchParams({category, offset: String(offset), ...(revision ? {revision} : {})})}`),
   collectionSources: (id: string) => request<CollectionSourceChoices>('GET', `/api/studio/projects/${id}/collection-sources`),
   chooseCollectionSource: (id: string, adapter: string, selection: SourceSelection, reason: string, expected_version: number) =>
     request<CollectionSourceDecision>('PUT', `/api/studio/projects/${id}/collection-sources/${encodeURIComponent(adapter)}`,
@@ -949,15 +945,11 @@ export const api = {
   restoreProject: (id: string) => request<Project>("POST", `/api/studio/projects/${id}/restore`),
   refresh: (id: string, kind: Job["kind"]) =>
     request<Job>("POST", `/api/studio/projects/${id}/refresh`, { kind }),
-  recoveryPreview: (id: string, jobId: string) =>
-    request<RecoveryPreview>('GET', `/api/studio/projects/${id}/jobs/${jobId}/recovery`),
-  recoveryProject: (id: string) =>
-    request<{ items: RecoveryPreview[] }>('GET', `/api/studio/projects/${id}/recovery`),
-  recover: (id: string, jobId: string, version: string, key: string) =>
-    request<{ job_id: string; status: string; recovery_id: string }>('POST',
-      `/api/studio/projects/${id}/jobs/${jobId}/recovery`, {
-        expected_version: version, idempotency_key: key, accept_duplicate_cost: true,
-      }),
+  feedSummary: (params: Record<string, string | number | undefined>) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && query.set(k, String(v)));
+    return request<NewsWindowSummary>("GET", `/api/studio/events/summary?${query}`);
+  },
   feed: (params: Record<string, string | number | undefined>) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => v !== undefined && v !== "" && query.set(k, String(v)));
@@ -984,10 +976,66 @@ export const api = {
   setCrossCheck: (checkId: string, status: CrossCheck["status"]) => request("PATCH", `/api/studio/crosschecks/${checkId}`, { status }),
   watchEvents: (watchId: string) => request<EventDTO[]>("GET", `/api/studio/watchpoints/${watchId}/events`).then((rows) => rows.map(eventToItem)),
 };
+export type ResearchCategory = 'paper' | 'patent' | 'trial';
+export interface ResearchSource {
+  family?: {key: string; basis?: 'family_id' | 'listed_versions' | 'document'; document_count: number; document_ids: string[]};
+  id: string; project_id: string; category: ResearchCategory;
+  title: string; url: string; source: string; snippet: string;
+  published_at: string | null; collected_at: string;
+  extra: Record<string, unknown>; processing_status: 'organized' | 'pending';
+  /** confirmed: reviewed and bound to the source; unreviewed: kept visible, not AI-checked. */
+  review?: 'confirmed' | 'unreviewed' | 'pending';
+  source_type: string | null; read_scope: string | null;
+  evidence_version_id: string | null; body_evidence_version_id: string | null;
+}
+export interface ResearchSourcePage {
+  family_count?: number | null;
+  project_id: string; category: ResearchCategory; revision: string;
+  items: ResearchSource[]; total: number; offset: number; next_offset: number | null;
+}
 export interface DiscoveredSourcePage {
   items: { id: string; title: string; url: string; source: string; published_at: string | null;
     collected_at: string; observed_at: string; evidence_version_id: string; source_type: string;
     read_scope: string; read_status: string | null; reading_basis: string | null;
     body_evidence_version_id: string | null; processing_status: 'pending' | 'organized' }[];
   total: number; pending: number; offset: number; next_offset: number | null;
+}
+
+/** The rewritten pipeline's latest round: collected → analysed → reported. */
+export interface RoundStage {
+  job_id: string; status: string; stage: string; started_at: string | null; finished_at: string | null; error: string;
+  result: null | {
+    status: 'complete' | 'partial' | 'failed' | 'waiting_for_model' | string;
+    outcomes?: Record<string, number>; patent_documents?: string[]; bodies_read?: number;
+    published?: string[]; items_reviewed?: number; follow_through?: Record<string, string>; new_events?: number;
+  };
+}
+export interface ProjectRound {
+  collect: RoundStage | null; analyze: RoundStage | null; report: RoundStage | null;
+  materials: Partial<Record<ResearchCategory, number>>; materials_unreviewed?: Partial<Record<ResearchCategory, number>>;
+  materials_collected?: Partial<Record<ResearchCategory, number>>;
+  running: boolean; can_reanalyze: boolean;
+  quality?: RoundQuality | null;
+}
+export interface RoundFigures {
+  collect_job_id: string; analyze_job_id: string | null; finished_at: string | null; items: number;
+  date_coverage: number | null; screened: number; relevant_share: number | null; matched_share: number | null;
+  sections: { published: number; considered: number; dropped_points: number; rejected: string[]; unchanged?: string[] } | null;
+  requests: number; unclear_requests: number; model_input_tokens: number;
+}
+export interface RoundQuality {
+  current: RoundFigures; previous: RoundFigures | null; warnings: string[];
+  stale_queries: { source: string; query: string; category: string; collected: number; screened: number; rounds: number }[];
+}
+export interface Assumption {
+  id: string; text: string; basis: string; status: 'active' | 'retired'; author: 'model' | 'user';
+  user_override: boolean; version: number; updated_at: string;
+}
+export interface WarningSource { id: string; title: string; url: string; source: string; published_at: string | null; category: string; importance: string }
+export interface EarlyWarning {
+  status: 'checked' | 'skipped'; reason?: string; created_at: string;
+  assumptions?: { id: string; text: string; status: 'strengthened' | 'weakened' | 'unchanged' | 'unclear';
+    signals: { item: string; why: string; source?: WarningSource }[] }[];
+  unforeseen?: { text: string; items: string[]; sources?: WarningSource[] }[];
+  explore?: { query: string; reason: string }[];
 }

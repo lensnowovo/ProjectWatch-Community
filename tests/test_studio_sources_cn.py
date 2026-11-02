@@ -102,36 +102,6 @@ def test_registry_error_is_reported_not_swallowed():
         raise AssertionError("expected registry_error")
 
 
-def test_collect_reports_domestic_sources_separately(tmp_path):
-    from project_watch.repository import ProjectRepository
-    from project_watch.studio.pipeline import Pipeline
-    from project_watch.studio.settings import SettingsStore
-    from project_watch.studio.store import StudioStore
-
-    def handler(method, url, headers, body):
-        if "cninfo" in url:
-            return Response(200, {}, json.dumps(CNINFO, ensure_ascii=False).encode())
-        if "tianyancha" in url:
-            return Response(200, {}, json.dumps({"error_code": 0, "result": {"items": [
-                {"changeItem": "法定代表人变更", "changeTime": "2026-09-01", "contentBefore": "甲", "contentAfter": "乙"}]}},
-                ensure_ascii=False).encode())
-        raise HttpError("connection_failed")
-
-    repo = ProjectRepository(tmp_path / "db.sqlite3")
-    project = repo.create_project("光启视界")
-    store = StudioStore(repo.db_path)
-    pipeline = Pipeline(repo, store, SettingsStore(tmp_path / "settings.json"))
-    http, _ = _web(handler)
-    collectors = Collectors(http, SearchConfig(), RegistryConfig("tianyancha", "k"))
-    plan = {"company_queries": ["光启视界"], "competitors": [{"name": "合成光电", "reason": ""}]}
-    report = pipeline.collect(project.id, plan, collectors, lambda _: None,
-                              {"legal_name": "光启视界科技有限公司"})
-    assert report["filing"]["added"] == 1 and report["filing"]["checked"] == 2  # same notice found twice
-    assert report["registry"]["added"] == 1
-    titles = {i["title"] for i in store.untriaged(project.id)}
-    assert "光启视界科技有限公司 工商变更：法定代表人变更" in titles
-    # Announcement PDFs and registry pages are judged on their metadata, never fetched as articles.
-    assert pipeline.fetch_bodies(project.id, lambda _: None) == 0
 
 
 def test_fulltext_filings_without_the_company_in_view_are_downgraded():

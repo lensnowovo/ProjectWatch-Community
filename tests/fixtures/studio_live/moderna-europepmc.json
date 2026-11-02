@@ -1,0 +1,1099 @@
+{
+  "provenance": {
+    "kind": "public_live",
+    "captured_at": "2026-10-31T17:05:16.354511+00:00",
+    "endpoint": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "company": "Moderna",
+    "operation": "europepmc",
+    "records": 4
+  },
+  "response": {
+    "format": "json",
+    "body": {
+      "hitCount": 12,
+      "resultList": {
+        "result": [
+          {
+            "id": "39045871",
+            "source": "MED",
+            "pmid": "39045871",
+            "pmcid": "PMC13370471",
+            "doi": "10.1093/cid/ciae386",
+            "title": "US Food and Drug Administration, Centers for Disease Control and Prevention, and National Institutes of Health Co-Sponsored Public Workshop Summary-Development Considerations of Antimicrobial Drugs for the Treatment of Gonorrhea.",
+            "firstPublicationDate": "2026-02-01",
+            "pubYear": "2026",
+            "isOpenAccess": "N",
+            "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA.",
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "Hiruy H",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Bala S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Byrne JM",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of Infectious Diseases, Office of New Drugs, CDER, FDA, Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Roche KG",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Jang SH",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Infectious Disease Pharmacology, Office of Clinical Pharmacology, Office of Translational Sciences, CDER, FDA, Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Kim P",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Nambiar S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Rubin D",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Biometrics IV, Office of Biostatistics, Office of Translational Sciences, CDER, FDA, Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Yasinskaya Y",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Anti-Infectives, Office of Infectious Diseases, Office of New Drugs, Center for Drug Evaluation and Research (CDER), US Food and Drug Administration (FDA), Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Bachmann LH",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of STD Prevention, National Center for HIV/AIDs, Viral Hepatitis, STD and TB Prevention (NCHHSTP), Centers for Disease Control and Prevention (CDC), Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Bernstein K",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of STD Prevention, NCHHSTP, CDC, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Botgros R",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of Biological Health Threats and Vaccines Strategy, Clinical Studies and Manufacturing Task Force, European Medicines Agency, Amsterdam, The Netherlands."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Cammarata S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Clinical Development, Melinta Therapeutics, Parsippany, New Jersey, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Chaves RL",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Clinical Development, Debiopharm International SA, Lausanne, Switzerland."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Deal CD",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Enteric and Sexually Transmitted Infections Branch, Division of Microbiology and Infectious Diseases (DMID), National Institute of Allergy and Infectious Diseases (NIAID), National Institutes of Health (NIH), Bethesda, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Drusano GL",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Institute for Therapeutic Innovation, College of Medicine, University of Florida, Lake Nona, Florida, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Duffy EM",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Combating Antibiotic-Resistant Bacteria Biopharmaceutical Accelerator (CARB-X), Boston University, Boston, Massachusetts, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Eakin AE",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of Biodefense, Research Resources & Translational Research, DMID, NIAID, NIH, Bethesda, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Gelone S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of the President - Clinical Research and Development, Nabriva Therapeutics plc, Fort Washington, Pennsylvania, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hiltke T",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Enteric and Sexually Transmitted Infections Branch, DMID, NIAID, NIH, Bethesda, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hook EW 3rd",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, University of Alabama at Birmingham, Birmingham, Alabama, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Jerse AE",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Microbiology and Immunology, Uniformed Services University, Bethesda, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "McNeil CJ",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, Section on Infectious Diseases, Wake Forest University School of Medicine, Southeast STD/HIV PTC, Forsyth County Department of Public Health, and North Carolina Strengthening the United States Response to Resistant Gonorrhea, Winston-Salem, North Carolina, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Newman L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Enteric and Sexually Transmitted Infections Branch, DMID, NIAID, NIH, Rockville, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "O'Brien S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Director- Research and Development, Global Antibiotic Research & Development Partnership, Geneva, Switzerland."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Perry C",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Clinical Research and Early Programs, GlaxoSmithKline, Collegeville, Pennsylvania, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Reno HEL",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Washington University School of Medicine in St. Louis, St. Louis STD/HIV Prevention Training Center, St. Louis STI Regional Response Coalition, St. Louis, Missouri, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Romaguera RA",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of STD Prevention, NCHHSTP, CDC, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Sato J",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of International Programs, Pharmaceuticals and Medical Devices Agency (PMDA), Tokyo, Japan."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Unemo M",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "World Health Organization (WHO) Collaborating Centre for Gonorrhea and Other STIs, Örebro University, Örebro, Sweden."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Wi TEC",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Global HIV, Hepatitis and STIs Programmes, WHO, Geneva, Switzerland."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Workowski K",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, Emory University, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "O'May GA",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "DRT Strategies, Inc, Arlington, Virginia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Shukla SJ",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of Infectious Diseases, Office of New Drugs, CDER, FDA, Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Farley JJ",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Office of Infectious Diseases, Office of New Drugs, CDER, FDA, Silver Spring, Maryland, USA."
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "41210227",
+            "source": "MED",
+            "pmid": "41210227",
+            "pmcid": "PMC12589089",
+            "doi": "10.3389/fped.2025.1657706",
+            "title": "Connecting research and community: a methodological framework for investigating CMV transmission in childcare settings.",
+            "firstPublicationDate": "2025-10-23",
+            "pubYear": "2025",
+            "isOpenAccess": "Y",
+            "license": "cc by",
+            "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States.",
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "Del'Olio K",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Geiger A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Terry J",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Callaghan C",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Academic Services Group, University of Massachusetts Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Howe L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "empHowered PR, LLC, Leominster, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hamel C",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Platia D",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Blake A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Tran L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Davenport A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Orvek E",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Population and Quantitative Health Sciences, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Lammi S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Barton B",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Population and Quantitative Health Sciences, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Kowalik T",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Microbiology, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Holik J",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Microbiology, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Mirza A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Microbiology, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Cojohari O",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Microbiology, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Woods K",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Druker S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Naeem SS",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Diaz-Decaro JD",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hayden M",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Lasso IL",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Gulpinar J",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Basnet S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Panther L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Natenshon A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "ModernaTX, Inc., Cambridge, MA, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Suvarna T",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "CareEvolution, Ann Arbor, MI, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Harman E",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "CareEvolution, Ann Arbor, MI, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Bridges K",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "CareEvolution, Ann Arbor, MI, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Schrader S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "CareEvolution, Ann Arbor, MI, United States."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Gibson L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Infectious Disease and Immunology, Departments of Medicine and of Pediatrics, UMass Chan Medical School, Worcester, MA, United States."
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "40657165",
+            "source": "MED",
+            "pmid": "40657165",
+            "pmcid": "PMC12247161",
+            "doi": "10.1093/ofid/ofaf366",
+            "title": "Viral Etiologies of Acute Respiratory Illness in Older Adults and of Congestive Heart Failure and Chronic Obstructive Pulmonary Disease Exacerbations Requiring Hospitalization During 2 Prepandemic Respiratory Seasons.",
+            "firstPublicationDate": "2025-06-20",
+            "pubYear": "2025",
+            "isOpenAccess": "Y",
+            "license": "cc by-nc-nd",
+            "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA.",
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "Choi C",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Ess G",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Tippett A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Salazar L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Taylor EG",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Ciric C",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Reese O",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Cheng A",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, Hope Clinic, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Gibson T",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Li W",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hsiao HM",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hellmeister K",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, Hope Clinic, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Al-Husein Z",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, Hope Clinic, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Hubler R",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Begier E",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Liu Q",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Uppal S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Kalina WV",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Gessner B",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Jodar L",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Pfizer, Inc. New York, New York, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Kamidani S",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      },
+                      {
+                        "affiliation": "Center for Childhood Infections and Vaccines, Children's Healthcare of Atlanta, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Kao C",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      },
+                      {
+                        "affiliation": "Center for Childhood Infections and Vaccines, Children's Healthcare of Atlanta, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Yildirim I",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Yale-New Haven Hospital, New Haven, Connecticut, USA."
+                      },
+                      {
+                        "affiliation": "Department of Epidemiology of Microbial Diseases, Yale School of Public Health, New Haven, Connecticut, USA."
+                      },
+                      {
+                        "affiliation": "Yale Institute for Global Health, Yale School of Public Health, New Haven, Connecticut, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Anderson LJ",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      },
+                      {
+                        "affiliation": "Center for Childhood Infections and Vaccines, Children's Healthcare of Atlanta, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Rouphael N",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Medicine, Hope Clinic, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Anderson EJ",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      },
+                      {
+                        "affiliation": "Department of Medicine, Hope Clinic, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      },
+                      {
+                        "affiliation": "Center for Childhood Infections and Vaccines, Children's Healthcare of Atlanta, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Rostad CA",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Department of Pediatrics, Emory University School of Medicine, Atlanta, Georgia, USA."
+                      },
+                      {
+                        "affiliation": "Center for Childhood Infections and Vaccines, Children's Healthcare of Atlanta, Atlanta, Georgia, USA."
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "40305122",
+            "source": "MED",
+            "pmid": "40305122",
+            "pmcid": "PMC12121687",
+            "doi": "10.1002/jgc4.70033",
+            "title": "Balancing independence: Priorities, tensions, obstacles, and facilitators for independence among young adults with skeletal dysplasia and short stature.",
+            "firstPublicationDate": "2025-06-01",
+            "pubYear": "2025",
+            "isOpenAccess": "N",
+            "affiliation": "Division of Human Genetics, Cincinnati Children's Hospital Medical Center, Cincinnati, Ohio, USA.",
+            "authorList": {
+              "author": [
+                {
+                  "fullName": "Ricks SJ",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Human Genetics, Cincinnati Children's Hospital Medical Center, Cincinnati, Ohio, USA."
+                      },
+                      {
+                        "affiliation": "College of Medicine, University of Cincinnati, Cincinnati, Ohio, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Johnson J",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Human Genetics, Cincinnati Children's Hospital Medical Center, Cincinnati, Ohio, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Ayers KB",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Developmental and Behavioral Pediatrics, University of Cincinnati Center for Excellence in Developmental Disabilities (UCCEDD), Cincinnati Children's Hospital Medical Center, Cincinnati, Ohio, USA."
+                      },
+                      {
+                        "affiliation": "Department of Pediatrics, University of Cincinnati College of Medicine, Cincinnati, Ohio, USA."
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fullName": "Pena LDM",
+                  "authorAffiliationDetailsList": {
+                    "authorAffiliation": [
+                      {
+                        "affiliation": "Division of Human Genetics, Cincinnati Children's Hospital Medical Center, Cincinnati, Ohio, USA."
+                      },
+                      {
+                        "affiliation": "Department of Pediatrics, University of Cincinnati College of Medicine, Cincinnati, Ohio, USA."
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

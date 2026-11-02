@@ -182,6 +182,11 @@ def safe_article_links(parent, links):
 def extract_article(body: bytes, content_type: str, *, source_url=None):
     if len(body) > MAX_FEED_BYTES:
         return _empty(error_code='oversized_body')
+    from project_watch.open_paper import extract, paper_id
+
+    pmcid = paper_id(source_url)
+    if pmcid and content_type.split(';')[0].strip().lower() in {'application/xml', 'text/xml'}:
+        return extract(body, pmcid, limit=MAX_TEXT_CHARS)
     if content_type.split(';')[0].strip().lower() not in {'text/html', 'application/xhtml+xml'}:
         return _empty(error_code='unsupported_media_type')
     # Respect declared encodings; never silently decode corrupt input as evidence.
@@ -256,6 +261,7 @@ def resolve_article(host, *, resolver=None, public_dns=None):
 
 
 READER_FAILURE_CODES = frozenset({
+    'unreadable_xml', 'paper_identity_mismatch', 'open_paper_unavailable',
     'disallowed_url', 'dns_failure', 'disallowed_address', 'connection_failed',
     'oversized_feed', 'invalid_redirect', 'rate_limited', 'http_failure',
     'too_many_redirects', 'tls_verification_failed', 'host_network_unavailable',

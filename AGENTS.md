@@ -15,9 +15,9 @@ is the source of truth for the independent PE/VC project monitoring product.
 - Existing localhost/WSL/Docker services are not disposable test fixtures. Use
   separate temporary databases and free ports; do not silently downgrade isolation.
 - Run pytest, Node tests, lint, wheel build and fresh-install smoke after risky
-  changes. PostgreSQL tests require a dedicated empty `_test` database. Report
+  changes. Report
   skips and model/network limitations honestly.
-- Local/SQLite and PostgreSQL/team alpha do not have identical capabilities.
+- Only the personal local/SQLite edition is supported; the PostgreSQL team alpha was removed.
 - UI is plain-language, neutral and information-first. No single-side decorative
   card bars; prioritize readable tables, chart evidence and whitespace.
 - Developer documentation and code determine current boundaries. Do not copy

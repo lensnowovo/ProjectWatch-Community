@@ -1,6 +1,6 @@
 import { Skeleton } from "../frame";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, type ExecutorView, type NotifyView, type SettingsView, type UpdateView } from "../api";
+import { api, type NotifyView, type SettingsView, type UpdateView } from "../api";
 import { Page, ThemeToggle, useToast } from "../motion";
 import { ErrorNote, Spinner, useAsync } from "../ui";
 import { Seg } from "../widgets";
@@ -74,14 +74,13 @@ type Form = {
   baseline: number;
 };
 
-const SECTIONS: { id: SectionId | "overview" | "executor" | "interface" | "usage"; label: string }[] = [
+const SECTIONS: { id: SectionId | "overview" | "interface" | "usage"; label: string }[] = [
   { id: "overview", label: "配置概况" },
   { id: "model", label: "AI 模型" },
   { id: "search", label: "新闻与搜索" },
   { id: "data", label: "工商与专业数据" },
   { id: "notify", label: "推送" },
   { id: "network", label: "更新与网络" },
-  { id: "executor", label: "研究引擎" },
   { id: "interface", label: "界面" },
   { id: "usage", label: "用量" },
 ];
@@ -382,12 +381,6 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
                 onChange={(e) => set("commercial", { ...form.commercial, model_use: e.target.checked })} />
               <span>交给 AI 深度分析<small className="muted">开启后，本公司与同行的融资记录会作为依据发送给模型服务，用于判断竞争位置与资本情况。请确认与数据服务商的协议允许这样使用。</small></span>
             </label>
-            <label className="field"><span>每天新查询上限（所有项目合计）</span>
-              <select value={form.commercial.daily_limit} onChange={(e) => set("commercial", { ...form.commercial, daily_limit: Number(e.target.value) })}>
-                {[3, 6, 12, 24, 60].map((n) => <option key={n} value={n}>{n} 次</option>)}
-              </select>
-              <small className="muted">缓存读取不计入；失败与结果未确认的请求也计入。不是金额预算，账单以服务商为准。</small>
-            </label>
             <p className="muted small">保存后到项目「公司动态」点击更新，可查看各家结果；连接测试不批量查询商业来源。</p>
           </Section>
 
@@ -473,8 +466,6 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
               </div>
             </details>
           </Section>
-
-          <ExecutorCard />
 
           <section className="card card-pad settings-section" id="settings-interface">
             <div className="card-head"><h2>界面</h2><span className="muted small">仅保存在本浏览器，立即生效</span></div>
@@ -684,7 +675,7 @@ function overview(data: SettingsView, tests: Tests | null): Row[] {
       state: data.registry.provider !== "none" || commercialReady.length ? "已启用" : "未使用",
       tone: data.registry.provider !== "none" || commercialReady.length ? "ok" : "off",
       detail: [data.registry.provider === "tianyancha" ? "天眼查" : "", ...commercialReady].filter(Boolean).join("、")
-        + (commercialReady.length ? ` · 每天最多 ${data.commercial?.daily_limit} 次新查询` : "") || "—" },
+        || "—" },
     { id: "notify", label: "推送",
       state: data.notify?.ready ? "已配置" : "未推送", tone: data.notify?.ready ? "ok" : "off",
       detail: data.notify?.ready ? [NOTIFY_LABEL[data.notify.kind],
@@ -695,45 +686,3 @@ function overview(data: SettingsView, tests: Tests | null): Row[] {
   ];
 }
 
-const EXECUTOR_SOURCE: Record<ExecutorView["source"], string> = {
-  bundled: "安装包自带", custom: "自定义路径", environment: "环境变量", setting: "设置", default: "默认",
-  upgrade_preserved: "沿用升级前的执行方式",
-};
-
-/** The public-research engine. Saved here, applied on the next start; an unavailable DSH never falls back silently. */
-export function ExecutorCard() {
-  const { data, error, setData } = useAsync(() => api.executor(), []);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<unknown>(null);
-  const running = data ? data.executor !== "classic" : false;
-  const wanted = data?.saved_enabled ?? running;
-  const pending = !!data && data.saved_enabled !== null && data.saved_enabled !== running;
-  const change = async (enabled: boolean) => {
-    setSaving(true); setSaveError(null);
-    try { setData(await api.saveExecutor(enabled)); } catch (e) { setSaveError(e); } finally { setSaving(false); }
-  };
-  const state = !data ? null : data.executor === "dsh" ? <span className="tag tag-ok">DSH 已启用</span>
-    : data.executor === "unavailable" ? <span className="tag tag-warn">不可用</span> : <span className="tag">经典流程</span>;
-  return <section className="card card-pad settings-section" id="settings-executor">
-    <div className="card-head"><h2>研究引擎</h2>{state}</div>
-    {error ? <ErrorNote error={error} /> : !data ? <Skeleton lines={2} /> : <>
-      <p className="muted small">
-        {data.executor === "dsh" ? "由 DSH 决定检索、阅读和补全的顺序；模型与搜索请求仍经过本机网关，逐次记录用量与回执。"
-          : data.executor === "unavailable" ? `${data.reason_text ?? "DSH 无法启动。"} 自动研究已暂停，已有结果保留；不会改用经典流程。`
-          : "按固定顺序采集、阅读和整理公开信息。"}
-      </p>
-      <dl className="settings-prefs">
-        <div><dt>当前使用</dt><dd>{data.executor === "classic" ? "经典流程"
-          : data.executor === "unavailable" ? `DSH ${data.dsh_version} 未能启动，自动研究暂停中` : `DSH ${data.dsh_version}`}
-          {data.executor !== "classic" && data.node_version && <span className="muted small"> · Node {data.node_version}</span>}
-          <span className="muted small"> · 来源：{EXECUTOR_SOURCE[data.source] ?? data.source}</span></dd></div>
-        <div><dt>使用 DSH</dt><dd>{data.configurable
-          ? <label className="settings-check"><input type="checkbox" checked={wanted} disabled={saving}
-              onChange={(e) => change(e.target.checked)} /> <span>{wanted ? "开启（推荐）" : "关闭，使用经典流程"}</span></label>
-          : <span className="muted small">当前以开发方式运行，由环境变量决定。</span>}</dd></div>
-      </dl>
-      {pending && <p className="small" role="status">已保存，重启 ProjectWatch 后生效；当前仍按原方式运行。</p>}
-      <ErrorNote error={saveError} />
-    </>}
-  </section>;
-}

@@ -199,14 +199,14 @@ export function createClientShell(bridge) {
     try {
       const config=await request('/api/settings/status');if(ticket!==epoch)return;
       if(settingsTab==='limits'){
-        value(body,'配置模型',config.model||'未启用');value(body,'当前进程剩余次数',config.remaining_runs??'—');value(body,'单次材料范围','一个原文片段，最多 1500 字符');
+        value(body,'配置模型',config.model||'未启用');value(body,'调用次数','不设上限');value(body,'单次材料范围','一个原文片段，最多 1500 字符');
         body.append(el('p','','这是当前进程的调用限制，不是月度套餐余额。连接测试也消耗一次调用，服务重启后计数重新开始。'));return;
       }
       if(settingsTab==='advanced'){
-        value(body,'执行器','DSH');value(body,'界面','中性色工作台 / 2026.10');value(body,'模型配置',config.enabled?'已启用':'未启用');value(body,'连接协议',config.protocol||'未配置');
+        value(body,'执行器','直接调用模型');value(body,'界面','中性色工作台 / 2026.10');value(body,'模型配置',config.enabled?'已启用':'未启用');value(body,'连接协议',config.protocol||'未配置');
         body.append(button('查看处理记录',()=>{location.hash='#tasks';}),button('刷新运行状态',()=>showGlobal('settings')));return;
       }
-      body.append(el('p','','DSH 负责执行；模型由你选择。测试连接仅发送合成样例，不读取项目材料。'));
+      body.append(el('p','','直接调用你选择的模型；测试连接仅发送合成样例，不读取项目材料。'));
       value(body,'当前模型',config.model||'未启用');value(body,'接收地址',config.base_url||'未配置');
       if(!config.editable){body.append(el('p','settings-notice','当前启动方式未启用设置权限。请使用带管理口令的本机启动器；已有模型仍可继续使用。'));return;}
       if(!operator){

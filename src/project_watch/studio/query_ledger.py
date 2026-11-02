@@ -63,17 +63,13 @@ class ProjectQueryCache:
                     data = json.loads(row["response_data"])
                     self._record(db, key, "cached")
                     return data, True
-                previous = db.execute("SELECT outcome FROM studio_query_uses WHERE project_id=? AND query_key=? "
-                                      "ORDER BY created_at DESC,rowid DESC LIMIT 1", (self.project_id, key)).fetchone()
-                if previous and previous["outcome"] in ("unknown", "held"):
-                    unknown = db.execute("SELECT id FROM studio_query_uses WHERE project_id=? AND query_key=? AND outcome='unknown' "
-                                         'ORDER BY rowid DESC LIMIT 1', (self.project_id, key)).fetchone()
-                    authorized = unknown and db.execute('SELECT 1 FROM studio_query_recoveries WHERE project_id=? '
-                        'AND job_id=? AND query_key=? AND unknown_use_id=?',
-                        (self.project_id, self.job_id, key, unknown['id'])).fetchone()
-                    if not authorized:
-                        self._record(db, key, "held")
-                        raise HttpError("request_outcome_unknown")
+                # Same rule as dispatch.check: an unclear query is not repeated within the
+                # same job; a later round asking the same question is a new request.
+                if self.job_id and db.execute("SELECT 1 FROM studio_query_uses WHERE project_id=? AND query_key=? "
+                                              "AND job_id=? AND outcome IN ('unknown','held') LIMIT 1",
+                                              (self.project_id, key, self.job_id)).fetchone():
+                    self._record(db, key, "held")
+                    raise HttpError("request_outcome_unknown")
             try:
                 data = fetch()
                 if not isinstance(data, list) or any(not isinstance(h, dict) for h in data):

@@ -79,6 +79,7 @@ export default function DigestPage() {
             <AttentionBoard data={data.attention} title="需要核对与异常信号" maxProjects={20} perProject={4}
               note="群推送仅列前 5 个项目" />
           )}
+          {data.window_note && <p className="muted small">{data.window_note} 周报正文汇总重大、关注与新资料；<Link to="/feed">查看全部动态</Link>。</p>}
           {data.projects.length === 0 ? (
             <Empty title="暂未整理出重要变化">{data.incomplete?.length ? "监控进度见下方。" : "一般动态可在“今日动态”查看。"}</Empty>
           ) : (
@@ -87,7 +88,7 @@ export default function DigestPage() {
             </div>
           )}
           <DigestProgress incomplete={data.incomplete} />
-          {data.quiet.length > 0 && <p className="muted small">已收录信息未见重要变化：{data.quiet.join("、")}</p>}
+          {data.quiet.length > 0 && <p className="muted small">本期未列入重要变化的项目：{data.quiet.join("、")}</p>}
         </>
       )}
     </Page>

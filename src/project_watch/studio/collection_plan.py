@@ -84,13 +84,20 @@ def make_plan(*, round_id, project_id, binding, mode, candidates, at):
                     required=capability not in ('disabled', 'not_applicable') and due,
                     disposition=capability if capability != 'available' else 'pending' if due else 'not_due',
                     reason=reason, priority=priority)
+        # Ordering is execution metadata, never part of a historical query key.
+        if 'query_rank' in candidate:
+            rank = candidate['query_rank']
+            if type(rank) is not int or rank < 0:
+                raise ValueError('invalid query rank')
+            unit['query_rank'] = rank
         if query_id in units and units[query_id] != unit:
             raise ValueError('conflicting duplicate query')
         units[query_id] = unit
     return {'schema_version': 1, 'round_id': round_id, 'project_id': project_id,
             'binding': binding, 'mode': mode, 'created_at': at,
             'units': sorted(units.values(), key=lambda u: (
-                u['priority'], _time(u['due_at']).timestamp() if u['due_at'] else float('-inf'), u['id']))}
+                u['priority'], _time(u['due_at']).timestamp() if u['due_at'] else float('-inf'),
+                u.get('query_rank', 0), u['id']))}
 
 
 def reconcile(plan, receipts):
@@ -152,6 +159,8 @@ def channel_key(row):
     """Source identity takes precedence over its discovery/news direction."""
     return {'site': 'site', 'cninfo': 'filing', 'openalex_affiliation': 'paper',
             'openalex_author': 'paper', 'openalex_topic': 'paper', 'patent_search': 'patent',
+            'europepmc_affiliation': 'paper', 'europepmc_topic': 'paper',
+            'europepmc_patent': 'patent',
             'clinical_sponsor': 'trial', 'clinical_term': 'trial', 'cn_regulatory': 'cn_trial'}.get(
                 row['source'], row['category'])
 
