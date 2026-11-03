@@ -380,6 +380,8 @@ class FakeWeb:
                 {"name": "合成竞品甲", "reason": "同类模组"}], "industry_queries": ["激光雷达"],
                 "policy_queries": [], "paper_queries": [], "affiliation_names": ["Lumina Optics"],
                 "is_biomed": True, "trial_sponsors": ["Synthetic Bio"], "patent_assignees": []}
+        if "为竞品新闻匹配整理名称" in system:
+            return {"peers": [{"id": "C1", "short": "竞品甲", "aliases": ["Rival Optics"], "query": "竞品甲 模组"}]}
         if "值得读取正文" in system:
             return {"results": [{"id": i["id"], "read": "bakery" not in i["title"]}
                                 for i in json.loads(user)["items"]]}

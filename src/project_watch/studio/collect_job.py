@@ -70,7 +70,7 @@ def _stored_plan(pipeline, pid, project):
 
     stored = pipeline.store.get_plan(pid) or {}
     if 'competitors' in stored:
-        return _current_paper_topics(pipeline, pid, project, stored)
+        return _current_peer_names(pipeline, pid, project, _current_paper_topics(pipeline, pid, project, stored))
     _, _, llm, _ = pipeline.tools()
     if not llm.ready:
         return stored
@@ -83,7 +83,7 @@ def _stored_plan(pipeline, pid, project):
         return stored
     plan = {**stored, **drafted, 'drafted_at': now(), 'paper_topics_version': PAPER_TOPICS_VERSION}
     pipeline.store.put_plan(pid, plan)
-    return plan
+    return _current_peer_names(pipeline, pid, project, plan)
 
 
 PAPER_TOPICS_VERSION = 3  # research topics an English index can match (openalex_query.topic_terms)
@@ -122,11 +122,56 @@ def _current_paper_topics(pipeline, pid, project, stored):
     return plan
 
 
+PEER_NAMES_VERSION = 1  # competitors carry the names their news uses (peer_names.usable_alias)
+
+
+def _current_peer_names(pipeline, pid, project, stored):
+    """Once per plan: each competitor's other names, so English and traditional headlines match.
+
+    Product codes in a drafted note are read without a model; the model adds
+    English and traditional names, own product names and a short news query.
+    The model's names are proposals for matching, not confirmed identities.
+    """
+    from project_watch.studio.http import HttpError
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.peer_names import brand_variants, peer_codes, usable_alias
+
+    competitors = [c for c in stored.get('competitors') or [] if isinstance(c, dict) and c.get('name')]
+    if stored.get('peer_names_version') == PEER_NAMES_VERSION or not competitors:
+        return stored
+    _, _, llm, _ = pipeline.tools()
+    if not llm.ready:
+        return stored
+    try:
+        drafted = pipeline.name_competitors(llm, {**project, 'id': pid}, [c['name'] for c in competitors])
+    except (ModelError, HttpError, ConnectionError, TimeoutError) as exc:
+        # Recorded like any request; a later round may ask again, this job never resends.
+        if getattr(exc, 'code', '') in ('project_paused', 'project_not_consented'):
+            raise
+        return stored
+    if not drafted:
+        return stored  # nothing usable came back; a later round asks again
+    named = []
+    for c in competitors:
+        row = drafted.get(c['name']) or {}
+        aliases = [v for a in [row.get('short'), *(row.get('aliases') or [])] if usable_alias(a)
+                   for v in brand_variants(a.strip())]
+        aliases = [a for a in dict.fromkeys([*peer_codes(c['name']), *aliases]) if a != c['name']][:10]
+        # "新闻" / "news" add nothing to a news search.
+        query = re.sub(r'\s*(?:新闻|动态|news)$', '', str(row.get('query') or '').strip(), flags=re.I)[:60]
+        query = c.get('query') or (query if usable_alias(query) else '')
+        named.append({**c, 'aliases': aliases, **({'query': query} if query else {})})
+    plan = {**stored, 'competitors': [*named, *[c for c in stored['competitors'] if c not in competitors]],
+            'peer_names_version': PEER_NAMES_VERSION, 'peer_names_at': now()}
+    pipeline.store.put_plan(pid, plan)
+    return plan
+
+
 def _merge_stored_plan(public_plan, stored):
     """Watch-derived entries first, then the stored plan; confirmed names stay the company queries."""
     names = {c['name'] for c in public_plan['competitors']}
     public_plan['competitors'] = [*public_plan['competitors'], *[
-        {k: c[k] for k in ('name', 'query') if c.get(k)} for c in stored.get('competitors') or []
+        {k: c[k] for k in ('name', 'query', 'aliases') if c.get(k)} for c in stored.get('competitors') or []
         if isinstance(c, dict) and c.get('name') and c['name'] not in names]][:8]
     for field in PLAN_FIELDS:
         merged = [*public_plan.get(field, []), *[q for q in stored.get(field) or [] if isinstance(q, str)]]
