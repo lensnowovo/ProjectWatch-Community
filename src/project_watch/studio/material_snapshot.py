@@ -29,9 +29,11 @@ def _permitted(db, project_id, version_id):
     evidence = json.loads(row['record'])
     # Historical snapshots must still honor later item exclusions. Match the
     # stable source key as well as original observations, not only today's head.
+    source_key = evidence['source_key']
+    item_id = source_key[5:] if source_key.startswith('item:') else None  # 'item:'||id, in indexable form
     excluded = db.execute(
         "SELECT 1 FROM studio_items WHERE project_id=? AND (status='dismissed' OR relevant=0) "
-        "AND (key=? OR 'item:'||id=?)", (project_id, evidence['source_key'], evidence['source_key'])).fetchone()
+        "AND (key=? OR id=?)", (project_id, source_key, item_id)).fetchone()
     if not excluded and db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_collection_observations'").fetchone():
         excluded = db.execute(
             "SELECT 1 FROM studio_collection_observations o JOIN studio_items i ON i.id=o.item_id "

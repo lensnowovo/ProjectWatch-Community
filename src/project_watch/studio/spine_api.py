@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from project_watch.studio import assumptions, dispatch
 from project_watch.studio.execution import JobExecution
+from project_watch.studio.store import shared_reads
 
 
 class AssumptionInput(BaseModel):
@@ -61,6 +62,7 @@ def round_view(store, pid):
 
 def attach(app, store, project_or_404):
     @app.get('/api/studio/projects/{project_id}/round')
+    @shared_reads(store)
     def project_round(project_id: str):
         project_or_404(project_id)
         return round_view(store, project_id)

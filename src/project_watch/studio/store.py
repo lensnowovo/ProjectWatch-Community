@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import sqlite3
@@ -199,6 +200,18 @@ def now() -> str:
 UNREAD_DAYS = 14
 
 
+def shared_reads(store_of: Callable[[], StudioStore] | StudioStore):
+    """Run a read endpoint inside one store read session."""
+    def wrap(endpoint):
+        @functools.wraps(endpoint)
+        def run(*args, **kwargs):
+            store = store_of() if callable(store_of) else store_of
+            with store.read_session():
+                return endpoint(*args, **kwargs)
+        return run
+    return wrap
+
+
 class StudioStore:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -311,12 +324,34 @@ class StudioStore:
     def _connect(self) -> sqlite3.Connection:
         from project_watch.studio.write_fencing import FencedConnection
 
+        guard = getattr(self._write_context, 'guard', None)
+        shared = getattr(self._write_context, 'shared', None)
+        # Inside a read session, unfenced callers reuse one connection; fenced
+        # writers and callers arriving mid-transaction still get their own.
+        if shared is not None and guard is None and not shared.in_transaction:
+            return shared
         db = sqlite3.connect(self.db_path, timeout=10, factory=FencedConnection)
-        db.guard = getattr(self._write_context, 'guard', None)
+        db.guard = guard
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")
         db.execute("PRAGMA busy_timeout = 10000")
         return db
+
+    @contextmanager
+    def read_session(self):
+        """One connection for a whole page read instead of one per lookup."""
+        if getattr(self._write_context, 'shared', None) is not None:
+            yield
+            return
+        db = self._connect()
+        db.keep_open = True
+        self._write_context.shared = db
+        try:
+            yield
+        finally:
+            self._write_context.shared = None
+            db.keep_open = False
+            db.close()
 
     @contextmanager
     def write_scope(self, guard):

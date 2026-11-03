@@ -73,6 +73,18 @@ def with_originals(store, project_id: str, events: list[dict]) -> list[dict]:
     return result
 
 
+_RUN = re.compile(r'[^\n。！？!?]+([。！？!?])?')
+
+
+def _sentences(text):
+    """Same matches as `[^\\n。！？!?]+(?:[。！？!?]|$)`, without its quadratic backtracking on unpunctuated lines."""
+    for match in _RUN.finditer(text):
+        end = match.end()
+        # `$` also matches just before a final newline.
+        if match.group(1) or end == len(text) or (end == len(text) - 1 and text[end] == '\n'):
+            yield match
+
+
 def _passages(source):
     """Original headline plus self-contained sentences with exact part offsets."""
     yield source.get('title') or '', None
@@ -81,7 +93,7 @@ def _passages(source):
         return
     for part in source.get('original_parts') or []:
         text = part['text']
-        for match in re.finditer(r'[^\n。！？!?]+(?:[。！？!?]|$)', text):
+        for match in _sentences(text):
             quote = match.group(0).strip()
             if not quote or len(quote) > 6000:
                 continue

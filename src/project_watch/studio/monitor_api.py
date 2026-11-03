@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from project_watch.studio import monitor as mon
 from project_watch.studio import signals as sig
 from project_watch.studio.questions import STATUSES, Assessment
+from project_watch.studio.store import shared_reads
 
 
 class PageIn(BaseModel):
@@ -215,6 +216,7 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
         return pipeline.monitoring_plan
 
     @app.get("/api/studio/projects/{project_id}/monitoring-plan")
+    @shared_reads(store)
     def plan_view(project_id: str):
         project_or_404(project_id)
         return plan().view(project_id)
