@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "projectwatch-local"
-version = "0.3.0a3"
+version = "0.3.0a4"
 description = "Self-hosted, evidence-governed monitoring of key investment projects"
 readme = "README.md"
 requires-python = ">=3.11"

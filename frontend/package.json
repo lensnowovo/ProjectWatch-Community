@@ -1,7 +1,7 @@
 {
   "name": "projectwatch-web",
   "private": true,
-  "version": "0.3.0-alpha.3",
+  "version": "0.3.0-alpha.4",
   "type": "module",
   "engines": { "node": ">=22.0.0" },
   "scripts": {
