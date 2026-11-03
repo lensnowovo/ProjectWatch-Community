@@ -181,6 +181,14 @@ _PAPER_TOPICS_SYSTEM = """为被监控公司重写学术论文检索主题，用
 - 原检索词仅作参考，能改写成研究主题的改写，不能的丢弃；技术含量低的公司输出空数组。"""
 
 
+_PEER_NAMES_SYSTEM = """为竞品新闻匹配整理名称：每家竞品在中英文新闻标题里会被怎样称呼。
+输出 JSON：{"peers":[{"id":"C1","short":"公司简称","aliases":["..."],"query":"..."}]}，id 照抄输入里每家竞品前的编号；
+- aliases：这家公司自己的英文名、港股繁体名、它自有产品的代号和通用名（中英文），最多 6 个；
+- 不要写合作方、授权方或收购方的名字，不要写靶点、技术类别或行业词（如 ADC、B7-H3、HER2、锂电池）；
+- query：简称加一个自有产品代号或领域词的新闻检索词，不超过 20 字；
+- 不确定的名字不写，宁缺毋滥。"""
+
+
 def _canon(value) -> str:
     from project_watch.studio.judgment_review import canonical
 
@@ -1241,6 +1249,18 @@ class Pipeline:
         data = llm.json(_PAPER_TOPICS_SYSTEM, context, max_tokens=600)
         topics = [str(q).strip()[:120] for q in (data.get("paper_queries") or []) if isinstance(q, str)]
         return [q for q in dict.fromkeys(topics) if topic_terms(q)][:3]
+
+    def name_competitors(self, llm: LLM, project: dict, names: list[str]) -> dict[str, dict]:
+        """Other names each planned competitor goes by in headlines, keyed by the planned name."""
+        ids = {f"C{i}": n for i, n in enumerate(names, 1)}  # an echoed number, not a retyped name
+        context = (f"被监控公司：{project.get('legal_name') or project.get('name')}（{project.get('short_name') or ''}）\n"
+                   f"行业：{project.get('industry')}\n竞品：\n" + "\n".join(f"{k}. {n}" for k, n in ids.items()))
+        data = llm.json(_PEER_NAMES_SYSTEM, context, max_tokens=1200)
+        rows = [r for r in data.get("peers") or [] if isinstance(r, dict) and str(r.get("id")).strip() in ids]
+        return {ids[str(r["id"]).strip()]: {
+            "short": r.get("short") if isinstance(r.get("short"), str) else "",
+            "aliases": [a for a in r.get("aliases") or [] if isinstance(a, str)][:8],
+            "query": r.get("query") if isinstance(r.get("query"), str) else ""} for r in rows}
 
     def triage(self, project_id: str, llm: LLM, project: dict, plan: dict,
                stage: Callable[[str], None], *, item_ids: set[str] | None = None, batch_size: int = TRIAGE_BATCH,

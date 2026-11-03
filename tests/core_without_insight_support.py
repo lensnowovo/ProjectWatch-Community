@@ -173,8 +173,10 @@ def unknown_outcome_not_retried(client, app, transport, entity):
     failed = app.state.studio_store.jobs(pid)[0]
     assert failed['status'] == 'failed' and failed['error']
     after = sum(c['host'] == 'open.bigmodel.cn' for c in transport.calls)
-    assert after == before + 1
+    # The once-per-plan competitor naming request is tried and recorded (its failure is
+    # tolerated, like plan drafting); the round's own request then fails the job.
+    assert after == before + 2
     assert not worker.step()
     assert sum(c['host'] == 'open.bigmodel.cn' for c in transport.calls) == after
     transport.model_failure = None
-    return {'project_id': pid, 'job_id': failed['id'], 'model_requests': 1}
+    return {'project_id': pid, 'job_id': failed['id'], 'model_requests': 2}

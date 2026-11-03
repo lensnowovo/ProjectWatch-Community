@@ -162,7 +162,8 @@ def _event_day(e: dict) -> str:
 
 
 def _mentions(title: str, names: list[str]) -> bool:
-    return any(n and n in title for n in names)
+    folded = title.casefold()
+    return any(n and n.casefold() in folded for n in names)
 
 
 def _candidate(step, day, grade, basis, title, url, outlets=(), scope=''):
