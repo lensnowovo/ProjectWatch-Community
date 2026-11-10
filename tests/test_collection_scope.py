@@ -90,16 +90,19 @@ def test_existing_peers_keep_their_own_target_and_queries():
     assert {u['target_id'] for u in peers} == {'peer:Synthetic Peer A', 'peer:Synthetic Peer B'}
 
 
-@pytest.mark.parametrize('mode,required', [('first', True), ('refresh', True), ('incremental', False)])
-def test_saved_relation_cadence_preserved_and_refresh_checked(mode, required):
-    w = watch()
+@pytest.mark.parametrize('mode,relation,required', [
+    ('first', 'supplier', True), ('refresh', 'supplier', True),
+    # Chain relations rotate into ordinary rounds; other relations keep their cadence.
+    ('incremental', 'supplier', True), ('incremental', 'competitor', False)])
+def test_saved_relation_cadence_preserved_and_refresh_checked(mode, relation, required):
+    w = watch(relation_type=relation)
     before = deepcopy(w)
     p = build(watches=[w], mode=mode)
     unit = next(u for u in p['units'] if u['target_id'] == 'watch:relation-1')
     assert unit['required'] is required
     assert unit['schedule_due'] is required
     assert unit['due_at'] is None  # no invented next-run date
-    assert unit['category'] == 'chain'
+    assert unit['category'] == ('chain' if relation == 'supplier' else 'competitor')
     assert w == before
 
 

@@ -147,13 +147,23 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         if sponsors or terms or scoped_sources & {'clinical_sponsor', 'clinical_term', 'cn_regulatory'}:
             add('cn_regulatory', 'trial', [name], historical=True)
 
+    # Chain relations used to run only on first/refresh, so ordinary rounds never searched a
+    # customer, supplier or partner. Rotate a fixed few per round instead of all-or-nothing.
+    chain_due = set()
+    if mode not in ('first', 'refresh', 'topic'):
+        pending = sorted(
+            (w for w in watches if w.get('id') and w.get('visibility') == 'public'
+             and w.get('status') != 'retired' and w.get('scope_kind') == 'relation'
+             and watch_direction(w) == 'chain'),
+            key=lambda w: (str(w.get('last_run_at') or ''), str(w['id'])))
+        chain_due = {w['id'] for w in pending[:2]}
     for watch in watches:
         if watch.get('visibility') != 'public' or watch.get('status') == 'retired':
             continue
         relation = watch.get('scope_kind') == 'relation'
         if mode == 'topic' and relation:
             continue
-        eligible = watch['id'] in due_ids or (relation and mode in ('first', 'refresh'))
+        eligible = watch['id'] in due_ids or (relation and mode in ('first', 'refresh')) or watch['id'] in chain_due
         # Sleeping/event-gated questions are never admitted by refresh.
         if not eligible and not relation:
             continue

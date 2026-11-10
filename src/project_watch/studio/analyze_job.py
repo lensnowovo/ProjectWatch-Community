@@ -221,6 +221,7 @@ def _reviewer(pipeline, execution, llm, guard):
 # Which sections a relevant report of each category can change.
 AFFECTS = {
     'company': ('operations', 'position', 'chain'),
+    'chain': ('chain',),
     'competitor': ('position',),
     'industry': ('industry',),
     'policy': ('industry',),

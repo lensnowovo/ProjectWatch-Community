@@ -20,8 +20,9 @@ CREATE TABLE IF NOT EXISTS studio_source_health_history (
     version INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY(project_id,source_kind,version)
 );
 """
-SOURCE_KINDS = {"company", "competitor", "industry", "policy", "paper", "trial", "patent", "registry",
-                "filing", "cn_trial", "site", "watch", "thread", "tender", "license", "xiniu", "pharmcube", "wind"}
+SOURCE_KINDS = {"company", "chain", "competitor", "industry", "policy", "paper", "trial", "patent", "registry",
+                "technology", "filing", "cn_trial", "site", "watch", "thread", "tender", "license", "xiniu",
+                "pharmcube", "wind"}
 
 
 def silence_coverage(store, project_id, *, base_hours=24, window_days=60):
