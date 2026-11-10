@@ -1,6 +1,6 @@
 import { validationMessage } from "./entityValidation";
 export type Importance = "major" | "notable" | "routine";
-export type Category = "company" | "competitor" | "industry" | "policy" | "paper" | "trial" | "patent";
+export type Category = "company" | "competitor" | "chain" | "industry" | "policy" | "paper" | "trial" | "patent";
 
 export interface Ref {
   url?: string;

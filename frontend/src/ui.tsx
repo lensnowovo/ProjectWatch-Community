@@ -6,6 +6,7 @@ import { api, ApiError, type Category, type Fragment, type Importance, type Ref 
 export const CATEGORY_LABEL: Record<Category, string> = {
   company: "公司",
   competitor: "竞品",
+  chain: "产业链",
   industry: "赛道",
   policy: "政策",
   paper: "论文",

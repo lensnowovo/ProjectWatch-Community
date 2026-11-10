@@ -165,7 +165,12 @@ function Provenance({ view }: { view: InsightView }) {
 export function CompetitionReading({ position }: { position: InsightAnalysis["position"] }) {
   const window = position.competition_window;
   const signals = position.competition_signals ?? [];
-  if (!window && !signals.length) return null;
+  // "The model skipped it" is not the same as "there is nothing to report": only the
+  // first case is worth saying out loud, and it stops being silent.
+  const silent = !window && !signals.length && position.competition_status === "omitted";
+  if (!window && !signals.length) {
+    return silent ? <p className="jd-status">本轮未产出竞品研究，仅保留对比名单。</p> : null;
+  }
   return <div className="jd-competition">
     {window && <p className="jd-window"><span>窗口期</span>
       <b>{window.months ? `约 ${window.months} 个月` : '正在收窄'}</b>

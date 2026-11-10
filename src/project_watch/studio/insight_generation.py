@@ -56,13 +56,14 @@ SYSTEM = """你是一级市场投资研究员。根据给定的编号素材，�
 - 竞品：竞争的判断只写能落到具体公司上的事。"competition_signals" 每条写「谁做了什么 → 对我们意味着什么」，
   只有事件而说不出影响的，不要写进来；最多 3 条，竞品名须出现在 peers 里，且须有出处。
   "competition_window.months" 只有在「本公司预计完成某节点的时间」与「竞品完成该节点的时间」都能从素材确定时才填，
-  否则不填 months，只在 basis 用一句话说明依据（例如“3 家同类已进入注册临床”）。宁可只给定性，不要编造月数。
+  且 basis 里要写出这两个时间（例如“我们 2027 年获批，竞品 2025 年已获批”）；否则 months 写 null，
+  只在 basis 用一句话说明依据（例如“3 家同类已进入注册临床”）。宁可只给定性，不要编造月数。
 
 输出 JSON：
 {"headline": "一句话总判断（≤60字）",
  "position": {"verdict": "leading|ahead|on_par|behind|lagging|unclear", "confidence": "high|medium|low",
    "summary": "≤80字", "peers": ["对比的公司名"],
-   "competition_window": {"months": 0, "basis": "≤60字，说明按什么算"},
+   "competition_window": {"months": null, "basis": "≤60字，说明按什么算"},
    "competition_signals": [{"peer": "竞品名", "event": "≤50字，含时间", "impact": "≤60字，对我们意味着什么", "refs": ["C2"]}],
    "for": [{"text": "支持该判断的依据", "refs": ["N1"]}], "against": [{"text": "相反的依据", "refs": ["C2"]}],
    "change_if": ["什么新信息会改变判断"]},
@@ -333,14 +334,18 @@ def _evidence_counts(part: dict, name: str) -> dict:
     return {'support': support, 'oppose': oppose, 'sources': len(refs)}
 
 
-def _competition(raw: dict, peers: list[str], numbered: dict) -> dict:
+def _dated(basis: str) -> int:
+    """Distinct date-like tokens: a month count needs both ends dated, not one."""
+    return len({*re.findall(r'20\d{2}\s*年?|(?<!\d)(?:0?[1-9]|1[0-2])\s*月', basis)})
+
+
+def _competition(raw: dict, numbered: dict) -> dict:
     """Competitor signals, not a competitor directory.
 
-    Each entry must say what it changes for us and carry a source; a name on its own is not
-    research. `competition_status` separates "there was nothing to say" from "the model skipped it",
-    the failure mode that silently emptied `peers`.
+    Each entry must say what it changes for us and be grounded in material that names it; a
+    name on its own is not research. `competition_status` separates "there was nothing to say"
+    from "the model skipped it", the failure mode that silently emptied `peers`.
     """
-    known = {str(p).casefold() for p in peers}
     out: dict = {}
     window = raw.get('competition_window')
     if isinstance(window, dict):
@@ -348,10 +353,15 @@ def _competition(raw: dict, peers: list[str], numbered: dict) -> dict:
         months = window.get('months')
         if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= 60:
             months = None
+        # A number the basis cannot date is a fabricated number, so it is dropped and the
+        # qualitative reading stands. Two dated ends are the minimum a remaining lead time needs.
+        if months and _dated(basis) < 2:
+            months = None
         if basis:
             out['competition_window'] = ({'months': months} if months else {}) | {'basis': basis}
     signals = []
-    for item in raw.get('competition_signals') or []:
+    listed = raw.get('competition_signals')
+    for item in listed if isinstance(listed, list) else []:
         if not isinstance(item, dict):
             continue
         peer = _clip(strip_inline_codes(item.get('peer') or ''), 30)
@@ -359,12 +369,11 @@ def _competition(raw: dict, peers: list[str], numbered: dict) -> dict:
         impact = _clip(strip_inline_codes(item.get('impact') or ''), 80)
         codes = [str(code).strip().upper() for code in item.get('refs') or [] if str(code).strip()]
         refs = [r for r in (_ref(code, numbered) for code in codes) if r]
-        # In the peer list, or literally present in a cited source. A company the material never
-        # names is not a competitor this round can report on.
-        grounded = peer.casefold() in known or any(
-            peer and peer in str((numbered.get(code) or {}).get('context')
-                                 or (numbered.get(code) or {}).get('text') or '')
-            for code in codes)
+        # The peer must appear in this entry's own sources. Membership in `peers` is not enough:
+        # that list is model output too, so it would let a name borrow another company's citation.
+        grounded = any(peer and peer in str((numbered.get(code) or {}).get('context')
+                                            or (numbered.get(code) or {}).get('text') or '')
+                       for code in codes)
         if not (peer and event and impact and refs and grounded):
             continue
         signals.append({'peer': peer, 'event': event, 'impact': impact, 'refs': refs[:3]})
@@ -755,7 +764,7 @@ def normalize(data: dict, numbered: dict) -> dict:
     position["verdict"] = raw.get("verdict") if raw.get("verdict") in VERDICTS["position"] and evidence else "unclear"
     position["peers"] = [_clip(p, 30) for p in (raw.get("peers") or []) if isinstance(p, str) and p.strip()][:8]
     position["change_if"] = [_clip(t, 120) for t in (raw.get("change_if") or []) if isinstance(t, str) and t.strip()][:4]
-    position.update(_competition(raw, position["peers"], numbered))
+    position.update(_competition(raw, numbered))
 
     technology, raw, evidence = section("technology", ("academic", "industry", "risks"))
     technology["route"] = _clip(raw.get("route"), 60)

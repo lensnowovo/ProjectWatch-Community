@@ -31,13 +31,16 @@ def normalize(signals=None, window=None, peers=('山海医疗', '阶梯医疗'))
     return gen.normalize({'headline': '先获批，窗口期收窄', 'position': part}, SOURCES)['position']
 
 
+DATED = '本公司 2027 年获批，山海医疗 2025 年已获批'
+
+
 def test_signals_and_window_survive_normalization():
-    p = normalize(SIGNALS, {'months': 12, 'basis': '3 家同类进入注册临床'})
+    p = normalize(SIGNALS, {'months': 12, 'basis': DATED})
     assert p['competition_status'] == 'produced'
     assert [(s['peer'], s['event'], s['impact'], [r['code'] for r in s['refs']]) for s in p['competition_signals']] == [
         ('山海医疗', '2026年9月获Ⅲ类证', '国内首家获批被追平', ['C1']),
         ('阶梯医疗', '2026年8月完成B轮5亿', '融资节奏快于本公司', ['C2'])]
-    assert p['competition_window'] == {'months': 12, 'basis': '3 家同类进入注册临床'}
+    assert p['competition_window'] == {'months': 12, 'basis': DATED}
     assert p['verdict'] == 'ahead'
 
 
@@ -79,7 +82,7 @@ def test_month_count_out_of_range_keeps_the_qualitative_basis():
 
 
 def test_review_budget_stays_within_two_batches():
-    p = normalize(SIGNALS, {'months': 12, 'basis': '3 家同类进入注册临床'})
+    p = normalize(SIGNALS, {'months': 12, 'basis': DATED})
     payload = review.review_input({'position': p}, {'numbered': SOURCES})
     payload['fields'] = {k: v for k, v in payload['fields'].items() if section_analysis._reviewed(k)}
     assert not any(path.split('.')[-1] == 'peer' for path in payload['fields'])
@@ -95,3 +98,37 @@ def test_one_bad_signal_does_not_take_the_others_down():
     assert trimmed is not None and not blocking
     assert [s['peer'] for s in trimmed['competition_signals']] == ['阶梯医疗']
     assert trimmed['summary'] == p['summary']
+
+
+def test_month_count_without_two_dated_ends_is_dropped():
+    """A number nobody can date is a fabricated number; the qualitative basis still stands."""
+    p = normalize(None, {'months': 12, 'basis': '3 家同类进入注册临床'})
+    assert p['competition_window'] == {'basis': '3 家同类进入注册临床'}
+    p = normalize(None, {'months': 12, 'basis': '2027 年获批'})
+    assert p['competition_window'] == {'basis': '2027 年获批'}
+
+
+def test_peer_cannot_borrow_another_company_s_citation():
+    """`peers` is model output too, so membership alone cannot ground a name."""
+    p = normalize([{**SIGNALS[0], 'peer': '幻影科技'}], peers=['幻影科技', '山海医疗'])
+    assert 'competition_signals' not in p
+
+
+def test_window_basis_issue_drops_the_number_not_the_section():
+    p = normalize(SIGNALS, {'months': 12, 'basis': DATED})
+    trimmed, dropped, blocking = section_analysis.trim(
+        p, [{'fields': ['position.competition_window.basis'], 'reason': 'insufficient'}])
+    assert trimmed is not None and not blocking
+    assert 'competition_window' not in trimmed
+    assert trimmed['verdict'] == 'ahead' and trimmed['summary'] == p['summary']
+    assert DATED in dropped
+
+
+def test_an_invented_code_costs_the_item_not_the_section():
+    part = {'verdict': 'ahead', 'confidence': 'medium', 'summary': '先获批',
+            'for': [{'text': '本公司获批', 'refs': ['N1']}],
+            'competition_signals': [{'peer': '山海医疗', 'event': '获证', 'impact': '被追平', 'refs': ['C7']}]}
+    cleaned, lost = section_analysis._sanitize(part, SOURCES)
+    assert [s['peer'] for s in cleaned['competition_signals']] == []
+    assert [p['text'] for p in cleaned['for']] == ['本公司获批']
+    assert lost == 1
