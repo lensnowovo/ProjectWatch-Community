@@ -188,10 +188,17 @@ def test_explicit_proxy_overrides_system_proxy(monkeypatch):
     import urllib.request
 
     seen = []
-    monkeypatch.setattr(urllib.request, "build_opener", lambda handler, *extra: seen.append(handler.proxies))
+    class OfflineOpener:
+        def open(self, *args, **kwargs):
+            raise TimeoutError('synthetic; no network')
+    def build(handler, *extra):
+        seen.append(handler.proxies)
+        return OfflineOpener()
+    monkeypatch.setattr(urllib.request, "build_opener", build)
     monkeypatch.setattr("project_watch.studio.http.system_proxies", lambda: {"https": "http://system.test:1"})
-    urllib_transport("http://explicit.test:2")
-    urllib_transport()
+    for proxy in ('http://explicit.test:2', ''):
+        with pytest.raises(HttpError, match='connection_failed'):
+            urllib_transport(proxy)('GET', 'https://api.example/', {}, None, 1)
     assert seen == [{"http": "http://explicit.test:2", "https": "http://explicit.test:2"},
                     {"https": "http://system.test:1"}]
 
@@ -337,7 +344,9 @@ class FakeWeb:
         self.prompts.append((system, user))
         if "同一事件" in system:
             pairs = re.findall(r"\[(\d+)\] A：(.*)\n\s+B：(.*)", user)
-            return {"results": [{"pair": int(n), "same": "Series B" in a and "Series B" in b}
+            return {"results": [{"pair": int(n), "same": "Series B" in a and "Series B" in b,
+                                 "actor": "Lumina", "action": "closes Series B",
+                                 "quote_a": a.split("（", 1)[0], "quote_b": b.split("（", 1)[0]}
                                 for n, a, b in pairs]}
         if "连接测试" in system:
             return "OK"
@@ -780,14 +789,20 @@ def test_new_report_joins_existing_event_and_upgrades_importance(tmp_path):
     pipeline.cluster(project.id, llm, lambda _s: None)
     [event] = store.list_events(project_id=project.id)
     store.set_event_status(event["id"], "read")
-    add("b", "光启视界获某车企量产定点，首年订单可期", "major", (today - timedelta(days=1)).isoformat())
+    # Repeated assertion upgrades its existing event; a new speculative claim
+    # must not obtain admission merely from headline similarity.
+    add("b", "光启视界获某车企量产定点。", "major", (today - timedelta(days=1)).isoformat())
     pipeline.cluster(project.id, llm, lambda _s: None)
     [event] = store.list_events(project_id=project.id)
     assert event["source_count"] == 2 and event["importance"] == "major"
     assert event["status"] == "new" and event["impact"] == "影响"
 
 
-def test_ambiguous_pair_is_merged_only_when_model_confirms(tmp_path):
+@pytest.mark.parametrize("description,counts", [
+    ("closes Series B for expanded manufacturing capacity", [1, 2]),
+    ("raises Series B to scale lidar optics", [1, 1, 1]),
+])
+def test_ambiguous_pair_is_merged_only_when_model_confirms(tmp_path, description, counts):
     from project_watch.repository import ProjectRepository
     from project_watch.studio.pipeline import Pipeline
     from project_watch.studio.settings import SettingsStore
@@ -799,7 +814,7 @@ def test_ambiguous_pair_is_merged_only_when_model_confirms(tmp_path):
     pipeline = Pipeline(repo, store, SettingsStore(tmp_path / "settings.json"))
     web = FakeWeb()
     llm = LLM(ModelConfig("openai", "https://model.test/v1", "m", "k"), Http(web))
-    titles = ["Lumina Optics closes Series B led by Sequoia", "Lumina raises Series B to scale lidar optics",
+    titles = ["Lumina Optics closes Series B led by Sequoia", f"Lumina {description}",
               "Lumina Optics opens new office in Shanghai"]
     store.add_items(project.id, "company", [
         {"key": f"k{n}", "title": t, "url": f"https://a.example/{n}", "source": "A", "snippet": "",
@@ -808,7 +823,7 @@ def test_ambiguous_pair_is_merged_only_when_model_confirms(tmp_path):
                         "impact": ""} for i in store.untriaged(project.id)])
     pipeline.cluster(project.id, llm, lambda _s: None)
     events = store.list_events(project_id=project.id)
-    assert sorted(e["source_count"] for e in events) == [1, 2]
+    assert sorted(e["source_count"] for e in events) == counts
     assert any("同一事件" in s_ for s_, _ in web.prompts)
 
 
@@ -934,7 +949,8 @@ def test_ambiguous_chains_never_lose_reports_or_accept_wrong_pair_numbers(tmp_pa
     events = store.list_events(project_id=project.id)
     assert sum(e["source_count"] for e in events) == 3
     assert not store.unclustered(project.id)
-    assert len(events) == (1 if response == "all" else 3)
+    # A bare boolean on arbitrary overlapping text is not event evidence.
+    assert len(events) == 3
 
 
 def test_google_redirects_do_not_starve_direct_article_reading(tmp_path):

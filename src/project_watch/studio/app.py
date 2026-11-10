@@ -162,7 +162,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         from project_watch.studio.competition_research import CompetitionResearch
         from project_watch.studio.question_advisor import ModelQuestionAdvisor
     except ModuleNotFoundError as exc:
-        optional = {'competition', 'competition_evaluation', 'competition_research', 'landscape',
+        optional = {'competition', 'competition_research', 'landscape',
                     'product_matching', 'question_advisor', 'plan_replan', 'race', 'red_flags', 'registry_peers',
                     'techroutes', 'track', 'insight_generation', 'brief_analysis', 'crosscheck_analysis'}
         if exc.name not in {'project_watch.studio.' + name for name in optional}:
@@ -439,6 +439,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         result: dict[str, dict] = {}
 
         def failure_message(exc):
+            from project_watch.studio.model_errors import MESSAGES
             # Fixed local copy: exception detail can contain URLs or credentials.
             messages = {
                 'search_key_invalid': '搜索 Key 无效，请检查并重新保存 Key。',
@@ -453,7 +454,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                 'model_timeout': '模型响应超时，请先查看服务商记录，不要重复点击测试。',
                 'provider_backoff': '服务暂时暂停，请检查额度和服务状态后再测试。',
             }
-            return messages.get(getattr(exc, 'code', ''), '连接测试失败，请检查服务地址、网络和权限。')
+            return {**messages, **MESSAGES}.get(getattr(exc, 'code', ''), '服务测试未通过，请检查服务配置或稍后再试。')
 
         if llm.ready:
             try:
@@ -677,9 +678,11 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         from project_watch.studio import insight
         from project_watch.studio.agent_results import insight_projection
         from project_watch.studio.dossier_activity import saved_revisions
+        from project_watch.studio.editorial_summaries import read as read_editorial
         from project_watch.studio.event_state import timeline
         from project_watch.studio.milestones import read as read_milestones
         from project_watch.studio.observations import read as read_observations
+        from project_watch.studio.page_summaries import read as read_page_summaries
         from project_watch.studio.progress import read as read_progress
         from project_watch.studio.research_sources import research_source_counts
         from project_watch.studio.runtime_health import project_jobs
@@ -703,6 +706,8 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
 
         return project_projection(store, project_id, {
             "project": project,
+            "editorial_summaries": read_editorial(store, project_id),
+            "page_summaries": read_page_summaries(store, project_id),
             "dossier_saved": saved_revisions(pipeline.monitor.watchpoints(project_id),
                                              insight_projection(store, project_id, insight.load(store, project_id))),
             "execution": execution,
@@ -825,6 +830,23 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         store.reset_analyzed(project_id)
         return {"status": retried.status}
 
+    @app.post("/api/studio/projects/{project_id}/summaries/{subject}", status_code=202)
+    def generate_page_summary(project_id: str, subject: str):
+        from project_watch.studio.page_summaries import CONTRACTS, INTERNAL_CONTRACTS
+
+        project = project_or_404(project_id)
+        if subject not in CONTRACTS:
+            raise HTTPException(404, '找不到这个摘要页')
+        if project.get('execution_mode') == 'agent':
+            raise HTTPException(409, '请通过已连接的 Agent 更新此项目')
+        if not project.get('activated') or project['status'] != 'active':
+            raise HTTPException(409, '请先启动或恢复监控')
+        if not settings_store.load().model.ready:
+            raise HTTPException(409, '请先在设置中连接模型')
+        kind = 'internal_page_summary' if subject in INTERNAL_CONTRACTS else 'page_summary'
+        job = store.enqueue(project_id, kind, input_version='page:' + subject)
+        return {'id': job['id'], 'status': job['status']}
+
     @app.post("/api/studio/projects/{project_id}/refresh", status_code=202)
     def refresh(project_id: str, body: RefreshRequest):
         project = project_or_404(project_id)
@@ -918,14 +940,21 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         return result
 
     @app.post('/api/studio/runtime/drain')
-    def drain_runtime():
+    def drain_runtime(cancel_pending: bool = False):
+        """Default waits for tasks; explicit cancellation may leave paid outcomes unknown."""
         draining.set()
-        studio_worker.request_stop()
+        if cancel_pending:
+            studio_worker.request_stop(cancel_pending=True)
+        else:
+            studio_worker.request_stop()
         worker_state.request_stop()
         if app.state.monitoring_scheduler is not None:
             app.state.monitoring_scheduler.request_stop()
         if app.state.reading_worker is not None:
             app.state.reading_worker.request_stop()
+        if cancel_pending:
+            from project_watch.studio.http import cancel_patient_requests
+            cancel_patient_requests()
         return runtime_health()
 
     # Only the desktop owner attaches process-control routes.
@@ -968,14 +997,16 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     def insight_view(project_id: str):
         """Stored deep analysis (AI judgments with numbered sources), its history and the latest job state."""
         from project_watch.studio import insight
+        from project_watch.studio.section_progress import states
 
         project_or_404(project_id)
         with closing(store._connect()) as db:
-            job = db.execute("SELECT id, status, error, created_at, started_at, finished_at FROM studio_jobs "
+            job = db.execute("SELECT id, status, error, created_at, started_at, finished_at,retry_after FROM studio_jobs "
                              "WHERE project_id=? AND kind='analyze' ORDER BY created_at DESC, rowid DESC LIMIT 1", (project_id,)).fetchone()
+            section_states, evidence_gaps = states(db, job)
         from project_watch.studio.agent_results import insight_history, insight_projection
 
-        return {"record": insight_projection(store, project_id, insight.load(store, project_id)), "history": insight_history(store, project_id, insight.history(store, project_id)),
+        return {"section_states": section_states, "evidence_gaps": evidence_gaps, "record": insight_projection(store, project_id, insight.load(store, project_id)), "history": insight_history(store, project_id, insight.history(store, project_id)),
                 "job": dict(job) if job else None, "model_ready": settings_store.load().model.ready,
                 "generation_available": pipeline.insight_generator is not None,
                 "labels": insight.VERDICTS, "sources": {**insight.SOURCE_LABEL, 'E':'公开来源（Agent）'}}

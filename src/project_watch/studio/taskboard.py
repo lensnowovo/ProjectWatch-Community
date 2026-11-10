@@ -143,14 +143,14 @@ def advice(job: dict) -> dict:
     action: rerun = start the task again; settings = check a service first, then rerun; none = no execution action.
     """
     error = (job.get("error") or "").strip()
-    if error.startswith('project_budget'):
-        return {'why': '本项目本月这类请求已达上限，已收到的结果保留。',
-                'todo': '下月自动恢复，期间不会再发送这类请求。', 'action': 'none'}
     if job.get('model_failure') or job.get('unknown') or error.startswith(
             ('model_http_5xx', 'request_outcome_unknown', 'unknown_not_resent', 'interrupted')):
         n = job.get('unknown') or job.get('model_failure') or 1
         return {'why': f'有 {n} 次请求没有取得明确结果，服务商可能已计费。这些请求不会自动重发，已有结果保留。',
                 'todo': '不影响下一次更新；如是分析未完成，可在项目页“用已保存材料重新分析”。', 'action': 'none'}
+    if error.startswith(('project_budget', 'request_budget')):
+        return {'why': '旧版本的额度限制曾中断这项任务，已有结果保留。',
+                'todo': '当前版本已移除应用额度限制；可发起新的更新，旧请求不会自动重发。', 'action': 'none'}
     if job.get('runtime', {}).get('state') == 'partial':
         return {'why': job['runtime'].get('label') or '部分内容已完成，其余暂未取得结果。',
                 'todo': '无需操作即可查看已有结果；未覆盖的信息仍保留说明，可按需查看，不会自动重跑。',
@@ -163,9 +163,7 @@ def advice(job: dict) -> dict:
                 "todo": "先到“设置”里点“测试连接”；显示正常后回来点“重新运行”。", "action": "settings"}
     if error.startswith("connection_failed"):
         return {"why": "网络连接失败。", "todo": "检查网络或代理后点“重新运行”。", "action": "rerun"}
-    if error.startswith("request_budget"):
-        return {"why": "这一轮的请求次数到了上限，已经读到的内容都已保存。",
-                "todo": "通常不用处理，下次定时更新会接着做；想马上补全可以点“重新运行”。", "action": "rerun"}
+
     if "拒绝分析" in error:
         return {"why": "模型服务商按其内容规则拒绝分析这批资料，其他结果不受影响。",
                 "todo": "可以在“设置”里换一个模型后重新运行；暂不处理可收起提醒。", "action": "settings"}

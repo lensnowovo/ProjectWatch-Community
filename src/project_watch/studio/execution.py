@@ -51,13 +51,11 @@ CREATE TABLE IF NOT EXISTS studio_provider_backoff (
 
 
 class JobExecution:
-    def __init__(self, store, job, *, budgets=None):
+    def __init__(self, store, job, *, budgets=None, cancel_requested=None):
         self.store, self.job = store, job
-        # Retain historical values for frozen receipt compatibility only.
-        # Neither these values nor acceptance counts limit dispatch.
-        self.budgets = {"search": 64, "model": None, "open_data": 128, "page": 30,
-                        # Official-site checks: a few candidate homepages, robots files and up to MAX_PAGES pages.
-                        "site": 16, **(budgets or {})}
+        self.cancel_requested = cancel_requested or (lambda: False)
+        # The legacy argument is accepted for callers, but values never limit work.
+        self.budgets = dict.fromkeys(("search", "model", "open_data", "page", "site", "commercial"))
         self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
         self.last_replay = False
         self.slice_started = time.monotonic()
@@ -81,9 +79,23 @@ class JobExecution:
         progress(db, self.job['id'])
 
     def _receipt_guard(self, db):
-        self._guard(db)
+        # A stop prevents new work, not saving a response already received.
+        # Ownership still fences a superseded writer.
+        self._lease_guard(db)
+
+    def _owns_transport(self):
+        if self.cancel_requested():
+            return False
+        with closing(self.store._connect()) as db:
+            return db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND status='running' "
+                "AND lease_token=? AND lease_until>?", (self.job['id'], self.job['lease_token'], now())).fetchone() is not None
 
     def _guard(self, db):
+        if self.cancel_requested():
+            raise HttpError('request_cancelled')
+        self._lease_guard(db)
+
+    def _lease_guard(self, db):
         row = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
                          (self.job["id"], self.job["lease_token"], now())).fetchone()
         if not row:
@@ -167,6 +179,14 @@ class JobExecution:
             db.execute("BEGIN IMMEDIATE")
             self._guard(db)
             old = db.execute("SELECT * FROM studio_job_calls WHERE job_id=? AND call_key=?", (self.job["id"], key)).fetchone()
+            logical_key = key
+            attempt = 0
+            while (old and ((old['retryable'] and old['status'] in ('not_sent', 'completed'))
+                           or (old['status'] == 'completed' and old['response_status'] in (401, 402, 403, 429)))):
+                attempt += 1
+                key = f'{logical_key}:429:{attempt}'
+                old = db.execute('SELECT * FROM studio_job_calls WHERE job_id=? AND call_key=?',
+                                 (self.job['id'], key)).fetchone()
             if old:
                 self.last_replay = True
                 if old["status"] == "failed_read":
@@ -182,17 +202,23 @@ class JobExecution:
             # One rule for every job kind, no cross-job holds (see dispatch.py).
             if self.allowed_call_kinds is not None and kind not in self.allowed_call_kinds:
                 raise HttpError("call_kind_not_permitted")
-            dispatch.check(db, self.job, kind, key, provider_hash)
+            dispatch.check(db, self.job, kind, logical_key, provider_hash)
             db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) "
                        "VALUES (?,?,?,?,'started',?,1,?)", (self.job["id"], key, kind, provider_hash, now(), None))
             db.execute('UPDATE studio_job_calls SET deadline_at=? WHERE job_id=? AND call_key=?',
-                       ((datetime.now(UTC) + timedelta(seconds=max(1, float(timeout)) + CALL_GRACE_SECONDS)).isoformat(),
+                       ('' if timeout is None else
+                        (datetime.now(UTC) + timedelta(seconds=max(1, float(timeout)) + CALL_GRACE_SECONDS)).isoformat(),
                         self.job['id'], key))
         self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
         self.last_replay = False
         started = time.monotonic()
         try:
-            response = transport()
+            from project_watch.studio.http import TRANSPORT_OWNER
+            owner_token = TRANSPORT_OWNER.set(self._owns_transport)
+            try:
+                response = transport()
+            finally:
+                TRANSPORT_OWNER.reset(owner_token)
             if len(response.body) > 8 * 1024 * 1024:
                 raise HttpError("response_too_large")
         except Exception as exc:
@@ -209,19 +235,27 @@ class JobExecution:
             failed_read = (read_only and kind in ("open_data", "page", "site")
                            and ((isinstance(exc, HttpError) and exc.code == "response_too_large")
                                 or (public_read and transport_failure)))
+            not_sent = isinstance(exc, HttpError) and exc.code == "connection_not_sent"
             failure_code = 'public_read_failed' if transport_failure else 'response_too_large'
             with closing(self.store._connect()) as db, db:
                 if failed_read:
                     db.execute("BEGIN IMMEDIATE")
                     self._receipt_guard(db)
                 db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
-                           ("failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                           ("not_sent" if not_sent else "failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                if not_sent:
+                    db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
+                    db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,0) ON CONFLICT(provider) "
+                               "DO UPDATE SET retry_after=excluded.retry_after,status=0",
+                               (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(0, attempt))).isoformat()))
                 phase = getattr(exc, 'transport_phase', 'unknown')
                 failure = getattr(exc, 'failure_kind', 'timeout' if isinstance(exc, TimeoutError)
                                   else 'transport_error' if isinstance(exc, ConnectionError) else 'unknown')
                 diagnostic = {'call_key': key,
                     'phase': phase if phase in ('connect_or_headers', 'response_body') else 'unknown',
                     'failure': failure if failure in ('timeout', 'transport_error') else 'unknown'}
+                from project_watch.studio.http import safe_diagnostics
+                diagnostic['transport'] = safe_diagnostics(getattr(exc, 'diagnostics', {}))
                 if failed_read:
                     diagnostic['code'] = failure_code
                     diagnostic['policy'] = 'public_read' if public_read else 'oversized_read'
@@ -237,6 +271,11 @@ class JobExecution:
             self._receipt_guard(db)
             self._progress(db)
             safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
+            if response.diagnostics:
+                from project_watch.studio.http import safe_diagnostics
+                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
+                           'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                           (self.job['id'], 'call_transport:' + key[:40], json.dumps(safe_diagnostics(response.diagnostics))))
             from project_watch.studio.usage import FIELDS, reported
 
             counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)
@@ -244,9 +283,12 @@ class JobExecution:
                        'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
                        (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
                         int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
-            if response.status in (401, 403, 429):
+            if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
+                db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
                 db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
-                    (provider_hash, (datetime.now(UTC) + timedelta(minutes=30 if response.status == 429 else 60)).isoformat(), response.status))
+                    (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(response.status, attempt, response.headers))).isoformat(), response.status))
+        if self.cancel_requested():
+            raise HttpError('request_cancelled')
         return response
 
     def http(self, original, classify, *, public_read=None):
@@ -271,6 +313,6 @@ class JobExecution:
     def usage(self):
         with closing(self.store._connect()) as db:
             return {r["kind"]: {"requests": r["requests"], "completed": r["completed"], "unknown": r["unknown"], "cache_hits": r["cache_hits"]}
-                    for r in db.execute(f"SELECT c.kind,count(*) requests,sum(c.status='completed') completed,sum({dispatch.UNRESOLVED}) unknown,"
+                    for r in db.execute(f"SELECT c.kind,sum(c.status!='not_sent') requests,sum(c.status='completed') completed,sum({dispatch.UNRESOLVED}) unknown,"
                         "sum(COALESCE(h.hits,0)) cache_hits FROM studio_job_calls c LEFT JOIN studio_job_cache_hits h ON h.job_id=c.job_id AND h.call_key=c.call_key "
                         "WHERE c.job_id=? GROUP BY c.kind", (self.job["id"],))}

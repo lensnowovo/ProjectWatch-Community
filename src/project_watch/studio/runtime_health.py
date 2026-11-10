@@ -73,6 +73,7 @@ def project_jobs(store, project_id, *, worker='running'):
         dismissed = {r[0].removeprefix('task_dismissed:') for r in db.execute(
             "SELECT key FROM studio_state WHERE key LIKE 'task_dismissed:%'")}
         return [{**{key: row[key] for key in ('id', 'kind', 'status', 'stage', 'error', 'created_at', 'finished_at')},
+                 'summary_subject': row['input_version'][5:] if row['input_version'].startswith('page:') else None,
                  'dismissed': row['id'] in dismissed, 'runtime': projection(db, row, worker=worker)} for row in rows]
 
 
@@ -113,18 +114,23 @@ def expired_reason(db, job, at=None):
     if pending:
         # A running transport has its own allowance, not the idle-stage timeout.
         for call in pending:
+            if call['deadline_at'] == '':
+                # Explicit transport-owned model wait. NULL remains a legacy
+                # receipt, not implicit permission to extend an old request.
+                continue
             deadline = call['deadline_at'] or (datetime.fromisoformat(call['created_at']) + timedelta(seconds=IDLE_SECONDS)).isoformat()
             if deadline <= at.isoformat():
                 return 'response_timeout'
         return ''
-    age = seconds_since(job['progress_at'] or job['started_at'], at)
-    return 'no_progress' if age is not None and age >= IDLE_SECONDS else ''
+    # Elapsed local processing is not evidence that its owner is dead. Lease
+    # expiry still fences a lost process; explicit cancellation stops transport.
+    return ''
 
 
 def tick(store, job, *, at=None):
     """Renew or revoke atomically. Never start a replacement Python thread.
 
-    Safe work is queued under the same id (bounded recovery); an ambiguous call
+    Safe work is queued under the same id; an ambiguous call
     holds the job indefinitely. Old writers are fenced before either transition.
     """
     from project_watch.studio.dispatch import UNRESOLVED
@@ -143,7 +149,7 @@ def tick(store, job, *, at=None):
             return 'alive'
         uncertain = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1',
                                (job['id'],)).fetchone()
-        held = bool(uncertain) or current['attempts'] >= 3
+        held = bool(uncertain)
         db.execute("UPDATE studio_jobs SET status=?,error=?,stage=?,stalled_at=?,finished_at=?,retry_after=?,"
                    "lease_token='',lease_until=NULL WHERE id=?",
                    ('failed' if held else 'queued', 'watchdog_' + reason,
@@ -264,9 +270,16 @@ def projection(db, job, *, worker='running', at=None):
             from project_watch.studio.execution import JobExecution
             execution = JobExecution(None, {'id': job['id']})
             publication = execution.read_checkpoint('snapshot_analysis_publication_v1', db=db)
+            analysis_publication = execution.read_checkpoint('analyze_publication_v1', db=db)
+            analysis_result = execution.read_checkpoint('analyze_result_v1', db=db)
             update = execution.read_checkpoint('update_run_state_v1', db=db)
+            page_result = execution.read_checkpoint('page-summary-v2:result', db=db)
+            failures = execution.read_checkpoint('independent-step-failures-v1', db=db)
             if (publication and publication.get('status') == 'partial') or (
-                    update and update.get('phases', {}).get('analysis', {}).get('status') == 'partial'):
+                    analysis_publication and analysis_publication.get('status') == 'partial') or (
+                    analysis_result and analysis_result.get('status') in ('partial', 'failed', 'waiting_for_model')) or (
+                    update and update.get('phases', {}).get('analysis', {}).get('status') == 'partial') or (
+                    page_result and page_result.get('status') == 'partial') or failures:
                 state, label = 'partial', '材料已保存，部分分析未完成'
     return {'state': state, 'label': label, 'blocking_jobs': blocking_jobs, 'continuation_wait': continuation_wait,
             'phase': job_phase(db, job), 'progress_at': job['progress_at'],

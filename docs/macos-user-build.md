@@ -16,7 +16,7 @@
 - Apple Silicon（M 系列）：`ProjectWatch-macOS-arm64-candidate.zip`。
 - Intel：保留构建代码，首发暂缓；历史 Intel 候选不是本轮正式资产。
 - plist 目前声明 macOS 13.0；最终支持下限须经内置运行时及实机共同核对，尚不宣称全部 13+ 已验收。不混用两种芯片的 Python 扩展，不宣称 Universal2 单包。
-- 使用已核验哈希的 Astral python-build-standalone CPython 3.12.15，完整功能 wheel、OCR/MCP/team/PostgreSQL 客户端及预构建页面。
+- 内置已核验哈希的 Astral python-build-standalone CPython 3.12.15、与当前源码逐文件核对的完整 wheel、桌面与 OCR/MCP 依赖，以及预构建页面。
 - 不内置 Node 或 DSH。当前只完成跨平台组装检查，实机验收另行记录。
 - 数据独立保存于 `~/Library/Application Support/ProjectWatch-Desktop`；不自动搬入已有开发者实例的数据。
 - 删除或替换 `.app` 不删除此目录；替换前从菜单栏正常退出并备份，不能在运行中覆盖应用。
@@ -35,7 +35,7 @@ Windows 可以组装 Mac 目标文件、检查 Mach-O 架构/Python ABI、校验
 ## 维护者构建
 
 用独立工作区准备完整 wheel（已有分析和 `web/assets` 不可缺少）。下载 builder 中锁定的上游 runtime，核对 GitHub release 提供的 SHA-256。
-构建工具需 Python 3.12 与 uv；依赖安装只发生在新输出目录，没有修改全局环境。
+维护者使用 Python 3.12、uv 和项目开发依赖中的 `packaging`。构建前会核对 wheel 的产品文件、安装路径、依赖声明、README 与许可文件。目标依赖安装到新输出目录。
 
 ```bash
 python -m build --wheel

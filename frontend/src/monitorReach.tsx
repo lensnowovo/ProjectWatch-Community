@@ -76,6 +76,6 @@ export function MonitorReach({ company, plan, paused = false }: {
       </div>
     </div>
     {model.excluded > 0 && <p className="mr-note">部分关联的来源链或分类不完整，暂未计入层级；原条目仍保留在下方表格。</p>}
-    {!model.depth && !model.excluded && <p className="mr-note">尚未建立关联层级，常规采集与原有关注点仍保留在下方。</p>}
+    {!model.depth && !model.excluded && <p className="mr-note">尚未建立对象间的关联层级。</p>}
   </section>;
 }

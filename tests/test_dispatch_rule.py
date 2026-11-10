@@ -100,16 +100,32 @@ def test_unknown_in_the_same_job_stops_only_that_request(env):
     assert sent == [1]
 
 
-def test_budget_counts_every_dispatch_including_unknown(env):
+@pytest.mark.parametrize("legacy_limit", [None, 0, 2, 400])
+def test_legacy_monthly_limits_do_not_block_and_accounting_is_preserved(env, legacy_limit):
     store, pid = env
-    dispatch.set_monthly(store, pid, {'model': 2})
+    # Existing database settings remain audit history, not active admission limits.
+    with store._connect() as db:
+        db.execute(dispatch.SCHEMA)
+        if legacy_limit is not None:
+            db.execute('INSERT INTO studio_project_budgets VALUES (?,?,?)',
+                       (pid, json.dumps({'model': legacy_limit}), now()))
     work, sent = job(store, pid, 'analyze'), []
-    receipt(store, work.job['id'], 'model', 'unclear', 'unknown')  # counts as spent
-    work.call('model', 'one', ok(sent))
-    with pytest.raises(dispatch.NotSent, match='project_budget'):
-        work.call('model', 'two', ok(sent))
+    for i in range(401):
+        receipt(store, work.job['id'], 'model', f'old-{i}', 'completed')
+    receipt(store, work.job['id'], 'model', 'unclear', 'unknown')
+    receipt(store, work.job['id'], 'model', 'never-sent', 'not_sent')
+    before = rows(store)
+    work.call('model', 'new-request', ok(sent))
     assert sent == [1]
-    work.call('open_data', 'paper', ok(sent))  # other kinds keep their own budget
+    assert [r for r in rows(store) if r in before] == before
+    with store._connect() as db:
+        assert dispatch.spent(db, pid, 'model') == 403
+        saved = db.execute('SELECT monthly FROM studio_project_budgets WHERE project_id=?', (pid,)).fetchone()
+        assert (json.loads(saved[0]) if saved else None) == (None if legacy_limit is None else {'model': legacy_limit})
+    with pytest.raises(dispatch.NotSent, match='unknown_not_resent'):
+        work.call('model', 'unclear', ok(sent))
+    assert sent == [1]
+
 
 
 def test_pause_is_a_definite_not_sent(env):
@@ -170,3 +186,24 @@ def test_archive_ends_retired_jobs_without_touching_requests(env):
     with store._connect() as db:
         assert dispatch.spent(db, pid, 'model') == 1
     assert json.dumps(before)  # receipts remain plain data for audit
+
+
+@pytest.mark.parametrize('block', ['project_not_consented', 'provider_backoff', 'request_in_flight'])
+def test_removing_quotas_keeps_dispatch_safety_gates(env, block):
+    store, pid = env
+    work, sent = job(store, pid, 'collect'), []
+    with store._connect() as db:
+        if block == 'project_not_consented':
+            db.execute('UPDATE studio_projects SET consent_at=NULL WHERE project_id=?', (pid,))
+        elif block == 'provider_backoff':
+            db.execute('INSERT INTO studio_provider_backoff VALUES (?,?,?)',
+                       (hashlib.sha256(b'synthetic').hexdigest(), '2099-01-01T00:00:00+00:00', 429))
+        else:
+            old = legacy_job(store, pid, 'external', status='running')
+            db.execute("UPDATE studio_jobs SET lease_until='2099-01-01T00:00:00+00:00' WHERE id=?", (old['id'],))
+    if block == 'request_in_flight':
+        receipt(store, old['id'], 'search', 'new', 'started')
+    before = rows(store)
+    with pytest.raises(dispatch.NotSent, match=block):
+        work.call('search', 'new', ok(sent), provider='synthetic')
+    assert sent == [] and rows(store) == before

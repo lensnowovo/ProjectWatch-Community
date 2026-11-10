@@ -44,6 +44,10 @@ def round_view(store, pid):
             view[kind] = None
             continue
         result = JobExecution(store, {'id': job['id']}).read_checkpoint(stage)
+        if kind == 'analyze' and result is None:
+            coverage = JobExecution(store, {'id': job['id']}).read_checkpoint(analyze_job.COVERAGE)
+            if coverage:
+                result = dict(status=job['status'], coverage=coverage)
         view[kind] = dict(job_id=job['id'], status=job['status'], stage=job['stage'],
                           started_at=job['started_at'], finished_at=job['finished_at'],
                           error=job['error'] if job['status'] == 'failed' else '', result=result)

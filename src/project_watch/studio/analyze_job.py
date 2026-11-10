@@ -2,8 +2,8 @@
 
 Order: relevance review of this batch's stored items (direct model calls,
 existing triage with the user's exclusion rules) → event grouping → an
-immutable material snapshot → section drafts over a selected, bounded subset of
-the snapshot → independent evidence review and per-section publication → a
+immutable material snapshot → section drafts over relevant material from
+the snapshot in finite, checkpointed batches → independent evidence review and per-section publication → a
 report job is queued. A failure keeps everything already stored; queuing
 ``analyze`` again for the same collection re-runs it on the same material, and
 the request journal replays the model answers it already has.
@@ -16,7 +16,12 @@ from project_watch.studio.store import digest, now
 
 RESULT = 'analyze_result_v1'
 SNAPSHOT = 'analyze_snapshot_v1'
-DRAFT = 'analyze_section_draft_v1'
+DRAFT = 'analyze_section_draft_v2'
+COVERAGE = 'analyze_coverage_v2'
+SELECTION = 'analyze_selection_v2'
+PROTOCOL = 'analyze_protocol_v2'
+REVIEW_PROTOCOL = 'analysis_review_sources_v1'
+BATCH_CHARS = 32000
 PUBLICATION = 'analyze_publication_v1'
 FOLLOW = 'analyze_follow_through_v1'
 MAX_MATERIALS, MAX_CHARS = 40, 4000
@@ -63,7 +68,7 @@ def _batch_items(store, pid, collect_job_id):
         ids = [r[0] for r in db.execute('SELECT DISTINCT item_id FROM studio_collection_observations WHERE job_id=?',
                                         (collect_job_id,))] if collect_job_id else []
         ids += [r[0] for r in db.execute('SELECT id FROM studio_items WHERE project_id=? AND triaged=0 '
-                                         'ORDER BY collected_at DESC LIMIT 200', (pid,))]
+                                         'ORDER BY collected_at DESC', (pid,))]
     return set(ids)
 
 
@@ -76,41 +81,140 @@ def _plan(pipeline, execution, collect_job_id):
 
 
 def select(store, pid, context):
-    """A bounded material set for drafting: relevant items first, by importance then date."""
+    """Traverse eligible materials; bound each request, never silently drop the tail."""
     with closing(store._connect()) as db:
         rows = {r['evidence_version_id']: dict(r) for r in db.execute(
-            'SELECT b.evidence_version_id,i.relevant,i.triaged,i.importance,i.published_at,i.collected_at '
+            'SELECT b.evidence_version_id,i.relevant,i.triaged,i.importance,i.published_at,i.collected_at,i.category '
             'FROM studio_item_evidence b JOIN studio_items i ON i.id=b.item_id WHERE i.project_id=?', (pid,))}
-    chosen = []
+    chosen, excluded = [], list(context.get("exclusions", []))
     for material in context['materials']:
         item = rows.get(material['evidence_version_id'])
         if item is not None and (not item['triaged'] or not item['relevant']):
-            continue  # unreviewed or reviewed-irrelevant items are not drafting input
+            excluded.append(dict(evidence_version_id=material['evidence_version_id'],
+                                 reason='unreviewed' if not item['triaged'] else 'irrelevant'))
+            continue
+        if not any(part.get('text', '').strip() for part in material['evidence']['parts']):
+            excluded.append(dict(evidence_version_id=material['evidence_version_id'], reason='empty_text'))
+            continue
         chosen.append((item or {}, material))
     # Newest first, then (stable) by importance: major news of any date before routine.
     chosen.sort(key=lambda pair: pair[0].get('published_at') or pair[0].get('collected_at') or '', reverse=True)
     chosen.sort(key=lambda pair: IMPORTANCE_RANK.get(pair[0].get('importance'), 1))
+    # Interleave directions; importance orders materials within each direction.
+    directions = {}
+    for item, material in chosen:
+        directions.setdefault(item.get('category') or 'other', []).append(material)
+    ordered = [material for row in range(max((len(v) for v in directions.values()), default=0))
+               for values in directions.values() for material in values[row:row + 1]]
     selected = []
-    for _, material in chosen[:MAX_MATERIALS]:
-        evidence = dict(material['evidence'])
-        evidence['parts'] = [{**part, 'text': part['text'][:MAX_CHARS]} for part in evidence['parts'][:1]]
-        selected.append({**material, 'evidence': evidence})
-    return {**context, 'materials': selected}
+    for material in ordered:
+        evidence = material['evidence']
+        for part_no, part in enumerate(evidence['parts']):
+            for offset in range(0, len(part['text']), MAX_CHARS):
+                fragment = {**part, 'text': part['text'][offset:offset + MAX_CHARS]}
+                selected.append({**material, 'evidence': {**evidence, 'parts': [fragment]},
+                                 'fragment': {'part': part_no, 'offset': offset},
+                                 'read_scope': 'partial' if len(evidence['parts']) > 1 or len(part['text']) > MAX_CHARS
+                                 else material['read_scope']})
+    coverage = dict(snapshot_id=context['id'], candidates=len(context['materials']),
+                    selected_materials=len(ordered), fragments=len(selected), processed_fragments=0,
+                    excluded=excluded, directions={k: len(v) for k, v in directions.items()})
+    return {**context, 'materials': selected, 'coverage': coverage}
+
+
+def source_batches(sources):
+    """Finite snapshot traversal. Batch size is a context bound, never a total quota."""
+    batch, size = {}, 0
+    for code, source in sources.items():
+        n = len(source['text'])
+        if batch and (len(batch) >= MAX_MATERIALS or size + n > BATCH_CHARS):
+            yield batch
+            batch, size = {}, 0
+        batch[code], size = source, size + n
+    if batch:
+        yield batch
+
+
+def draft_batches(execution, llm, system, company, sources, context, targets, on_draft=None):
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.step_outcomes import attempt
+
+    if execution.read_checkpoint('analyze_section_draft_v1') is not None:
+        raise ValueError('legacy analysis draft retained; incompatible evidence numbering')
+    previous, processed = {}, 0
+    for index, batch in enumerate(source_batches(sources)):
+        fingerprint = digest([context['id'], targets, batch, previous])
+        key = DRAFT + ':' + str(index) + ':' + fingerprint[:24]
+        saved = execution.read_checkpoint(key)
+        fresh_batch = saved is None
+        if saved is None:
+            payload = dict(company=company, materials=batch, snapshot_id=context['id'], requested_sections=targets)
+            if previous:
+                payload.update(previous_draft=previous,
+                               instruction='结合本批材料修订已有草稿；保留仍有依据的前批结论及其 refs；冲突保留双方条件。不得把后批覆盖为全部材料。')
+            success, value = attempt(execution, 'draft:' + key, lambda payload=payload: llm.json(
+                system, json.dumps(payload, ensure_ascii=False), repair_invalid=False))
+            if not success:
+                # Later cumulative drafts depend on this response. Review the
+                # last retained candidate; never jump past an unknown draft.
+                execution.checkpoint_chunked(COVERAGE, {**context['coverage'], 'processed_fragments': processed,
+                    'remaining_fragments': len(sources) - processed, 'blocked': True})
+                break
+            if not isinstance(value, dict):
+                raise ModelError('analysis draft must be an object', code='model_output_invalid_shape')
+            saved = dict(draft=value, fingerprint=fingerprint)
+            execution.checkpoint_chunked(key, saved)
+        previous = saved['draft']
+        processed += len(batch)
+        execution.checkpoint_chunked(COVERAGE, {**context['coverage'], 'processed_fragments': processed,
+                                               'remaining_fragments': len(sources) - processed})
+        if on_draft is not None:
+            on_draft(previous)
+        if fresh_batch:
+            from project_watch.studio.review_source_traversal import safe_yield
+            safe_yield(execution)
+    return previous
+
+
+SYNTHESIS_SUPPORT = """\n区分“多来源综合”与“事实只得到部分支持”：
+direct 表示字段中的每项事实与推理前提均有引文支持，并不要求某篇原文逐字写出整段总结。
+对已有事实作明确限于这些事实的综合比较或趋势判断，可以是 direct；不能仅因综合了多条来源就标 partial。
+partial 仅用于仍有断言或必要前提未被证据支持；请在 reason 中明确指出缺少支持的具体断言。
+缺失的年份、金额、排名、因果关系、泛化的比较范围仍必须判不足；不能用“属于分析”豁免事实核验。"""
 
 
 def _reviewer(pipeline, execution, llm, guard):
-    from project_watch.studio import judgment_review as review
+    from project_watch.studio import review_source_traversal
     from project_watch.studio.llm import ModelError
 
-    def reviewer(system, payload):
-        guard()
-        aliases = review.ReviewFieldAliases(payload)
-        system = system + (review.SPAN_GUIDANCE if payload.get('phase') != 'consistency' else '')
-        value = llm.json(system, json.dumps(aliases.payload, ensure_ascii=False), max_tokens=8192, repair_invalid=False)
+    def checked_guard():
         try:
-            return aliases.decode(value)
+            guard()
+        except ValueError as exc:
+            # Permission/snapshot changes are execution failures, not malformed
+            # model output. They must escape single-page failure isolation.
+            raise RuntimeError('analysis permission or snapshot changed') from exc
+
+    def reviewer(system, payload):
+        checked_guard()
+        try:
+            if _review_version(execution) >= 2:
+                system += review_source_traversal.METRIC_SCOPE
+            if _review_version(execution) >= 4 and payload.get('phase') != 'consistency':
+                system += SYNTHESIS_SUPPORT
+            return review_source_traversal.run(execution, llm, system,
+                                               review_source_traversal.cited_payload(payload), checked_guard)
         except ValueError as exc:
             raise ModelError('analysis review field or quote invalid', code='model_output_invalid_shape') from exc
+    def prepare(payload):
+        checked_guard()
+        try:
+            return review_source_traversal.counterevidence(execution, llm, payload, checked_guard,
+                                                          metric_scope=_review_version(execution) >= 2)
+        except ValueError as exc:
+            raise ModelError('analysis counterevidence review invalid', code='model_output_invalid_shape') from exc
+    reviewer.prepare = prepare
+    reviewer.contract = SYNTHESIS_SUPPORT if execution is not None and _review_version(execution) >= 4 else ''
     return reviewer
 
 
@@ -161,9 +265,14 @@ def sections(pipeline, execution, llm, context, affected=None):
     def guard():
         with closing(execution.store._connect()) as db:
             execution._guard(db)
-    selected = select(execution.store, pid, context)
+    selected = execution.read_checkpoint(SELECTION)
+    if selected is None:
+        selected = select(execution.store, pid, context)
+        execution.checkpoint_chunked(SELECTION, selected)
+    if selected['id'] != context['id']:
+        raise ValueError('analysis selection snapshot changed')
     if not selected['materials']:
-        return dict(status='no_material', reason='no_relevant_material')
+        return dict(status='no_material', reason='no_relevant_material', coverage=selected['coverage'])
     sources = section_analysis.numbered(selected)
     retained = section_analysis.retained_sections(execution.store, pid, selected)
     targets = [s for s in section_analysis.SECTIONS if affected is None or s in affected or s not in retained]
@@ -173,24 +282,94 @@ def sections(pipeline, execution, llm, context, affected=None):
                                      for s in section_analysis.SECTIONS})
         execution.checkpoint_chunked(PUBLICATION, publication)
         return publication
-    draft = execution.read_checkpoint(DRAFT)
-    if draft is None:
-        project = pipeline.store.get_project(pid) or {}
-        company = {k: project.get(k) for k in ('name', 'legal_name', 'short_name', 'industry', 'description')}
-        draft = llm.json(generator.SYSTEM + GUIDANCE,
-                         json.dumps(dict(company=company, materials=sources, snapshot_id=context['id'],
-                                         requested_sections=targets), ensure_ascii=False),
-                         repair_invalid=False)
-        execution.checkpoint_chunked(DRAFT, draft)
+    project = pipeline.store.get_project(pid) or {}
+    company = {k: project.get(k) for k in ('name', 'legal_name', 'short_name', 'industry', 'description')}
+    from project_watch.studio.judgment_delivery import deliver_batches, enabled
+    if enabled(execution):
+        return deliver_batches(pipeline, execution, llm, company, sources, selected, targets, retained, guard)
+    draft = draft_batches(execution, llm, generator.SYSTEM + GUIDANCE, company, sources, selected, targets)
+    publication = publish_draft(pipeline, execution, llm, draft, sources, selected, targets, retained, guard)
+    execution.checkpoint_chunked(PUBLICATION, publication)
+    return publication
+
+
+def publish_draft(pipeline, execution, llm, draft, sources, selected, targets, retained, guard, revision=None,
+                  independent=True):
+    """Review a frozen candidate and publish its approved sections, with durable per-page receipts."""
+    from project_watch.studio import section_analysis
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.section_progress import outcome_state
+    from project_watch.studio import judgment_delivery
+    if independent and revision and judgment_delivery.independent_pages(execution):
+        return judgment_delivery.publish_pages(
+            pipeline, execution, llm, draft, sources, selected, targets, retained, guard, revision)
+    generator = pipeline.insight_generator
+    context = selected
+    review_key = 'delivery-review:' + revision if revision else 'analyze_reviewed_sections_v1'
     raw = {name: part for name, part in (draft or {}).items() if name in targets}
     reviewer = _reviewer(pipeline, execution, llm, guard)
-    outcomes = section_analysis.evaluate(execution, raw, sources, reviewer, guard, retained)
-    outcomes = repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer, guard, retained)
+    reviewed = execution.read_checkpoint(review_key)
+    if reviewed is None:
+        outcomes = section_analysis.evaluate(execution, raw, sources, reviewer, guard, retained)
+        execution.checkpoint_chunked(review_key, dict(raw=raw, outcomes=outcomes))
+    else:
+        raw, outcomes = reviewed['raw'], reviewed['outcomes']
+    published = []
+    # Publish verified drafts first. A repair or a provider outage in a later
+    # section must not hold them back. Keep sibling evidence for cross-checks.
+    def needs_repair(name):
+        outcome = outcomes[name]
+        return name in raw and (_summary_problem(name, outcome) or
+            (outcome['status'] == 'approved' and _normalization_problem(
+                generator, name, raw[name], sources, modern=_review_version(execution) >= 2)))
+
+    repairs = {name for name in targets if needs_repair(name)}
+    peers = dict(retained)
+    for name in sorted(targets, key=lambda section: section in repairs):
+        key = ('delivery-outcome:' + digest([revision, name])[:40] if revision else
+               'analyze_section_outcome_v1:' + name)
+        saved_section = execution.read_checkpoint(key)
+        if saved_section is None:
+            outcome = outcomes[name]
+            if name in repairs:
+                try:
+                    outcome = repair_summaries(generator, execution, llm, raw, sources, {name: outcome},
+                                               reviewer, guard, peers)[name]
+                except ModelError as exc:
+                    from project_watch.studio.step_outcomes import ISOLATABLE
+                    # Rewriting one summary is independent of its siblings in
+                    # every protocol. Classifying a received output failure does
+                    # not change a frozen request or resend an uncertain one.
+                    allowed = section_analysis.UNKNOWN_ERRORS | ISOLATABLE
+                    if exc.code not in allowed:
+                        raise
+                    outcome = section_analysis.blocked_outcome(exc)
+            result = section_analysis.publish(pipeline, execution, selected, raw, sources, {name: outcome}, guard,
+                                              targets=[name]) if outcome['status'] == 'approved' else {}
+            saved_section = dict(outcome=outcome, published=bool(result.get('published')),
+                                 raw=raw.get(name) if result.get('published') else None)
+            execution.checkpoint_chunked(key, saved_section)
+            if revision:
+                from project_watch.studio.judgment_delivery import CURRENT
+                current = execution.read_checkpoint(CURRENT) or {'sections': {}, 'published': []}
+                current['sections'][name] = saved_section['outcome']
+                if saved_section['published']:
+                    current['published'] = sorted(set(current['published']) | {name})
+                current.update(status='partial', snapshot_id=context['id'], targets=targets)
+                execution.checkpoint_chunked(CURRENT, current)
+            from project_watch.studio.review_source_traversal import safe_yield
+            safe_yield(execution)
+        outcomes[name] = saved_section['outcome']
+        if saved_section['published']:
+            published.append(name)
+            peers[name] = dict(raw=saved_section['raw'], numbered={k: sources[k] for k in outcomes[name]['refs']})
     for name in section_analysis.SECTIONS:
         if name not in targets:
             outcomes[name] = dict(status='unchanged', reason='no new relevant material for this section')
-    publication = section_analysis.publish(pipeline, execution, selected, raw, sources, outcomes, guard, targets=targets)
-    execution.checkpoint_chunked(PUBLICATION, publication)
+    settled = all(name in published or outcome_state(outcomes[name]) == 'insufficient' for name in targets)
+    publication = dict(status='completed' if settled else 'partial', targets=targets,
+                       snapshot_id=context['id'], sections=outcomes, published=published)
+    publication['coverage'] = execution.read_checkpoint(COVERAGE) or selected['coverage']
     return publication
 
 
@@ -210,9 +389,12 @@ def _summary_problem(name, outcome):
     return None
 
 
-def _normalization_problem(generator, name, part, sources):
+def _normalization_problem(generator, name, part, sources, *, modern=False):
     """Why the normalizer would blank an approved section's summary, if it would."""
     try:
+        if modern:
+            from project_watch.studio.section_analysis import normalization_problem
+            return normalization_problem(generator, name, part, sources)
         full = generator.normalize({name: part}, sources)
     except (ValueError, TypeError, KeyError, AttributeError):
         return None
@@ -238,7 +420,7 @@ def repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer
             continue
         reason = _summary_problem(name, outcome)
         if reason is None and outcome.get('status') == 'approved':
-            reason = _normalization_problem(generator, name, raw[name], sources)
+            reason = _normalization_problem(generator, name, raw[name], sources, modern=_review_version(execution) >= 2)
         if reason:
             problems[name] = reason
     if not problems or not getattr(llm, 'ready', False):
@@ -246,20 +428,36 @@ def repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer
     repaired = {}
     for name, reason in problems.items():
         part = raw[name]
+        if _review_version(execution) >= 2 and outcomes[name]['status'] == 'rejected':
+            # Do not recycle rejected points into the rewrite. The summary
+            # remains blocked until the replacement passes a full review.
+            part = outcomes[name].get('repair_basis')
+            if not isinstance(part, dict):
+                continue
         kept = {k: v for k, v in part.items() if isinstance(v, list)}
+        if _review_version(execution) >= 2 and not any(kept.values()):
+            continue
         guard()
         answer = llm.json(REPAIR_SYSTEM, json.dumps(dict(section=name, verdict=part.get('verdict'), summary=part.get('summary'),
                                                          reason=reason, kept_points=kept), ensure_ascii=False))
         summary = str((answer or {}).get('summary') or '').strip()
         if summary and summary != part.get('summary'):
             repaired[name] = {**part, 'summary': summary[:160]}
+            if _review_version(execution) >= 4:
+                # Scalar fields (e.g. technology.route) have no refs array of
+                # their own. Trimming a list item must not silently remove the
+                # original source needed to re-check an unchanged scalar field.
+                # These are review inputs, not permission to accept any claim.
+                repaired[name]['refs'] = sorted(set(outcomes[name].get('refs', [])))
     if not repaired:
         return outcomes
     again = section_analysis.evaluate(execution, repaired, sources, reviewer, guard, retained)
     for name, outcome in again.items():
         if name in repaired:
             raw[name] = repaired[name]
-            outcomes[name] = {**outcome, 'repaired_summary': {'reason': problems[name], 'status': outcome.get('status')}}
+            outcomes[name] = {**outcome, 'dropped': [*outcomes[name].get('dropped', []),
+                                                  *outcome.get('dropped', [])],
+                              'repaired_summary': {'reason': problems[name], 'status': outcome.get('status')}}
     return outcomes
 
 
@@ -286,6 +484,9 @@ def follow_through(pipeline, llm, execution, collect_job_id, item_ids, stage):
             outcome = action() or {}
             steps[name] = dict(status='done', **({'detail': outcome} if isinstance(outcome, dict) else {}))
         except (HttpError, ModelError, ValueError) as exc:
+            from project_watch.studio.dispatch import RECOVERABLE_ERRORS
+            if getattr(exc, 'code', '') in RECOVERABLE_ERRORS | {'project_paused'}:
+                raise
             steps[name] = dict(status='failed', code=getattr(exc, 'code', type(exc).__name__))
             if getattr(exc, 'code', '') != 'project_paused':
                 plans.explorations.hold_cycle(pid, cycle, 'waiting_recovery'
@@ -365,11 +566,63 @@ def triage_all(pipeline, pid, llm, project, plan, stage, item_ids):
                             note=RESCREEN_NOTE)
 
 
+def _review_version(execution):
+    return (execution.read_checkpoint(REVIEW_PROTOCOL) or {}).get('version', 1)
+
+
+def freeze_review_protocol(execution, batch, *, fresh):
+    """A new attempt of an old collection must keep its original request identity."""
+    if execution.read_checkpoint(REVIEW_PROTOCOL) is not None:
+        return
+    from project_watch.studio.execution import JobExecution
+    version = 4 if fresh else 1
+    with closing(execution.store._connect()) as db:
+        if db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (execution.job['id'],)).fetchone():
+            version = 1
+        if batch:
+            previous = db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='analyze' "
+                                  "AND input_version IN (?,?) AND id<>?",
+                                  (execution.job['project_id'], 'collect:' + batch, 'redo:' + batch,
+                                   execution.job['id'])).fetchall()
+            for row in previous:
+                saved = JobExecution(execution.store, {'id': row[0]}).read_checkpoint(REVIEW_PROTOCOL, db=db)
+                version = min(version, (saved or {}).get('version', 1))
+    execution.checkpoint(REVIEW_PROTOCOL, {'version': version})
+
+
 def run(pipeline, execution):
+    from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
+    from project_watch.studio.step_outcomes import attempt
     pid = execution.job['project_id']
     saved = execution.read_checkpoint(RESULT)
     if saved:
         return saved
+    from project_watch.studio.dispatch import batch_of, explicit_redo
+    from project_watch.studio.llm import ModelError
+
+    batch = batch_of(execution.job)
+    if batch and not explicit_redo(execution.job):
+        with closing(execution.store._connect()) as db:
+            legacy_unknown = db.execute(
+                "SELECT 1 FROM studio_jobs j JOIN studio_job_calls c ON c.job_id=j.id "
+                "WHERE j.project_id=? AND j.kind='analyze' AND j.input_version IN (?,?) "
+                "AND c.kind='model' AND (c.status IN ('unknown','started') OR "
+                "(c.status='completed' AND c.response_status IN (500,502,503,504,529))) "
+                "AND (NOT EXISTS (SELECT 1 FROM studio_job_checkpoints p WHERE p.job_id=j.id AND p.stage=?) "
+                "OR NOT EXISTS (SELECT 1 FROM studio_job_checkpoints p WHERE p.job_id=j.id AND p.stage=?)) LIMIT 1",
+                (pid, 'collect:' + batch, 'redo:' + batch, PROTOCOL, REVIEW_PROTOCOL)).fetchone()
+        if legacy_unknown:
+            raise ModelError('旧分析请求结果不明，已保留材料；未切换请求协议或重发', code='unknown_not_resent')
+    fresh = execution.read_checkpoint(PROTOCOL) is None
+    if fresh:
+        if execution.read_checkpoint(SNAPSHOT) or any(u.get('unknown', 0) for u in execution.usage().values()):
+            raise ValueError('existing analysis state retained; unsafe to change request protocol')
+        execution.checkpoint(PROTOCOL, {'version': 2})
+    freeze_review_protocol(execution, batch, fresh=fresh)
+    from project_watch.studio.judgment_delivery import freeze_mode
+    # A frozen request may block judgment delivery, not independent round cleanup.
+    # Keep the failure under the same boundary that owns section publication.
+    attempt(execution, 'sections', lambda: freeze_mode(execution))
     _, _, llm, _ = pipeline.tools()
     collect_job_id = _collect_job(execution)
     project = pipeline.store.get_project(pid) or {}
@@ -377,35 +630,56 @@ def run(pipeline, execution):
     def stage(text):
         pipeline.store.set_stage(execution.job['id'], text)
     item_ids = _batch_items(pipeline.store, pid, collect_job_id)
-    # Without a model, triage keeps every item visible as "not AI-screened" and
-    # events group by title only; no model request is made.
-    triage_all(pipeline, pid, llm, project, _plan(pipeline, execution, collect_job_id), stage, item_ids)
-    stage('整理事件')
-    pipeline.cluster(pid, llm, stage)
+    snapshot = execution.read_checkpoint(SNAPSHOT)
+    # A durable snapshot is written only after triage, clustering and folding.
+    # Resume its frozen evidence rather than rescreening unmatched items again.
+    if snapshot is None:
+        # Without a model, items stay visible and grouping uses titles only.
+        attempt(execution, 'triage', lambda: triage_all(
+            pipeline, pid, llm, project, _plan(pipeline, execution, collect_job_id), stage, item_ids))
+        stage('整理事件')
+        attempt(execution, 'cluster', lambda: pipeline.cluster(pid, llm, stage))
     if not llm.ready:
         result = dict(status='waiting_for_model', finished_at=now(), items_reviewed=len(item_ids))
         execution.checkpoint(RESULT, result)
         pipeline.store.enqueue(pid, 'report', input_version='analyze:' + execution.job['id'])
         return result
+    from project_watch.studio.event_fold import fold
+
     stage('建立材料快照')
-    snapshot = execution.read_checkpoint(SNAPSHOT)
     if snapshot is None:
+        attempt(execution, 'fold', lambda: fold(pipeline, execution, pid, llm))
         snapshot = snapshot_for(execution, collect_job_id)
         execution.checkpoint(SNAPSHOT, {'id': snapshot['id'], 'materials': len(snapshot['materials'])})
         snapshot = {'id': snapshot['id']}
     context = material_snapshot.read(pipeline.store, pid, snapshot['id'])
+    if context['materials']:
+        # The page editor can publish from screened material even if a later section fails.
+        pipeline.store.enqueue(pid, 'page_summary', input_version='analyze:' + execution.job['id'], once_per_input=True)
     stage('分栏分析')
     # A round the schedule or a collection started redoes only what its new material touches;
     # a re-analysis or analysis the owner asked for redoes everything.
     automatic = str(execution.job.get('input_version') or '').startswith('collect:')
-    publication = sections(pipeline, execution, llm, context,
-                           affected=affected_sections(pipeline.store, pid, collect_job_id) if automatic else None)
+    completed, publication = attempt(execution, 'sections', lambda: sections(pipeline, execution, llm, context,
+                           affected=affected_sections(pipeline.store, pid, collect_job_id) if automatic else None))
+    if not completed:
+        from project_watch.studio.section_analysis import SECTIONS
+        # An older protocol can exit after publishing some sections. Its result
+        # must reflect those durable receipts instead of reporting an empty round.
+        publication = {'status': 'partial', 'published': [name for name in
+            SECTIONS
+            if (execution.read_checkpoint('analyze_section_outcome_v1:' + name) or {}).get('published')]}
+        from project_watch.studio.judgment_delivery import CURRENT
+        publication = {**(execution.read_checkpoint(CURRENT) or publication), 'status': 'partial',
+                       'coverage': execution.read_checkpoint(COVERAGE)}
     follow = follow_through(pipeline, llm, execution, collect_job_id, item_ids, stage)
     published = publication.get('published', [])
-    status = ('complete' if publication.get('status') == 'completed'
+    status = ('complete' if publication.get('status') in ('completed', 'no_material')
               else 'partial' if published or publication.get('status') in ('partial', 'no_material') else 'failed')
+    if execution.read_checkpoint(FAILURES) or any(v['status'] != 'done' for v in follow.values()):
+        status = 'partial'
     result = dict(status=status, finished_at=now(), snapshot_id=snapshot['id'], items_reviewed=len(item_ids),
-                  sections=publication.get('status'), published=published,
+                  sections=publication.get('status'), published=published, coverage=publication.get('coverage'),
                   follow_through={k: v['status'] for k, v in follow.items()},
                   fingerprint=digest([snapshot['id'], published]))
     execution.checkpoint(RESULT, result)

@@ -67,6 +67,19 @@ def test_full_app_injects_brief_analysis(tmp_path):
     assert app.state.studio_pipeline.brief_analysis is brief_analysis
 
 
+def test_archive_and_old_reports_are_not_recent_changes(tmp_path, monkeypatch):
+    data = output()
+    data['changes'].append({'text': '历史荣誉', 'refs': ['P1']})
+    pipe, pid, _, calls = setup_brief(tmp_path, monkeypatch, data)
+    _event(pipe.store, pid, '旧闻甲', days=120)
+    monkeypatch.setattr(pipe.store, 'get_public_profile', lambda _: {'facts': [
+        {'text': '历史荣誉', 'date': '2020-01-01', 'refs': [{'url': 'https://example.org'}]}]})
+    pipe.run_brief({'project_id': pid})
+    prefix, archive = calls[0][1].split('公司档案（仅作背景')
+    assert '历史荣誉' in archive and '历史荣誉' not in prefix and '旧闻甲' not in prefix
+    assert [v['text'] for v in pipe.store.get_brief(pid)['changes']] == ['新产品发布']
+
+
 def test_core_reopen_keeps_preexisting_analysis_record(tmp_path, monkeypatch):
     pipe, pid, _eid, _calls = setup_brief(tmp_path, monkeypatch, output())
     pipe.store.put_brief(pid, output())

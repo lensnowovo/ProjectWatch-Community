@@ -92,7 +92,7 @@ export function Empty({ title, children, action }: { title: string; children?: R
 
 export function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  if (/validation errors? for|errors\.pydantic\.dev|\[type=(?:literal_error|string_pattern_mismatch|model_type|missing)/i.test(message)) {
+  if (/^input should be\b|validation errors? for|errors\.pydantic\.dev|\[type=(?:literal_error|string_pattern_mismatch|model_type|missing)/i.test(message)) {
     return "部分字段未能正确识别，已有结果保留。请重试。";
   }
   if (message.startsWith("内部错误")) return "处理失败，已有结果保留。请重试。";
@@ -106,7 +106,8 @@ export function errorMessage(error: unknown): string {
 const CODE_MESSAGE: Record<string, string> = {
   request_outcome_unknown: "上次请求没有返回明确结果，更新已暂停。",
   request_budget: "本次更新的请求次数已达上限，已有内容保留。",
-  provider_backoff: "服务方暂时限流，稍后会自动继续。",
+  provider_backoff: "服务暂时不可用，稍后会自动继续。",
+  connection_not_sent: "网络连接未建立，请检查网络、代理和服务地址；本次请求未发出。",
   connection_failed: "无法连接服务，请检查网络后重试。",
   http_failure: "外部服务返回错误，已有结果保留。",
   response_too_large: "返回内容过大，已跳过。",
@@ -117,10 +118,16 @@ const CODE_MESSAGE: Record<string, string> = {
   search_access_denied: "检索服务拒绝访问，请检查账户权限。",
   search_quota_exhausted: "检索服务额度已用完。",
   registry_error: "工商数据服务暂时不可用。",
-  model_timeout: "模型响应超时，请重试。",
+  model_timeout: "模型响应超时，结果待确认；请先查看服务商记录，不要直接重复请求。",
   model_output_truncated: "模型输出不完整，请在设置中提高单次回复上限后重试。",
   model_http_failure: "模型服务返回错误，请稍后重试。",
-  model_access_denied: "模型服务拒绝访问，请检查密钥。",
+  model_access_denied: "当前账户没有访问权限，请检查套餐、模型权限及 Key 类型。",
+  model_key_invalid: "模型 Key 验证未通过，请检查 Key 是否失效、填错或与服务地址不匹配。",
+  model_balance_insufficient: "模型账户余额不足，请充值或切换有余额的模型账户。",
+  model_resource_unavailable: "余额不足或没有可用资源包，请检查套餐权益及 Key 类型是否匹配。",
+  model_account_unavailable: "模型账户的可用额度或付费状态异常，请检查余额、套餐和服务商用量限制。",
+  model_rate_limited: "模型服务暂时限流，请稍后再试。",
+  model_service_unavailable: "模型服务暂时不可用，请稍后再试。",
   commercial: "专业来源暂时无法读取，已保留上次结果。",
 };
 

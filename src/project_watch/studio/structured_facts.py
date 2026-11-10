@@ -9,6 +9,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from project_watch.studio.business_identity import (
+    current_alias_bindings,
+    located_attribution,
+    part_bindings,
+)
 from project_watch.studio.detail_contracts import (
     BusinessRelation,
     Commitment,
@@ -289,6 +294,12 @@ class StructuredFacts:
                  'parts': parts, 'subjects': subjects, 'prompt_version': PROMPT_VERSION}
         # Names the sources actually use for the main company (short name, aliases); validation only.
         names = own_names(base['company'], self.pipeline.store.get_project(project_id) or {})
+        with closing(self.pipeline.store._connect()) as db:
+            subject = self.pipeline.objects.get(project_id, base['subject_id'], db=db)
+            aliases = current_alias_bindings(db, project_id, subject)
+        for part in parts:
+            names.extend(part_bindings(subject['name'], aliases, part))
+        names = list(dict.fromkeys(names))
         return {**basis, 'names': names,
                 'input_version': hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()}
 
@@ -419,9 +430,12 @@ class StructuredFacts:
                 else:
                     attrs = Funding(**{k: getattr(item, k) for k in Funding.model_fields})
                     basis = item.basis
+                identity = self.pipeline.objects.get(project_id, subject['id'], db=db)
+                mapping_refs = located_attribution(self.pipeline.store, project_id, identity, item.quote, source, db=db)
+                refs = tuple({r.model_dump_json(): r for r in (ref, *(mapping_refs or []))}.values())
                 fact = self.pipeline.objects.save_fact(project_id, FactInput(subject_id=subject['id'], predicate=attrs.kind,
-                    text=item.quote, subject_attribution='explicit' if subject['name'] in item.quote else 'unknown', basis=basis,
-                    visibility=source['visibility'], refs=(ref,), attributes=attrs,
+                    text=item.quote, subject_attribution='explicit' if mapping_refs is not None else 'unknown', basis=basis,
+                    visibility=source['visibility'], refs=refs, attributes=attrs,
                     occurred_at=getattr(item, 'occurred_at', None), disclosed_at=getattr(item, 'disclosed_at', None),
                     **({k: getattr(item, k) for k in ('value', 'unit', 'period', 'currency', 'consolidation_scope')}
                        if isinstance(item, FundingProposal) else {})), db=db)

@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from project_watch.studio import source_digest
+from project_watch.studio.events import news_date_sql, parse_time, recent_news_sql
 from project_watch.studio.source_digest import _COMPETITION_SYSTEM as _COMPETITION_SYSTEM
 from project_watch.studio.source_digest import _QUOTE_RULE as _QUOTE_RULE
 from project_watch.studio.source_digest import DIMENSIONS as DIMENSIONS
@@ -92,10 +93,10 @@ def _window_counts(store, project_id: str, categories: tuple[str, ...], *, notab
     marks = ",".join("?" for _ in categories)
     extra = " AND importance IN ('major','notable')" if notable_only else ""
     with closing(store._connect()) as db:
-        rows = db.execute(f"""SELECT COALESCE(event_at, created_at) FROM studio_events WHERE project_id=? AND status!='dismissed'
-                              AND category IN ({marks}){extra} AND COALESCE(event_at, created_at) >= ?""",
+        rows = db.execute(f"""SELECT {news_date_sql()} FROM studio_events WHERE project_id=? AND status!='dismissed'
+                              AND category IN ({marks}){extra} AND {recent_news_sql()}""",
                           (project_id, *categories, base_from)).fetchall()
-    dates = [r[0] for r in rows]
+    dates = [parse_time(r[0]).isoformat() for r in rows]
     recent = sum(1 for d in dates if d >= recent_from)
     return recent, round((len(dates) - recent) / (HEAT_BASELINE / HEAT_WINDOW), 1)
 

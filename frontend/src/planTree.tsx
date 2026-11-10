@@ -6,7 +6,7 @@ import { publicLink } from './relationScope';
 import './planTree.css';
 
 const short = (v: string, n = 10) => v.length > n ? `${v.slice(0,n)}…` : v;
-const ROLES = {relation:'长期关联',question:'临时研究',legacy:'原有关注点'};
+const ROLES = {relation:'长期关联',question:'临时研究',legacy:'监控方向'};
 const BASIS: Record<string,string> = {summary:'标题 / 摘要关联',full_body:'正文关联',partial_body:'部分正文关联',search_summary:'搜索摘要关联',accepted_hit:'已收录匹配'};
 const DENSE = 5;
 
@@ -59,11 +59,11 @@ export function PlanChainTree({company, plan, paused = false, onOpen}: {
   const missing = model.items.filter(i=>!graphIds.has(i.id));
   return <section className="scope plan-tree" aria-label="关联监控树" onKeyDown={e=>{if(e.key==='Escape'){reset();}}}>
     <header className="scope-head">
-      <h3>关联监控</h3><span className="muted small">{model.items.filter(i=>i.role==='relation'&&!i.contextOnly).length} 个对象 · {model.items.filter(i=>i.role==='question'&&!i.contextOnly).length} 个研究分支{model.items.some(i=>i.role==='legacy') ? ` · ${model.items.filter(i=>i.role==='legacy').length} 个原有关注点` : ''}</span>
+      <h3>关联监控</h3><span className="muted small">{model.items.filter(i=>i.role==='relation'&&!i.contextOnly).length} 个对象 · {model.items.filter(i=>i.role==='question'&&!i.contextOnly).length} 个研究分支{model.items.some(i=>i.role==='legacy') ? ` · ${model.items.filter(i=>i.role==='legacy').length} 项监控方向` : ''}</span>
       {closedCount>0 && <label className="pt-closed small"><input type="checkbox" checked={showClosed} onChange={e=>setShowClosed(e.target.checked)}/>包含已关闭 {closedCount}</label>}
     </header>
     <div className="pt-toolbar">
-      <details className="pt-help small"><summary>图例与说明</summary><p>圆点是长期关联，菱形是临时研究，方点是原有关注点。研究分支不增加对象关联阶数；分类扇区不是事实关系。</p><p>金色表示有已保存的匹配证据，不表示利好或结论已证实；绿色外圈表示近 7 日收录。关注状态不代表此刻正在执行任务。</p></details>
+      <details className="pt-help small"><summary>图例与说明</summary><p>圆点是长期关联，菱形是临时研究，方点是监控方向。研究分支不增加对象关联阶数；分类扇区不是事实关系。</p><p>金色表示有已保存的匹配证据，不表示利好或结论已证实；绿色外圈表示近 7 日收录。关注状态不代表此刻正在执行任务。</p></details>
       <div className="pt-toolbar-actions"><button className="link small pt-mobile-toggle" aria-expanded={graphExpanded} aria-controls={`${uid}-graph`} onClick={()=>setGraphExpanded(!graphExpanded)}>{graphExpanded?'收起关联图':'展开关联图'}</button>
       {(focus||effectiveDirection)&&<button className="link small" onClick={reset}>返回全部</button>}</div>
     </div>
@@ -85,7 +85,7 @@ export function PlanChainTree({company, plan, paused = false, onOpen}: {
             </g>)}
             {layout.radii.levels.map((r,h)=><g key={r}><circle className="pt-guide" r={r}/>
               <path id={`${uid}-level-${h}`} d={tangentArc(layout.levelLabelDeg,r,30)} fill="none"/>
-              <text className="pt-level-label" dy={-6}><textPath href={`#${uid}-level-${h}`} startOffset="50%" textAnchor="middle">{h===0?'原有关注':h===1?'直接关联':`${h} 阶关联`}</textPath></text>
+              <text className="pt-level-label" dy={-6}><textPath href={`#${uid}-level-${h}`} startOffset="50%" textAnchor="middle">{h===0?'监控方向':h===1?'直接关联':`${h} 阶关联`}</textPath></text>
             </g>)}
             {layout.dims.map(d=><g key={d.key} className={on(d.key)}>
               {d.planned_r!==null && <path className="pt-planned" d={ringArc(d.span[0]+2,d.span[1]-2,d.planned_r)}/>}
@@ -126,7 +126,7 @@ export function PlanChainTree({company, plan, paused = false, onOpen}: {
             </g>;
           })}
         </svg></div>
-        <figcaption className="pt-legend small"><span>● 长期对象</span><span>◇ 临时研究</span><span>□ 原有关注</span><span className="pt-new">◎ 近 7 日收录</span></figcaption>
+        <figcaption className="pt-legend small"><span>● 长期对象</span><span>◇ 临时研究</span><span>□ 监控方向</span><span className="pt-new">◎ 近 7 日收录</span></figcaption>
         {dense.size>0&&<p className="pt-footnote small muted">数字节点已聚合，点击查看全部条目。</p>}
       </figure>
       <aside className="pt-detail" aria-label="关联详情" aria-live="polite">

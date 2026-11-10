@@ -20,12 +20,12 @@ component.paths = require.resolve.paths("react");
 component._compile(compiled, entry);
 const Home = component.exports.default;
 const render = (props) => renderToStaticMarkup(React.createElement(StaticRouter, { location: "/" },
-  React.createElement(Home, { modelReady: false, error: null, onRetry() {}, ...props })));
+  React.createElement(Home, { modelReady: false, agentMode: false, error: null, onRetry() {}, ...props })));
 
-test("empty cover keeps the original artwork and BP entry", () => {
+test("empty cover keeps the original artwork and offers model setup", () => {
   const html = render({ projects: [] });
   assert.match(html, /hero-waves/);
-  assert.match(html, /输入公司名/);
+  assert.doesNotMatch(html, /上传商业计划书（BP）识别公司/);
   assert.match(html, /添加第一个项目/);
   assert.match(html, /href="\/new"/);
   assert.match(html, /先配置模型/);
@@ -34,7 +34,8 @@ test("empty cover keeps the original artwork and BP entry", () => {
 test("existing projects retain the cover with feed and portfolio destinations", () => {
   const html = render({ projects: [{ id: "synthetic", name: "合成公司", activated: false }], modelReady: true });
   assert.match(html, /hero-waves/);
-  assert.match(html, /持续看见变化/);
+  assert.match(html, /<h1 class="display">关注的公司，<br\/>持续看见变化。<\/h1>/);
+  assert.doesNotMatch(html, /商业计划书/);
   assert.doesNotMatch(html, /个项目已加入|最近变化|需要你处理/);  // the cover says nothing about any project
   assert.match(html, /href="\/feed"/);
   assert.match(html, /href="\/projects"/);
@@ -59,8 +60,15 @@ test("failed initial reading offers retry without claiming there are no projects
 
 test("configured empty portfolio does not ask to configure a model again", () => {
   const html = render({ projects: [], modelReady: true });
+  assert.match(html, /输入公司名称，或上传商业计划书（BP）识别公司/);
   assert.match(html, /添加第一个项目/);
   assert.doesNotMatch(html, /先配置模型/);
+});
+
+test("agent-mode onboarding points to project authorization and keeps materials optional", () => {
+  const html = render({ projects: [], modelReady: true, agentMode: true });
+  assert.match(html, /在「授权项目」中输入公司名称，可附上商业计划书/);
+  assert.doesNotMatch(html, /识别公司|先配置模型/);
 });
 
 test("working routes stay free of line artwork and retain a real home link", () => {

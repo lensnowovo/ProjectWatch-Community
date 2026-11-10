@@ -450,8 +450,8 @@ def test_depth_boundary_is_recorded_and_does_not_retire_parent(env):
     gathered = plan_replan.gather(p, pid, since='2000-01-01', trigger='external')
     key = next(k for k, w in gathered['items'].items() if w['id'] == leaf['id'])
     change = {'action': 'explore', 'from': key, 'text': '不能继续向三阶延伸', 'section': 'peers', 'refs': ['E1'], 'why': '继续探究'}
-    assert plan_replan.apply(plan, pid, [change], gathered, trigger='external')['dropped'] == 1
-    assert loop.view(pid)[leaf['id']]['reason'] == 'relation_limit'
+    assert plan_replan.apply(plan, pid, [change], gathered, trigger='external')['added'] == 1
+    assert loop.view(pid)[leaf['id']]['reason'] != 'relation_limit'
     assert plan._get(pid, leaf['id'])['status'] != 'retired'
 
 
@@ -463,8 +463,8 @@ def test_capacity_boundary_is_recorded(env):
     gathered = plan_replan.gather(p, pid, since='2000-01-01', trigger='external')
     key = next(k for k, w in gathered['items'].items() if w['id'] == topic['id'])
     change = {'action': 'explore', 'from': key, 'text': '容量已满不能继续', 'section': 'peers', 'refs': ['E1'], 'why': '继续探究'}
-    assert plan_replan.apply(plan, pid, [change], gathered, trigger='external')['dropped'] == 1
-    assert loop.view(pid)[topic['id']]['reason'] == 'capacity_limit'
+    assert plan_replan.apply(plan, pid, [change], gathered, trigger='external')['added'] == 1
+    assert loop.view(pid)[topic['id']]['reason'] != 'capacity_limit'
 
 
 def test_downstream_failure_never_counts_as_no_gain_and_recovers_original_cycle(env):

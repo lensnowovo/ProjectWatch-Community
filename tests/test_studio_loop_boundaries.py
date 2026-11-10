@@ -32,20 +32,20 @@ def add(plan, pid, text, **fields):
     return plan.add(pid, {'text': text, 'queries': [text], **fields}, actor='human', origin='human')
 
 
-def test_restore_and_revert_cannot_exceed_capacity(env):
+def test_restore_and_revert_keep_history_beyond_former_capacity(env):
     _, pid, plan = env
     rows = [add(plan, pid, f'问题{i}') for i in range(16)]
     plan.update(rows[0]['id'], {'status': 'retired'}, actor='human')
-    closed = next(c for c in plan.view(pid)['changes'] if c['action'] == 'retire')
     add(plan, pid, '新的关注点')
-    with pytest.raises(ValueError, match='16'):
-        plan.update(rows[0]['id'], {'status': 'active'}, actor='human')
-    with pytest.raises(ValueError, match='16'):
-        plan.revert(closed['id'])
-    assert len([w for w in plan.items(pid) if w['status'] != 'retired']) == 16
+    plan.update(rows[0]['id'], {'status': 'active'}, actor='human')
+    assert len([w for w in plan.items(pid) if w['status'] != 'retired']) == 17
+    plan.update(rows[0]['id'], {'status': 'retired'}, actor='human')
+    closed = next(c for c in plan.view(pid)['changes'] if c['action'] == 'retire')
+    plan.revert(closed['id'])
+    assert len([w for w in plan.items(pid) if w['status'] != 'retired']) == 17
 
 
-def test_concurrent_last_slot_is_atomic(env):
+def test_concurrent_objects_are_both_retained_beyond_former_capacity(env):
     _, pid, plan = env
     for i in range(15):
         add(plan, pid, f'并发前问题{i}')
@@ -58,10 +58,11 @@ def test_concurrent_last_slot_is_atomic(env):
         except ValueError:
             return False
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(attempt, range(2))) == [False, True]
+        assert sorted(pool.map(attempt, range(2))) == [True, True]
+    assert len(plan.items(pid)) == 17
 
 
-def test_graph_updates_cannot_cycle_cross_projects_or_overflow_descendants(env):
+def test_graph_updates_keep_deep_descendants_but_reject_cycles_and_foreign_parents(env):
     p, pid, plan = env
     root = add(plan, pid, '根问题')
     child = add(plan, pid, '子问题', parent_id=root['id'])
@@ -75,8 +76,9 @@ def test_graph_updates_cannot_cycle_cross_projects_or_overflow_descendants(env):
     with pytest.raises(ValueError):
         plan.update(child['id'], {'parent_id': foreign['id']}, actor='human')
     branch = add(plan, pid, '额外一级', parent_id=root['id'])
-    with pytest.raises(ValueError):
-        plan.update(child['id'], {'parent_id': branch['id']}, actor='human')
+    plan.update(child['id'], {'parent_id': branch['id']}, actor='human')
+    assert plan._get(pid, child['id'])['hop'] == '2'
+    assert plan._get(pid, leaf['id'])['hop'] == '3'
 
 
 def test_replan_cannot_reset_depth_by_omitting_parent(env):

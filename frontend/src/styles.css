@@ -3761,7 +3761,8 @@ a.jd-ref:hover, button.jd-ref:hover { color: var(--brass); border-color: var(--b
 .op-indicator > i { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .op-moving { color: var(--brass); }
 .op-moving > i { background: var(--brass); animation: op-breathe 2.4s ease-in-out infinite; }
-.op-waiting_response > i { animation: none; opacity: .7; }
+.op-running > i, .op-waiting_response > i { flex-basis: 11px; width: 11px; height: 11px; background: transparent; border: 2px solid currentColor; border-right-color: transparent; animation: op-spin .95s linear infinite; }
+@keyframes op-spin { to { transform: rotate(360deg); } }
 .op-queued > i { background: transparent; border: 1px solid var(--brass); }
 .op-idle > i, .op-done > i { background: var(--green, #467360); }
 .op-attention > i { background: var(--red, #a34c40); border-radius: 2px; }
@@ -3954,3 +3955,4 @@ a.jd-ref:hover, button.jd-ref:hover { color: var(--brass); border-color: var(--b
 /* A card that stretches to fill its row must not scale its chart (and its labels) with it */
 .fa-chart { width: 100%; min-width: 0; margin-top: var(--s2); }
 .fa-bars { width: 100%; height: auto; display: block; }
+.qa-tiles .rj-tile.empty:not(:disabled){cursor:pointer}

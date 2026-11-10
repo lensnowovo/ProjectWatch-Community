@@ -194,7 +194,7 @@ def test_a_name_becomes_a_first_plan_marked_for_review(tmp_path):
     assert view["meta"]["review"] == "pending" and view["meta"]["understanding"] == "合成药业做一款靶向药"
     items = {w["text"]: w for w in view["items"]}
     assert items["合成资产一期进度如何？"]["status"] == "active" and items["合成资产一期进度如何？"]["plan_origin"] == "bootstrap"
-    assert items["同靶点竞品甲进展如何？"]["hop"] == "1" and items["目标病种有哪些替代疗法？"]["hop"] == "2"  # capped at 2
+    assert items["同靶点竞品甲进展如何？"]["hop"] == "1" and items["目标病种有哪些替代疗法？"]["hop"] == "5"
     sections = {s["key"]: s for s in view["framework"]}
     assert sections["asset"]["known"] == "一期进行中" and "同靶点" in sections["peers"]["baseline"]
     assert items["目标病种有哪些替代疗法？"]["section"] == "alternatives"  # older "customer" + 替代 wording → 同需求替代
@@ -207,23 +207,16 @@ def test_a_name_becomes_a_first_plan_marked_for_review(tmp_path):
     assert plan._owned_by_people(first) and plan.meta(pid)["review"] == "done"
 
 
-def test_chains_are_bounded_and_new_directions_open_as_topics(tmp_path):
+def test_chains_and_direction_counts_are_not_admission_quotas(tmp_path):
     _app, _client, pid, pipeline, plan, draft, _trial, _event = _setup(tmp_path)
     child = plan.add(pid, {**ITEM, "text": "一阶延伸", "axis": "competition", "parent_id": draft["id"]}, actor="system", origin="system")
     grandchild = plan.add(pid, {**ITEM, "text": "二阶延伸", "axis": "competition", "parent_id": child["id"]}, actor="system", origin="system")
     assert child["hop"] == "1" and grandchild["hop"] == "2"
-    try:
-        plan.add(pid, {**ITEM, "text": "三阶延伸", "axis": "competition", "parent_id": grandchild["id"]}, actor="system", origin="system")
-        raise AssertionError("third hop accepted")
-    except ValueError as exc:
-        assert "最多延伸 2 层" in str(exc)
+    third = plan.add(pid, {**ITEM, "text": "三阶延伸", "axis": "competition", "parent_id": grandchild["id"]}, actor="system", origin="system")
+    assert third['hop'] == '3'
     plan.add(pid, {**ITEM, "text": "竞争第三个", "axis": "competition", "hop": "1"}, actor="system", origin="system")
     plan.add(pid, {**ITEM, "text": "竞争第四个", "axis": "competition", "hop": "1"}, actor="system", origin="system")
-    try:
-        plan.add(pid, {**ITEM, "text": "竞争第五个", "axis": "competition", "hop": "1"}, actor="system", origin="system")
-        raise AssertionError("section cap ignored")
-    except ValueError as exc:
-        assert "已有 4 个关注点" in str(exc)
+    assert plan.add(pid, {**ITEM, "text": "竞争第五个", "axis": "competition", "hop": "1"}, actor="system", origin="system")
     gathered = plan_replan.gather(pipeline, pid, since="2000-01-01", trigger="external")
     w1 = next(k for k, w in gathered["items"].items() if w["id"] == draft["id"])
     model = Model([{"action": "explore", "section": "supply", "text": "关键原料是否只有一家供应商？", "objects": ["原料甲"],

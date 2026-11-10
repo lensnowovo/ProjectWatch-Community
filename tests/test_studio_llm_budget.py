@@ -43,6 +43,28 @@ def _config(**kw):
     return ModelConfig(base_url="https://model.example/v1", model="m", api_key="k", **kw)
 
 
+@pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
+def test_completed_empty_reply_is_output_failure_without_automatic_resend(protocol):
+    calls = []
+    def provider(method, url, headers, body, timeout):
+        calls.append(body)
+        data = ({'content': [], 'stop_reason': 'end_turn',
+                 'usage': {'input_tokens': 12, 'output_tokens': 3}}
+                if protocol == 'anthropic' else
+                {'choices': [{'message': {'content': '', 'reasoning_content': 'reasoning only'},
+                              'finish_reason': 'stop'}],
+                 'usage': {'prompt_tokens': 12, 'completion_tokens': 3}})
+        return Response(200, {}, json.dumps(data).encode())
+    usage = []
+    model = LLM(_config(protocol=protocol), Http(provider), on_usage=lambda i, o: usage.append((i, o)))
+    with pytest.raises(ModelError) as error:
+        model.json('s', 'u')
+    assert error.value.code == 'model_output_incomplete'
+    assert error.value.status == 200
+    assert len(calls) == 1
+    assert usage == [(12, 3)]
+
+
 def test_requests_the_configured_ceiling_and_steps_down_once_per_model():
     provider = Provider(ceiling=8192)
     model = LLM(_config(), Http(provider))

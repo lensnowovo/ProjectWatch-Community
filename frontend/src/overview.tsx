@@ -3,7 +3,7 @@ import { PositionLine } from "./race";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Block, Columns, Figure, Reference, Skeleton } from "./frame";
-import { AssumptionsPanel } from "./assumptionsPanel";
+import { PageSummary } from "./pageSummary";
 import { api, type Item, type KeyNumbers, type ProjectDetail, type PublicFact, type Ref } from "./api";
 import { periodLabel } from "./metrics";
 import { Reveal } from "./motion";
@@ -17,7 +17,7 @@ import { DossierRail, type DossierMotionState } from './DossierMotion';
 import { businessIntro, stageLabel } from './companyDossier';
 import { CATEGORY_LABEL, Drawer, ErrorNote, IMPORTANCE_LABEL, RefChips, locatorLabel, TONE_LABEL, formatAmount, relTime, useAsync, useOpenSource } from "./ui";
 
-export type Tab = "overview" | "brief" | "plan" | "ops" | "business" | "fin" | "risks" | "numbers" | "external" | "trials" | "papers" | "patents" | "competition" | "chain" | "industry" | "documents";
+export type Tab = "overview" | "brief" | "plan" | "ops" | "business" | "fin" | "risks" | "numbers" | "external" | "tech-progress" | "trials" | "papers" | "patents" | "competition" | "chain" | "industry" | "documents";
 
 /** Categories that are about the company itself; competitors, industry and policy have their own tabs. */
 export const OWN_CATEGORIES = new Set(["company", "trial", "paper", "patent"]);
@@ -470,7 +470,8 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
         <div className="tf-meta">{record ? `${record?.origin?.producer ? `${record.origin.producer} 写回` : "AI"} 交叉分析 · 依据 ${record.total} 条 · ${relTime(record.generated_at)}` : brief ? `${brief.origin?.producer || "AI"} 整理 · ${relTime(brief.updated_at)}` : ""}</div>
       </div>
       {brief?.dependency?.status === "stale" && <p className="muted small">资料或关系已更正，此版待更新。</p>}
-      <AssumptionsPanel projectId={project.id} />
+      <PageSummary detail={detail} subject="brief" fallback={brief?.summary?.trim() && brief.dependency?.status !== "stale"
+        ? {text:brief.summary, refs:[], date:brief.updated_at} : undefined} />
 
       {missingOCR.length > 0 && (
         <div className="overview-attention">

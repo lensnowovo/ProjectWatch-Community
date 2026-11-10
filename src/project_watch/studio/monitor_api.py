@@ -342,19 +342,12 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
             raise HTTPException(409, '此项目由 Agent 更新，请在连接的 Agent 中调整关注点')
         if project.get('status') == 'removed':
             raise HTTPException(404, '项目不存在')
-        from project_watch.studio.monitoring_plan import MAX_ITEMS
-
         text = body.text.strip()
         if len(text) < 2:
             raise HTTPException(422, '请输入关注内容')
         config = pipeline.settings_store.load()
 
-        def check_capacity(db=None):
-            if sum(w.get('status') != 'retired' for w in monitor().watchpoints(project_id, db=db)) >= MAX_ITEMS:
-                raise HTTPException(422, f'每个项目最多 {MAX_ITEMS} 个运行中的关注点')
-
         def prepare():
-            check_capacity()
             _settings, _http, llm, _collectors = pipeline.tools(config)
             return mon.build_watchpoint(llm, project, text)
 
@@ -364,7 +357,6 @@ def register_monitor_routes(app: FastAPI, store, pipeline) -> None:
                 raise HTTPException(404, '项目不存在')
             if any(current.get(k) != project.get(k) for k in ('legal_name', 'short_name', 'name')):
                 raise HTTPException(409, '公司信息已变化，请重新添加关注点')
-            check_capacity(db)
             watch = monitor().add_watchpoint(project_id, text, spec['label'], spec['queries'], spec['criteria'], body.alert, db=db)
             if current.get('activated') and current.get('status') == 'active':
                 from project_watch.studio import spine

@@ -7,7 +7,6 @@ from test_studio_competition_research import research_pipeline
 from test_studio_evidence_versions import sample
 
 from project_watch.studio.http import Http, HttpError, Response
-from project_watch.studio.llm import ModelError
 from project_watch.studio.monitoring_contracts import EvidencePart, LocatedRef
 
 
@@ -107,15 +106,22 @@ def test_later_batch_unknown_preserves_old_profile_and_does_not_resend(tmp_path,
     p.http_factory = lambda _: Http(transport)
     getattr(p, 'schedule_' + kind)(pid)
     job = p.store.claim()
-    with pytest.raises(ModelError) as failure:
-        p.run(job)
-    assert failure.value.code == 'request_outcome_unknown'
+    p.run(job)
     current = p.business_profiles.get(pid) if kind == 'business' else p.structured_facts.get(pid)
     assert current == old
-    with pytest.raises(ModelError) as repeat:
-        p.run(job)
-    assert repeat.value.code == 'unknown_not_resent'  # recorded unknown, never resent
-    assert len(calls) == 2
+    from project_watch.studio.execution import JobExecution
+    from project_watch.studio.step_outcomes import CHECKPOINT
+    execution = JobExecution(p.store, job)
+    failures = execution.read_checkpoint(CHECKPOINT)
+    assert len(failures) == 1
+    assert next(iter(failures.values()))['code'] == 'request_outcome_unknown'
+    sent = len(calls)
+    assert sent == 3  # Independent last batch survives the middle batch's unknown.
+    p.run(job)
+    assert len(calls) == sent
+    current = p.business_profiles.get(pid) if kind == 'business' else p.structured_facts.get(pid)
+    assert current == old
+
 
 
 def test_every_relevant_material_window_reaches_question_assessment(tmp_path):

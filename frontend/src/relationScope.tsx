@@ -3,7 +3,8 @@ import type { MonitoringPlanView, PlanItem } from "./api";
 import "./relationScope.css";
 
 const TYPES: Record<string, string> = { technology: "技术路线", product: "产品", indication: "适应症",
-  competitor: "竞争对手", supplier: "供应商", customer: "客户", industry: "行业", policy: "政策" };
+  competitor: "竞争对手", supplier: "供应商", customer: "客户", industry: "行业", policy: "政策",
+  partner: "合作方", pilot_partner: "试点合作方", investor: "投资方" };
 const BASIS = { summary: "标题 / 摘要关联", full_body: "正文关联", partial_body: "部分正文关联", search_summary: "搜索摘要关联" };
 export function branchState(item: PlanItem, state?: { state: string; label: string; reason?: string }) {
   if (item.status === "retired") return "已关闭";

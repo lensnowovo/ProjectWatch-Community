@@ -46,7 +46,8 @@ def test_developer_setup_updates_package_installer_before_installing():
 def test_all_existing_insight_modules_remain_importable():
     modules = json.loads((ROOT / 'scripts/layer_map.json').read_text(encoding='utf-8'))['modules']
     analysis = [name for name, layer in modules.items() if layer == 'Insight']
-    assert len(analysis) == 15
+    assert len(analysis) == 14  # development evaluation moved out of the runtime package
+    assert importlib.import_module('scripts.competition_evaluation').__file__
     for name in analysis:
         assert importlib.import_module(name).__file__
 

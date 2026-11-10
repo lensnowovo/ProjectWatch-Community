@@ -61,3 +61,25 @@ def test_new_internal_documents_trigger_one_analysis_without_collection(env):  #
     with pipeline.store._connect() as db:
         db.execute("UPDATE studio_jobs SET status='failed' WHERE id=?", (job['id'],))
     assert spine.schedule_document_analysis(pipeline, pid) is None  # failed: the owner redoes it, not a loop
+
+def test_manual_page_joins_covering_work_and_dispatches_only_that_page(env, monkeypatch):  # noqa: F811
+    from project_watch.studio import page_summaries
+    pipeline, pid, state = env
+    client = TestClient(pipeline.test_app)
+    path = f'/api/studio/projects/{pid}/summaries/'
+    assert client.post(path + 'missing').status_code == 404
+    first = client.post(path + 'papers')
+    assert first.status_code == 202
+    assert client.post(path + 'papers').json()['id'] == first.json()['id']
+    seen = []
+    monkeypatch.setattr(page_summaries, 'run', lambda pipeline, execution, *, targets: seen.append(targets))
+    job = pipeline.store.claim()
+    assert job['id'] == first.json()['id']
+    pipeline.run(job)
+    assert seen == [('papers',)]
+    assert client.post(path + 'trials').json()['id'] != job['id']
+    all_pages = pipeline.store.enqueue(pid, 'page_summary', input_version='analyze:synthetic')
+    assert all_pages['input_version'] == 'analyze:synthetic'
+    assert client.post(path + 'industry').json()['id'] == all_pages['id']
+    assert client.post(path + 'fin').json()['id'] != all_pages['id']
+    assert not state['sent']

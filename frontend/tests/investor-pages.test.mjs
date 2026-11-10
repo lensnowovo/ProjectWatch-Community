@@ -251,8 +251,9 @@ test("外部信息 is navigated by its count strip: one cell per page, research 
   const research = readFileSync(new URL("../src/researchPages.tsx", import.meta.url), "utf8");
   assert.match(research, /x\.nct_id/); assert.match(research, /e\.openalex_id/); assert.match(research, /x\.cited_by/);
   assert.match(research, /登记不代表已完成或获批/);
-  assert.match(research, /没有接入国家知识产权局或专利数据库/);  // patents say plainly how thin the source is
-  assert.match(research, /既不能代表本公司的专利布局/);  // and that the hits are mostly other companies'
+  assert.match(research, /主文献与检索线索分开展示/);
+  assert.match(research, /公司归属采用主文献申请人字段/);
+  assert.match(research, /if \(!primaryPatent\(item\)\) return null/); // citation numbers cannot drive charts
   assert.match(research, /其他专利与注册线索/); // no name match is not proof of another patent owner
   const news = readFileSync(new URL("../src/landscape.tsx", import.meta.url), "utf8");
   assert.match(news, /<NewsStats items=\{own\}/);  // 公司进展 leads with how much actually moved, not a financing table

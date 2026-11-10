@@ -5,6 +5,7 @@ import { Block, Figure, Skeleton, VerdictBand } from "./frame";
 import { RELATION, ResearchSourceList, ResearchMore, useResearchSources } from './researchSources';
 import { EASE } from "./motion";
 import { Empty, ErrorNote, byNewest } from "./ui";
+import { reviewed, relation, primaryPatent, presentSource } from './researchIntegrity';
 import { externalCollection } from './externalCollection';
 
 export function ResearchEmpty({detail,label}: {detail:ProjectDetail;label:string}) {
@@ -37,17 +38,17 @@ const STATUS: Record<string, [string, "on" | "done" | "stop" | ""]> = {
   WITHDRAWN: ["已撤回", "stop"], SUSPENDED: ["暂停", "stop"], UNKNOWN: ["状态未知", ""],
 };
 
-interface Trial { id: string; title: string; phase: string; status: string; sponsor: string; collaborators: string[]; conditions: string[]; url: string; date: string; news: number }
+interface Trial { relation: string; id: string; title: string; phase: string; status: string; sponsor: string; collaborators: string[]; conditions: string[]; url: string; date: string; news: number }
 
 export function ClinicalView({ detail }: { detail: ProjectDetail }) {
   const { data, loading, error, reload, page, more, note } = useCategory(detail, "trial");
-  const items = (data ?? []).slice().sort(byNewest);
+  const items = (data ?? []).filter(i=>i.extra?.research_relation!=='unrelated').sort((a,b)=>byNewest(presentSource(a),presentSource(b)));
   const trials = new Map<string, Trial>();
   for (const item of items) for (const x of extras(item)) {
     const id = str(x.nct_id);
-    if (!id) continue;
+    if (!id || !reviewed(item)) continue;
     const known = trials.get(id);
-    trials.set(id, { id, title: known?.title || item.title, phase: str(x.phase) || known?.phase || "", status: str(x.status) || known?.status || "",
+    trials.set(id, { id, relation: relation(item, detail), title: known?.title || item.title, phase: str(x.phase) || known?.phase || "", status: str(x.status) || known?.status || "",
       sponsor: str(x.sponsor) || known?.sponsor || "", collaborators: list(x.collaborators), conditions: list(x.conditions).length ? list(x.conditions) : known?.conditions ?? [],
       url: known?.url || `https://clinicaltrials.gov/study/${id}`, date: (item.published_at ?? "").slice(0, 10) || known?.date || "",
       news: (known?.news ?? 0) + 1 });
@@ -69,7 +70,7 @@ export function ClinicalView({ detail }: { detail: ProjectDetail }) {
       </>} />
     {rows.length > 0 && <Block card title="登记试验" note="阶段与状态以登记平台为准；登记不代表已完成或获批">
       <div className="table-wrap"><table className="table trial-table">
-        <thead><tr><th>登记号与题目</th><th>阶段</th><th>状态</th><th>申办方 / 合作方</th><th>适应症</th></tr></thead>
+        <thead><tr><th>登记号与题目</th><th>阶段</th><th>状态</th><th>申办方 / 合作方与公司关系</th><th>适应症</th></tr></thead>
         <tbody>{rows.map((r) => {
           const at = new Set(r.phase.split("/"));
           const [label, tone] = STATUS[r.status] ?? [r.status || "—", ""];
@@ -79,7 +80,7 @@ export function ClinicalView({ detail }: { detail: ProjectDetail }) {
             <td><span className="trial-steps" aria-label={r.phase || "阶段未注明"}>{PHASES.map(([k, l]) => <i key={k} className={at.has(k) ? "on" : ""} title={l} />)}</span>
               <small>{!r.phase || /^N\/?A$/i.test(r.phase) ? "阶段未注明" : r.phase.split("/").map((p) => PHASES.find(([k]) => k === p)?.[1] ?? p).join(" / ")}</small></td>
             <td><span className={`trial-status ${tone}`}>{label}</span></td>
-            <td>{r.sponsor || "—"}{r.collaborators.length > 0 && <small className="muted">合作：{r.collaborators.slice(0, 3).join("、")}</small>}</td>
+            <td>{r.sponsor || "—"}<small className="muted">{r.relation==='subject'?'公司列为申办方或合作方':r.relation==='competitor'?'竞品试验':r.relation==='other'?'公司参与关系未标注':'行业相关试验'}</small>{r.collaborators.length > 0 && <small className="muted">合作：{r.collaborators.slice(0, 3).join("、")}</small>}</td>
             <td className="trial-cond">{r.conditions.slice(0, 3).join("；") || "—"}{r.conditions.length > 3 && <small className="muted">等 {r.conditions.length} 项</small>}</td>
           </tr>;
         })}</tbody>
@@ -108,9 +109,9 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
   if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的论文信息</button></div>;
   if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="论文"/>;
   // A verdict that could not be matched to its source may belong to another paper: list it apart, count nothing from it.
-  const unreviewed = (data ?? []).filter((item) => item.review === 'unreviewed').sort(byNewest);
-  const items = (data ?? []).filter((item) => item.review !== 'unreviewed').sort(byNewest);
-  const relationOf = (item: Item) => { const r = item.extra?.research_relation; return typeof r === 'string' && RELATION[r] && r !== 'unrelated' ? r : 'other'; };
+  const unreviewed = (data ?? []).filter((item) => !reviewed(item)).sort(byNewest);
+  const items = (data ?? []).filter((item) => reviewed(item)).sort(byNewest);
+  const relationOf = (item: Item) => relation(item, detail);
   const ORDER = ['subject', 'competitor', 'route', 'field', 'other'];
   const LABEL: Record<string, string> = { ...RELATION, subject: '公司署名', other: '关系未标注' };
   const byRelation = ORDER.map((key) => ({ key, items: items.filter((item) => relationOf(item) === key) })).filter((g) => g.items.length);
@@ -169,7 +170,7 @@ export function PapersView({ detail }: { detail: ProjectDetail }) {
           <ResearchSourceList items={all ? g.items : g.items.slice(0, 5)} />
         </Block>)}
     {unreviewed.length > 0 && <details className="item-reading-detail"><summary className="muted small">
-      另有 {unreviewed.length} 篇待核实：AI 判断未能与原文对应，未计入上方统计</summary>
+      另有 {unreviewed.length} 篇待核实：尚未完成相关性核对，未计入上方统计</summary>
       <ResearchSourceList items={unreviewed} /></details>}
     <ResearchMore page={page} loading={loading} more={more}/>
   </div>;
@@ -189,13 +190,13 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
   const { data, loading, error, reload, page, more, note } = useCategory(detail, "patent");
   if(error)return <div><ErrorNote error={error}/><button className="link small" onClick={reload}>重新读取已保存的专利信息</button></div>;
   if(!loading && !data?.length)return <ResearchEmpty detail={detail} label="专利与注册"/>;
-  const items = (data ?? []).slice().sort(byNewest);
-  const own = companyNames(detail);
+  const items = (data ?? []).filter(i=>i.extra?.research_relation!=='unrelated').sort((a,b)=>byNewest(presentSource(a),presentSource(b)));
+
   // Patent search returns sector news by keyword, so most records are other companies' patents. Say whose they are.
-  const mine = items.filter((i) => own.some((n) => i.title.includes(n) || i.snippet.includes(n)));
+  const mine = items.filter((i) => relation(i, detail)==='subject');
   const others = items.filter((i) => !mine.includes(i));
   // What can be read from the records themselves: relation, filing office and document kind of each number.
-  const relationOf = (item: Item) => { const r = item.extra?.research_relation; return typeof r === 'string' && RELATION[r] && r !== 'unrelated' ? r : 'other'; };
+  const relationOf = (item: Item) => relation(item, detail);
   const LABEL: Record<string, string> = { ...RELATION, subject: '本公司申请', other: '关系未标注' };
   const relations = ['subject', 'competitor', 'route', 'field', 'other']
     .map((key) => ({ key, n: items.filter((i) => relationOf(i) === key).length })).filter((g) => g.n);
@@ -205,33 +206,33 @@ export function PatentsView({ detail }: { detail: ProjectDetail }) {
   return <div className="tab-frame research-view">
     <VerdictBand eyebrow="专利与注册" meta={`通用网页检索 · ${note ?? ''}`}
       title={loading && !data ? "正在读取专利信息…" : !items.length ? "还没有检索到专利或注册信息"
-        : mine.length ? `检索到 ${items.length} 条，其中 ${mine.length} 条提到本公司` : `检索到 ${items.length} 条，尚未匹配到本公司名称`}
+        : mine.length ? `检索到 ${items.length} 条，其中 ${mine.length} 条申请人对应本公司` : `检索到 ${items.length} 条，申请人关系待核实`}
       figures={items.length ? <>
         <Figure label="检索到" value={items.length} unit="条" note="专利或注册相关报道" />
-        <Figure label="提到本公司" value={mine.length} unit="条" note={mine.length ? "仍需到专利库核实" : "本公司专利未被检索到"} />
-        <Figure label="其他相关线索" value={others.length} unit="条" note="未匹配到本公司名称" />
+        <Figure label="申请人对应本公司" value={mine.length} unit="条" note={mine.length ? "仍需到专利库核实" : "尚无主文献申请人对应记录"} />
+        <Figure label="其他相关线索" value={others.length} unit="条" note="申请人关系未确认" />
       </> : undefined}>
-      <p className="tf-sub">专利只来自通用网页检索，没有接入国家知识产权局或专利数据库，<b>既不能代表本公司的专利布局，也不是完整的同行专利清单</b>。下方按是否提到本公司分开列出。</p>
+      <p className="tf-sub">主文献与检索线索分开展示；公司归属采用主文献申请人字段，引用表中的公司名称保留在来源详情。</p>
     </VerdictBand>
     {items.length > 0 && <div className="research-pair">
-      <Block card title="与公司的关系" note="AI 按申请人与内容判断，权利人以专利登记为准">
+      <Block card title="与公司的关系" note="按主文献申请人字段区分；检索词和引用表不作为归属依据">
         <ul className="inst-bars">{relations.map((g) => <li key={g.key}><span>{LABEL[g.key]}</span>
           <i><motion.b initial={{ width: 0 }} animate={{ width: `${g.n / Math.max(...relations.map((x) => x.n)) * 100}%` }} transition={{ duration: .5, ease: EASE }} /></i><em>{g.n}</em></li>)}</ul>
       </Block>
-      <Block card title="布局地域与状态" note={numbers.length ? `${numbers.length} 条带公开号 · 按公开号判断` : '记录中没有公开号'}>
+      <Block card title="主文献地域与种类" note={numbers.length ? `${numbers.length} 条带公开号 · 按公开号判断` : '主文献公开号待核实'}>
         {numbers.length ? <>
           <ul className="inst-bars">{offices.slice(0, 6).map(([office, n]) => <li key={office}><span>{OFFICE[office] ?? office}</span>
             <i><motion.b initial={{ width: 0 }} animate={{ width: `${n / offices[0][1] * 100}%` }} transition={{ duration: .5, ease: EASE }} /></i><em>{n}</em></li>)}</ul>
-          <p className="muted small">其中授权文本 {granted} 条、申请公开 {numbers.length - granted} 条（按公开号末尾 A/B 判断；法律状态以专利登记为准）。</p>
-        </> : <p className="muted small">检索到的记录没有可识别的公开号。</p>}
+          <p className="muted small">其中授权文本 {granted} 条、申请公开 {numbers.length - granted} 条（按主文献公开号 A/B 种类码判断；法律状态以专利登记为准）。</p>
+        </> : <p className="muted small">主文献公开号待核实，引用表中的号码不计入地域和文献种类。</p>}
       </Block>
     </div>}
     {!items.length ? <Block title="专利与注册信息"><Empty title="暂无专利或注册信息">需要接入专利数据库才能做专利布局分析。</Empty></Block> : <>
-      <Block title="提到本公司的专利动态" note={mine.length ? "仍需到专利库核实权利人与法律状态" : "检索未命中"}>
+      <Block title="申请人对应本公司的专利动态" note={mine.length ? "仍需到专利库核实权利人与法律状态" : "检索未命中"}>
         {mine.length ? <ResearchSourceList items={mine} />
-          : <p className="muted small">暂无收录的公司专利记录。</p>}
+          : <p className="muted small">当前已收录线索的主文献申请人尚待核对。</p>}
       </Block>
-      {others.length > 0 && <Block title="其他专利与注册线索" note={`${others.length} 条 · 未匹配到本公司名称`}>
+      {others.length > 0 && <Block title="其他专利与注册线索" note={`${others.length} 条 · 申请人关系未确认`}>
         <ResearchSourceList items={others} />
       </Block>}
     </>}
@@ -243,14 +244,8 @@ const OFFICE: Record<string, string> = { CN: '中国', US: '美国', EP: '欧洲
 
 /** Publication number in the record (CN117878383B, US2024123456A1): office and A/B document kind. */
 function patentNumber(item: Item): { office: string; kind: string } | null {
-  const raw = `${str(item.extra?.patent_number)} ${item.title} ${item.url}`;
+  if (!primaryPatent(item)) return null;
+  const raw = str(item.extra?.patent_number);
   const m = raw.match(/(?<![A-Za-z])(CN|US|EP|WO|JP|KR|DE|TW)\s?\d{6,}\s?([AB])\d?(?![A-Za-z\d])/);
   return m ? { office: m[1], kind: m[2] } : null;
-}
-
-/** Match saved names only. Stripping company suffixes can turn a name into an unrelated common word. */
-function companyNames(detail: ProjectDetail): string[] {
-  const p = detail.project;
-  const raw = [p.short_name, p.name, p.legal_name].filter((x): x is string => !!x && x.length >= 2);
-  return [...new Set(raw)];
 }

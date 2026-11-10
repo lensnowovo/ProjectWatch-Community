@@ -1,0 +1,562 @@
+[
+  {
+    "id": "n-1",
+    "a": "合成甲公布ZX-101三期研究数据",
+    "b": "合成甲公布ZX-101三期研究数据后股价暴跌",
+    "same": false,
+    "reason": "causal_reaction"
+  },
+  {
+    "id": "n-2",
+    "a": "合成甲提交ZX-101上市申请",
+    "b": "合成甲获得ZX-101上市批准",
+    "same": false,
+    "reason": "application_approval"
+  },
+  {
+    "id": "n-3",
+    "a": "合成甲签订ZX-101采购合同",
+    "b": "合成甲完成ZX-101设备交付",
+    "same": false,
+    "reason": "contract_delivery"
+  },
+  {
+    "id": "n-4",
+    "a": "合成甲计划完成A轮融资",
+    "b": "合成甲完成A轮融资",
+    "same": false,
+    "reason": "planned_actual"
+  },
+  {
+    "id": "n-5",
+    "a": "合成甲完成A轮融资2亿元",
+    "b": "合成甲完成A轮融资5亿元",
+    "same": false,
+    "reason": "amount"
+  },
+  {
+    "id": "n-6",
+    "a": "合成甲完成A轮融资2亿美元",
+    "b": "合成甲完成A轮融资2亿元人民币",
+    "same": false,
+    "reason": "currency"
+  },
+  {
+    "id": "n-7",
+    "a": "合成甲完成A轮融资",
+    "b": "合成甲完成B轮融资",
+    "same": false,
+    "reason": "round"
+  },
+  {
+    "id": "n-8",
+    "a": "新合成甲完成种子轮融资",
+    "b": "合成甲完成种子轮融资",
+    "same": false,
+    "reason": "actor"
+  },
+  {
+    "id": "n-9",
+    "a": "Synthetic 甲 announces ZX-101 approval",
+    "b": "Synthetic 甲 denies ZX-101 approval",
+    "same": false,
+    "reason": "negation"
+  },
+  {
+    "id": "n-10",
+    "a": "合成甲公布ZX-101三期研究数据",
+    "b": "合成甲公布ZX-101二期研究数据",
+    "same": false,
+    "reason": "stage"
+  },
+  {
+    "id": "n-11",
+    "a": "合成乙公布ZX-102三期研究数据",
+    "b": "合成乙公布ZX-102三期研究数据后股价暴跌",
+    "same": false,
+    "reason": "causal_reaction"
+  },
+  {
+    "id": "n-12",
+    "a": "合成乙提交ZX-102上市申请",
+    "b": "合成乙获得ZX-102上市批准",
+    "same": false,
+    "reason": "application_approval"
+  },
+  {
+    "id": "n-13",
+    "a": "合成乙签订ZX-102采购合同",
+    "b": "合成乙完成ZX-102设备交付",
+    "same": false,
+    "reason": "contract_delivery"
+  },
+  {
+    "id": "n-14",
+    "a": "合成乙计划完成A轮融资",
+    "b": "合成乙完成A轮融资",
+    "same": false,
+    "reason": "planned_actual"
+  },
+  {
+    "id": "n-15",
+    "a": "合成乙完成A轮融资2亿元",
+    "b": "合成乙完成A轮融资5亿元",
+    "same": false,
+    "reason": "amount"
+  },
+  {
+    "id": "n-16",
+    "a": "合成乙完成A轮融资2亿美元",
+    "b": "合成乙完成A轮融资2亿元人民币",
+    "same": false,
+    "reason": "currency"
+  },
+  {
+    "id": "n-17",
+    "a": "合成乙完成A轮融资",
+    "b": "合成乙完成B轮融资",
+    "same": false,
+    "reason": "round"
+  },
+  {
+    "id": "n-18",
+    "a": "新合成乙完成种子轮融资",
+    "b": "合成乙完成种子轮融资",
+    "same": false,
+    "reason": "actor"
+  },
+  {
+    "id": "n-19",
+    "a": "Synthetic 乙 announces ZX-102 approval",
+    "b": "Synthetic 乙 denies ZX-102 approval",
+    "same": false,
+    "reason": "negation"
+  },
+  {
+    "id": "n-20",
+    "a": "合成乙公布ZX-102三期研究数据",
+    "b": "合成乙公布ZX-102二期研究数据",
+    "same": false,
+    "reason": "stage"
+  },
+  {
+    "id": "n-21",
+    "a": "合成丙公布ZX-103三期研究数据",
+    "b": "合成丙公布ZX-103三期研究数据后股价暴跌",
+    "same": false,
+    "reason": "causal_reaction"
+  },
+  {
+    "id": "n-22",
+    "a": "合成丙提交ZX-103上市申请",
+    "b": "合成丙获得ZX-103上市批准",
+    "same": false,
+    "reason": "application_approval"
+  },
+  {
+    "id": "n-23",
+    "a": "合成丙签订ZX-103采购合同",
+    "b": "合成丙完成ZX-103设备交付",
+    "same": false,
+    "reason": "contract_delivery"
+  },
+  {
+    "id": "n-24",
+    "a": "合成丙计划完成A轮融资",
+    "b": "合成丙完成A轮融资",
+    "same": false,
+    "reason": "planned_actual"
+  },
+  {
+    "id": "n-25",
+    "a": "合成丙完成A轮融资2亿元",
+    "b": "合成丙完成A轮融资5亿元",
+    "same": false,
+    "reason": "amount"
+  },
+  {
+    "id": "n-26",
+    "a": "合成丙完成A轮融资2亿美元",
+    "b": "合成丙完成A轮融资2亿元人民币",
+    "same": false,
+    "reason": "currency"
+  },
+  {
+    "id": "n-27",
+    "a": "合成丙完成A轮融资",
+    "b": "合成丙完成B轮融资",
+    "same": false,
+    "reason": "round"
+  },
+  {
+    "id": "n-28",
+    "a": "新合成丙完成种子轮融资",
+    "b": "合成丙完成种子轮融资",
+    "same": false,
+    "reason": "actor"
+  },
+  {
+    "id": "n-29",
+    "a": "Synthetic 丙 announces ZX-103 approval",
+    "b": "Synthetic 丙 denies ZX-103 approval",
+    "same": false,
+    "reason": "negation"
+  },
+  {
+    "id": "n-30",
+    "a": "合成丙公布ZX-103三期研究数据",
+    "b": "合成丙公布ZX-103二期研究数据",
+    "same": false,
+    "reason": "stage"
+  },
+  {
+    "id": "n-31",
+    "a": "合成丁公布ZX-104三期研究数据",
+    "b": "合成丁公布ZX-104三期研究数据后股价暴跌",
+    "same": false,
+    "reason": "causal_reaction"
+  },
+  {
+    "id": "n-32",
+    "a": "合成丁提交ZX-104上市申请",
+    "b": "合成丁获得ZX-104上市批准",
+    "same": false,
+    "reason": "application_approval"
+  },
+  {
+    "id": "n-33",
+    "a": "合成丁签订ZX-104采购合同",
+    "b": "合成丁完成ZX-104设备交付",
+    "same": false,
+    "reason": "contract_delivery"
+  },
+  {
+    "id": "n-34",
+    "a": "合成丁计划完成A轮融资",
+    "b": "合成丁完成A轮融资",
+    "same": false,
+    "reason": "planned_actual"
+  },
+  {
+    "id": "n-35",
+    "a": "合成丁完成A轮融资2亿元",
+    "b": "合成丁完成A轮融资5亿元",
+    "same": false,
+    "reason": "amount"
+  },
+  {
+    "id": "n-36",
+    "a": "合成丁完成A轮融资2亿美元",
+    "b": "合成丁完成A轮融资2亿元人民币",
+    "same": false,
+    "reason": "currency"
+  },
+  {
+    "id": "n-37",
+    "a": "合成丁完成A轮融资",
+    "b": "合成丁完成B轮融资",
+    "same": false,
+    "reason": "round"
+  },
+  {
+    "id": "n-38",
+    "a": "新合成丁完成种子轮融资",
+    "b": "合成丁完成种子轮融资",
+    "same": false,
+    "reason": "actor"
+  },
+  {
+    "id": "n-39",
+    "a": "Synthetic 丁 announces ZX-104 approval",
+    "b": "Synthetic 丁 denies ZX-104 approval",
+    "same": false,
+    "reason": "negation"
+  },
+  {
+    "id": "n-40",
+    "a": "合成丁公布ZX-104三期研究数据",
+    "b": "合成丁公布ZX-104二期研究数据",
+    "same": false,
+    "reason": "stage"
+  },
+  {
+    "id": "n-41",
+    "a": "合成戊公布ZX-105三期研究数据",
+    "b": "合成戊公布ZX-105三期研究数据后股价暴跌",
+    "same": false,
+    "reason": "causal_reaction"
+  },
+  {
+    "id": "n-42",
+    "a": "合成戊提交ZX-105上市申请",
+    "b": "合成戊获得ZX-105上市批准",
+    "same": false,
+    "reason": "application_approval"
+  },
+  {
+    "id": "n-43",
+    "a": "合成戊签订ZX-105采购合同",
+    "b": "合成戊完成ZX-105设备交付",
+    "same": false,
+    "reason": "contract_delivery"
+  },
+  {
+    "id": "n-44",
+    "a": "合成戊计划完成A轮融资",
+    "b": "合成戊完成A轮融资",
+    "same": false,
+    "reason": "planned_actual"
+  },
+  {
+    "id": "n-45",
+    "a": "合成戊完成A轮融资2亿元",
+    "b": "合成戊完成A轮融资5亿元",
+    "same": false,
+    "reason": "amount"
+  },
+  {
+    "id": "n-46",
+    "a": "合成戊完成A轮融资2亿美元",
+    "b": "合成戊完成A轮融资2亿元人民币",
+    "same": false,
+    "reason": "currency"
+  },
+  {
+    "id": "n-47",
+    "a": "合成戊完成A轮融资",
+    "b": "合成戊完成B轮融资",
+    "same": false,
+    "reason": "round"
+  },
+  {
+    "id": "n-48",
+    "a": "新合成戊完成种子轮融资",
+    "b": "合成戊完成种子轮融资",
+    "same": false,
+    "reason": "actor"
+  },
+  {
+    "id": "n-49",
+    "a": "Synthetic 戊 announces ZX-105 approval",
+    "b": "Synthetic 戊 denies ZX-105 approval",
+    "same": false,
+    "reason": "negation"
+  },
+  {
+    "id": "n-50",
+    "a": "合成戊公布ZX-105三期研究数据",
+    "b": "合成戊公布ZX-105二期研究数据",
+    "same": false,
+    "reason": "stage"
+  },
+  {
+    "id": "p-1",
+    "a": "合成甲公布ZX-101三期研究数据",
+    "b": "快讯：合成甲公布ZX-101三期研究数据",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-2",
+    "a": "合成甲完成种子轮融资",
+    "b": "合成甲宣布获种子轮投资",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-3",
+    "a": "Synthetic 甲 announces ZX-101 approval",
+    "b": "Synthetic 甲 announces ZX-101 approval!",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-4",
+    "a": "合成甲签订设备采购合同",
+    "b": "合成甲签订设备采购合同",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-5",
+    "a": "合成甲2026年Q3销量1万台",
+    "b": "合成甲公布2026年Q3销量10000台",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-6",
+    "a": "合成甲获得ZX-101上市批准",
+    "b": "合成甲获得ZX-101上市批准。",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-7",
+    "a": "合成乙公布ZX-102三期研究数据",
+    "b": "快讯：合成乙公布ZX-102三期研究数据",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-8",
+    "a": "合成乙完成种子轮融资",
+    "b": "合成乙宣布获种子轮投资",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-9",
+    "a": "Synthetic 乙 announces ZX-102 approval",
+    "b": "Synthetic 乙 announces ZX-102 approval!",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-10",
+    "a": "合成乙签订设备采购合同",
+    "b": "合成乙签订设备采购合同",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-11",
+    "a": "合成乙2026年Q3销量1万台",
+    "b": "合成乙公布2026年Q3销量10000台",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-12",
+    "a": "合成乙获得ZX-102上市批准",
+    "b": "合成乙获得ZX-102上市批准。",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-13",
+    "a": "合成丙公布ZX-103三期研究数据",
+    "b": "快讯：合成丙公布ZX-103三期研究数据",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-14",
+    "a": "合成丙完成种子轮融资",
+    "b": "合成丙宣布获种子轮投资",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-15",
+    "a": "Synthetic 丙 announces ZX-103 approval",
+    "b": "Synthetic 丙 announces ZX-103 approval!",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-16",
+    "a": "合成丙签订设备采购合同",
+    "b": "合成丙签订设备采购合同",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-17",
+    "a": "合成丙2026年Q3销量1万台",
+    "b": "合成丙公布2026年Q3销量10000台",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-18",
+    "a": "合成丙获得ZX-103上市批准",
+    "b": "合成丙获得ZX-103上市批准。",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-19",
+    "a": "合成丁公布ZX-104三期研究数据",
+    "b": "快讯：合成丁公布ZX-104三期研究数据",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-20",
+    "a": "合成丁完成种子轮融资",
+    "b": "合成丁宣布获种子轮投资",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-21",
+    "a": "Synthetic 丁 announces ZX-104 approval",
+    "b": "Synthetic 丁 announces ZX-104 approval!",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-22",
+    "a": "合成丁签订设备采购合同",
+    "b": "合成丁签订设备采购合同",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-23",
+    "a": "合成丁2026年Q3销量1万台",
+    "b": "合成丁公布2026年Q3销量10000台",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-24",
+    "a": "合成丁获得ZX-104上市批准",
+    "b": "合成丁获得ZX-104上市批准。",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-25",
+    "a": "合成戊公布ZX-105三期研究数据",
+    "b": "快讯：合成戊公布ZX-105三期研究数据",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-26",
+    "a": "合成戊完成种子轮融资",
+    "b": "合成戊宣布获种子轮投资",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-27",
+    "a": "Synthetic 戊 announces ZX-105 approval",
+    "b": "Synthetic 戊 announces ZX-105 approval!",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-28",
+    "a": "合成戊签订设备采购合同",
+    "b": "合成戊签订设备采购合同",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-29",
+    "a": "合成戊2026年Q3销量1万台",
+    "b": "合成戊公布2026年Q3销量10000台",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  },
+  {
+    "id": "p-30",
+    "a": "合成戊获得ZX-105上市批准",
+    "b": "合成戊获得ZX-105上市批准。",
+    "same": true,
+    "reason": "same_assertion_or_explicit_business_identity"
+  }
+]

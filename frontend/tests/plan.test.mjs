@@ -7,7 +7,7 @@ test("监控范围 separates runtime, relations and temporary research; details 
   assert.match(project, /\{ id: "scope", label: "监控范围", pages: \[\{ id: "plan", label: "监控方案" \}\] \}/);
   assert.match(project, /tab === "plan" && <PlanView projectId=\{id\} company=/);
   const plan = fs.readFileSync(new URL("../src/plan.tsx", import.meta.url), "utf8");
-  for (const text of ["需要你决定的范围变化", "长期关联", "临时研究", "方案概要", "跟踪对象", "方向 / 纳入理由", "关系对象", "关注事项", "最新", "状态",
+  for (const text of ["需要你决定的范围变化", "监控方向", "关联对象", "临时研究问题", "方案概要", "添加监控方向", "方向 / 纳入理由", "关系对象", "关注事项", "最新", "状态",
     "出现什么就提醒", "何时关闭或降频", "方案变更", "撤销", "确认保留", "升为核心", "降频", "关闭", "已关闭"]) {
     assert.match(plan, new RegExp(text));
   }
@@ -44,7 +44,7 @@ test("a system-written first plan asks for one review; extended points name thei
 
 test("routine collection stays visible beside the focus questions — the plan is not only the questions", () => {
   const plan = fs.readFileSync(new URL("../src/plan.tsx", import.meta.url), "utf8");
-  for (const text of ["常规采集", "专项问题", "未开启", "上轮失败", "只靠常规采集覆盖"]) assert.match(plan, new RegExp(text));
+  for (const text of ["常规采集", "监控方向", "未开启", "上轮失败", "只靠常规采集覆盖"]) assert.match(plan, new RegExp(text));
   assert.match(plan, /data\.coverage/);
   assert.match(plan, /<RoutineChannels framework=/);
 });

@@ -1,4 +1,4 @@
-import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
 } from "react";
@@ -8,15 +8,6 @@ import type { Project } from "./api";
 /* ---------------------------------------------------------------- easing */
 
 export const EASE = [0.22, 1, 0.36, 1] as const;
-
-export const listVariants: Variants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.035, delayChildren: 0.04 } },
-};
-export const itemVariants: Variants = {
-  hidden: { opacity: 0, y: 8 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.42, ease: EASE } },
-};
 
 export function Page({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (

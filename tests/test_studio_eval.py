@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from project_watch.studio import evaluation as ev
+from scripts import evaluation as ev
 
 
 class Oracle:

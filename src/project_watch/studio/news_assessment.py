@@ -16,15 +16,6 @@ def candidate(args):
     return {'importance': level, 'importance_reason': reason.strip()}
 
 
-def published_assessment(claims, binding):
-    rated = [r for r in claims if r.get('importance_reviewed') and r.get('importance') in LEVELS]
-    if not rated:
-        return {'status': 'pending'}
-    selected = min(rated, key=lambda r: LEVELS.index(r['importance']))
-    return {'status': 'assessed', 'level': selected['importance'],
-            'reason': selected['importance_reason'], 'refs': selected['refs'], 'binding': binding}
-
-
 def event_assessment(event, sources):
     """Read compatibility: only identified unassessed DSH defaults become pending.
 

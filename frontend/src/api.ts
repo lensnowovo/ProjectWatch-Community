@@ -1,3 +1,4 @@
+import { validationMessage } from "./entityValidation";
 export type Importance = "major" | "notable" | "routine";
 export type Category = "company" | "competitor" | "industry" | "policy" | "paper" | "trial" | "patent";
 
@@ -274,10 +275,12 @@ export interface RingJudgment { verdict: string; confidence: Confidence; summary
   /** chain only: general up/downstream stages written from industry knowledge, not sourced facts. */
   outline?: { upstream: ChainStage[]; downstream: ChainStage[] } }
 export interface InsightView {
+  section_states?: Record<string, string>;
+  evidence_gaps?: Record<string, string>;
   generation_available?: boolean;
   record: { id?: string; status?: string; section_versions?: Record<string, {version_id: string; generated_at: string; status: string}>; dependency?: { status: string }; analysis: InsightAnalysis; generated_at: string; counts: Record<string, number>; total: number; model: string; origin?: Profile["origin"] } | null;
   history: { generated_at: string; headline: string; position: string; maturity: string; consensus: string; industry: string }[];
-  job: { id: string; status: Job["status"]; error: string | null; created_at: string } | null;
+  job: { id: string; status: Job["status"]; error: string | null; created_at: string; retry_after?: string | null } | null;
   model_ready: boolean;
   labels: Record<"position" | "maturity" | "consensus" | "industry" | "operations" | "chain", Record<string, string>>;
   sources: Record<string, string>;
@@ -293,6 +296,7 @@ export interface PlanItem {
   section: string;
   /** Relation chain: 0 = the company, 1 = directly related, 2 = second order; parent is the point it extends. */
   hop?: string; parent_id?: string;
+  scope_category?: "direction" | "relation" | "question";
   scope_kind?: "" | "relation" | "question"; relation_type?: string; relation_target?: string; relation_aliases?: string[];
   /** Display module and its parameters (see plan_templates.MODULES). */
   view: string; view_params: Record<string, unknown>;
@@ -344,7 +348,7 @@ export interface MonitoringPlanView {
     basis: "summary" | "full_body" | "partial_body" | "search_summary"; matched_term: string; excerpt: string;
   }[] }>;
   explorations?: Record<string, { state: string; reason: string; label: string }>;
-  items: PlanItem[]; changes: PlanChange[]; proposals: PlanChange[]; summary: Record<string, number>; max_items: number;
+  items: PlanItem[]; changes: PlanChange[]; proposals: PlanChange[]; summary: Record<string, number>; max_items: number | null;
   framework: PlanSection[]; meta: PlanMeta;
   rings?: { key: string; label: string }[];
   state?: { phase: "empty" | "growing" | "stable"; label: string; revisions: number;
@@ -357,7 +361,7 @@ export interface MonitoringPlanView {
   coverage?: Record<string, { key: string; label: string; count: number | null; unit: string; state: "on" | "off" | "error" | "pending"; window: string;
     execution?: string; capabilities?: string[]; due_count?: number; query_count?: number; round_id?: string; planned_at?: string;
     active?: boolean; job_status?: string; observed_at?: string }[]>;
-  limits?: { max_hop: number; per_section: number };
+  limits?: { max_hop: number | null; per_section: number | null };
   modules: Record<string, PlanModule>; module_labels: Record<string, string>; templates: PlanTemplate[];
   health?: { items: number; ran_14d: number; hit_30d: number; never_hit: number; system_added: number; system_reverted: number;
     system_notes: number; proposals: Record<"proposed" | "accepted" | "rejected", number> };
@@ -399,6 +403,7 @@ export interface TaskBoard {
   jobs: TaskJob[]; documents: TaskDocument[];
 }
 export interface Job {
+  summary_subject?: string|null;
   runtime?: JobRuntime;
   dismissed?: boolean;
   id: string;
@@ -419,6 +424,7 @@ export interface Plan {
   affiliation_names: string[];
   is_biomed: boolean;
   trial_sponsors: string[];
+  trial_terms?: string[];
   patent_assignees: string[];
   has_search?: boolean;
   has_registry?: boolean;
@@ -462,6 +468,8 @@ export interface CollectionReport {
 }
 
 export interface ProjectDetail {
+  page_summaries?: Record<string, {text:string; details?:{text:string;refs:InsightRef[]}[]; refs:InsightRef[]; date:string; historical:boolean}>;
+  editorial_summaries?: Record<string, {text:string; details?:{text:string;refs:InsightRef[]}[]; refs:InsightRef[]; date:string; historical:boolean; editorial:true}>;
   research_source_counts?: Partial<Record<'paper' | 'patent' | 'trial', number>>;
   collection_report?: CollectionReport | null;
   /** Read-only saved content revisions, not progress percentages or task outcomes. */
@@ -739,6 +747,12 @@ export interface Signals {
 }
 export type FeedbackKind = "irrelevant" | "wrong_entity" | "bad_source" | "importance";
 
+const refreshKinds = ["internal", "external", "external_followup", "brief", "public_profile", "landscape", "business", "competition", "details", "commercial", "insight"] as const;
+type RefreshKind = typeof refreshKinds[number];
+export function supportsRefresh(kind: string): kind is RefreshKind {
+  return refreshKinds.some(value => value === kind);
+}
+
 export class ApiError extends Error {
   code?: string;
   operationId?: string;
@@ -759,7 +773,7 @@ async function request<T>(method: string, url: string, body?: unknown, signal?: 
   if (!response.ok) {
     const detail = data?.detail;
     const message = typeof detail === "string" ? detail
-      : Array.isArray(detail) ? detail.map((d: { msg: string }) => d.msg).join("；")
+      : Array.isArray(detail) ? validationMessage(detail)
       : `请求失败（${response.status}）`;
     const error = new ApiError(message);
     if (typeof data?.code === 'string') error.code = data.code;
@@ -943,7 +957,9 @@ export const api = {
   removedProjects: () => request<{ id: string; name: string; legal_name: string | null; industry: string | null; stage: string | null; updated_at: string | null }[]>(
     "GET", "/api/studio/removed-projects"),
   restoreProject: (id: string) => request<Project>("POST", `/api/studio/projects/${id}/restore`),
-  refresh: (id: string, kind: Job["kind"]) =>
+  generateSummary: (id:string, subject:string) =>
+    request<{id:string; status:string}>("POST", `/api/studio/projects/${id}/summaries/${subject}`, {}),
+  refresh: (id: string, kind: RefreshKind) =>
     request<Job>("POST", `/api/studio/projects/${id}/refresh`, { kind }),
   feedSummary: (params: Record<string, string | number | undefined>) => {
     const query = new URLSearchParams();
@@ -1007,6 +1023,7 @@ export interface RoundStage {
   result: null | {
     status: 'complete' | 'partial' | 'failed' | 'waiting_for_model' | string;
     outcomes?: Record<string, number>; patent_documents?: string[]; bodies_read?: number;
+    coverage?: { candidates: number; selected_materials: number; fragments: number; processed_fragments: number; remaining_fragments?: number; excluded: { reason: string }[] };
     published?: string[]; items_reviewed?: number; follow_through?: Record<string, string>; new_events?: number;
   };
 }

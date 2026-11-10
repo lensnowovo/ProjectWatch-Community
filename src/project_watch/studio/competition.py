@@ -66,7 +66,13 @@ def assess_relation(service, project_id, scope, relation_type, *, review=None, i
         return result
     for key, obj in objects.items():
         if obj['kind'] == 'company':
-            names, current_refs = current_located_names(service.objects.store, project_id, obj, obj['refs'], include_internal=include_internal)
+            # Confirmed company fields are immutable to automatic extraction.
+            # Its scoped owned product can nevertheless carry the same exact
+            # company/ownership passage; do not require copying it onto the company.
+            refs = [*obj['refs'], *(r for product in objects.values()
+                    if product['kind'] == 'product' and product.get('parent_id') == obj['id']
+                    for r in product['refs'])]
+            names, current_refs = current_located_names(service.objects.store, project_id, obj, refs, include_internal=include_internal)
             located = any(ownership_refs(obj['name'], obj['name'], r['quote'], names) is not None for r in current_refs)
         else:
             located = any(_normal(obj['name']) in _normal(r['quote']) for r in obj['refs'])

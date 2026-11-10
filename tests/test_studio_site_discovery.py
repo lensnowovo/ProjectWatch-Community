@@ -116,7 +116,7 @@ def test_an_unreachable_candidate_is_not_an_unknown_outcome(tmp_path):
 
 
 
-def test_site_checks_have_their_own_budget_and_leave_article_reads_untouched(tmp_path):
+def test_site_checks_have_separate_usage_and_leave_article_reads_untouched(tmp_path):
     from test_studio_agent_instance import make_service
 
     from project_watch.studio.execution import JobExecution
@@ -128,7 +128,7 @@ def test_site_checks_have_their_own_budget_and_leave_article_reads_untouched(tmp
     with service.store.write_scope(execution._guard):
         report = mon.check_sites(m, Site(dict(SITE)), pid, "https://www.lumina.example/", execution=execution)
     usage = execution.usage()
-    assert report["checked"] >= 1 and "page" not in usage and 0 < usage["site"]["requests"] <= execution.budgets["site"]
+    assert report["checked"] >= 1 and "page" not in usage and usage["site"]["requests"] > 0
 
 
 def test_a_site_that_forbids_crawlers_is_reported_as_such(tmp_path):

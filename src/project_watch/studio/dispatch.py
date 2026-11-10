@@ -2,8 +2,8 @@
 
 A request journal is accounting, not a gate:
 
-- every dispatched request counts against the project's monthly budget for its
-  kind, whatever its outcome (completed, failed, unknown);
+- every dispatched request remains in usage accounting, whatever its outcome
+  (completed, failed, unknown); no application quota gates new requests;
 - a request whose earlier outcome is unknown, or a model request answered
   with a 5xx, is never sent again automatically within the same job or the
   same analysis batch; the caller gets a definite "not sent". The owner's
@@ -16,17 +16,15 @@ Completed answers are replayed only within the same job (in JobExecution.call):
 many requests carry no date, so replaying another job's answer would freeze
 news.
 """
-import json
 from contextlib import closing
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 from project_watch.studio.http import HttpError
+from project_watch.studio.model_errors import ACCOUNT_ERRORS
 from project_watch.studio.store import now
 
 KINDS = frozenset(('collect', 'analyze', 'report'))  # the round's job kinds
-# Requests per project per calendar month (UTC). Generous for normal use and
-# finite, so a fault can never spend without bound. Overridable per project.
-DEFAULT_MONTHLY = {'model': 400, 'search': 400, 'open_data': 1500, 'page': 400, 'site': 120, 'commercial': 60}
 LEGACY_KINDS = frozenset(('external', 'external_followup', 'insight', 'scope', 'assessment'))
 SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_project_budgets (
     project_id TEXT PRIMARY KEY REFERENCES projects(id), monthly TEXT NOT NULL, updated_at TEXT NOT NULL)'''
@@ -36,6 +34,8 @@ UNRESOLVED = "c.status IN ('started','unknown')"  # SQL over studio_job_calls c
 RECEIVED_FAILURE = '(500,502,503,504,529)'  # answered, but no usable reply; billing may be unknown
 RECEIVED_MODEL_FAILURE = f"c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE}"
 REDO_PREFIX = 'redo:'
+RECOVERABLE_ERRORS = frozenset(('model_rate_limited', 'provider_backoff', 'connection_not_sent',
+                               'model_service_unavailable', 'model_account_unavailable', 'model_access_denied')) | ACCOUNT_ERRORS
 
 
 def batch_of(job):
@@ -63,12 +63,6 @@ def month_start(at=None):
     return moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
-def limits(db, project_id):
-    db.execute(SCHEMA)
-    row = db.execute('SELECT monthly FROM studio_project_budgets WHERE project_id=?', (project_id,)).fetchone()
-    return {**DEFAULT_MONTHLY, **(json.loads(row[0]) if row else {})}
-
-
 def spent(db, project_id, kind, *, since=None):
     """Dispatched requests this month, of every outcome, across all jobs."""
     return db.execute("SELECT count(*) FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
@@ -88,8 +82,8 @@ def check(db, job, kind, call_key, provider_hash):
         raise NotSent('project_not_consented')
     # A request still in flight is never sent twice, whoever asks.
     if db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-                  "WHERE j.project_id=? AND c.call_key=? AND c.status='started' AND j.status='running' "
-                  "AND j.lease_until>? LIMIT 1", (job['project_id'], call_key, now())).fetchone():
+                  "WHERE j.project_id=? AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status='started' AND j.status='running' "
+                  "AND j.lease_until>? LIMIT 1", (job['project_id'], call_key, call_key, now())).fetchone():
         raise NotSent('request_in_flight')
     # The same logical request with an unresolved or billing-ambiguous outcome is
     # never resent automatically: within one job, and across the analyses of one
@@ -100,28 +94,17 @@ def check(db, job, kind, call_key, provider_hash):
     batch = batch_of(job)
     if not explicit_redo(job) and db.execute(
             "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-            "WHERE j.project_id=? AND c.call_key=? AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' "
+            "WHERE j.project_id=? AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' "
             "AND j.input_version IN ('collect:'||?, ?||?))) AND (c.status IN ('unknown','started') "
-            f"OR (c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE})) LIMIT 1",
-            (job['project_id'], call_key, job['id'], batch, batch, REDO_PREFIX, batch)).fetchone():
+            f"OR (c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE} AND c.retryable=0)) LIMIT 1",
+            (job['project_id'], call_key, call_key, job['id'], batch, batch, REDO_PREFIX, batch)).fetchone():
         raise NotSent('unknown_not_resent')
-    backoff = db.execute('SELECT retry_after FROM studio_provider_backoff WHERE provider=?', (provider_hash,)).fetchone()
+    backoff = db.execute('SELECT retry_after,status FROM studio_provider_backoff WHERE provider=?', (provider_hash,)).fetchone()
     if backoff and backoff[0] > now():
+        if kind == 'model' and backoff[1] == 429:
+            raise NotSent('model_rate_limited')
         raise NotSent('provider_backoff')
-    limit = limits(db, job['project_id']).get(kind)
-    if limit is not None and spent(db, job['project_id'], kind) >= limit:
-        raise NotSent('project_budget')
 
-
-def set_monthly(store, project_id, monthly):
-    if not isinstance(monthly, dict) or any(k not in DEFAULT_MONTHLY or type(v) is not int or v < 0
-                                            for k, v in monthly.items()):
-        raise ValueError('invalid monthly budget')
-    with closing(store._connect()) as db, db:
-        db.execute(SCHEMA)
-        db.execute('INSERT INTO studio_project_budgets VALUES (?,?,?) ON CONFLICT(project_id) '
-                   'DO UPDATE SET monthly=excluded.monthly,updated_at=excluded.updated_at',
-                   (project_id, json.dumps(monthly, sort_keys=True), now()))
 
 
 def archive_legacy(store, *, reason='archived: replaced by the rewritten pipeline'):
@@ -141,3 +124,20 @@ def archive_legacy(store, *, reason='archived: replaced by the rewritten pipelin
             db.execute("UPDATE studio_jobs SET status='archived',error=?,finished_at=?,lease_token='',lease_until=NULL "
                        "WHERE id=?", (reason, now(), job_id))
         return rows
+
+
+def retry_delay(status, attempt=0, headers=None):
+    """Backoff caps frequency, never the number of attempts or research budget."""
+    delay = 3600 if status in (401, 402, 403) else min(1800, 30 * 2 ** min(attempt, 6))
+    value = next((v for k, v in (headers or {}).items() if k.lower() == 'retry-after'), '')
+    if value:
+        try:
+            seconds = float(value)
+        except (ValueError, TypeError):
+            try:
+                seconds = (parsedate_to_datetime(value) - datetime.now(UTC)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                seconds = 0
+        if 0 < seconds < 31536000:
+            delay = max(delay, seconds)
+    return delay

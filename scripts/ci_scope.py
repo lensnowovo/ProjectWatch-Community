@@ -86,7 +86,9 @@ def tracked_inputs():
 def domains_for(path):
     if path in CI_ONLY:
         return set()
-    if path.startswith('docs/') or path in {'README.md', 'CHANGELOG.md', 'AGENTS.md', 'SUPPORT.md'}:
+    if path == 'README.md':  # pyproject.toml includes it in the wheel's METADATA.
+        return {'installed'}
+    if path.startswith('docs/') or path in {'CHANGELOG.md', 'AGENTS.md', 'SUPPORT.md'}:
         return set()
     if path.startswith('.github/ISSUE_TEMPLATE/'):
         return set()

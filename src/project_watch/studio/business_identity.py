@@ -144,6 +144,17 @@ def ownership_refs(company, proposed_company, quote, names):
     return matched[1] if matched else None
 
 
+def located_attribution(store, project_id, subject, quote, part, *, db):
+    """Resolve attribution from current mappings and this document's definition.
+
+    Project search aliases and stripped legal names are intentionally excluded.
+    Return mapping references so their withdrawal invalidates the saved fact.
+    """
+    aliases = current_alias_bindings(db, project_id, subject)
+    names = part_bindings(subject['name'], aliases, part)
+    return ownership_refs(subject['name'], subject['name'], quote, names)
+
+
 def current_located_names(store, project_id, company, refs, *, include_internal, db=None):
     """Same current located mapping for extraction and downstream ownership gates.
 

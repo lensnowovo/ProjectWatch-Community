@@ -13,10 +13,19 @@ test('general and not-yet-classified companies have no permanent clinical entry'
 test('medical scope stays visible with no collected trials, including device projects',()=>{
   assert.equal(hasClinicalScope({...detail,plan:{is_biomed:true,trial_sponsors:[]}}),true);
 });
-test('explicit trial sponsors retain the entry independently of industry classification',()=>{
-  assert.equal(hasClinicalScope({...detail,plan:{is_biomed:false,trial_sponsors:['Synthetic sponsor']}}),true);
+test('trial sponsors retain the entry when industry classification is not available',()=>{
+  assert.equal(hasClinicalScope({...detail,plan:{trial_sponsors:['Synthetic sponsor']}}),true);
 });
 test('existing clinical news and registry records remain reachable without a plan',()=>{
   assert.equal(hasClinicalScope({...detail,counts:{trial:1}}),true);
   assert.equal(hasClinicalScope({...detail,trials:[{id:'synthetic'}]}),true);
+});
+
+test('legacy self-name sponsor defaults do not imply clinical relevance',()=>{
+  assert.equal(hasClinicalScope({...detail,project:{name:'Synthetic',legal_name:'Synthetic Ltd'},plan:{is_biomed:false,trial_sponsors:['Synthetic','Synthetic Ltd']},research_source_counts:{trial:0},counts:{trial:1}}),false);
+});
+test('non-biomedical label does not hide real records or hospital-led clinical scope',()=>{
+  assert.equal(hasClinicalScope({...detail,plan:{is_biomed:false},research_source_counts:{trial:2}}),true);
+  assert.equal(hasClinicalScope({...detail,plan:{is_biomed:false,trial_terms:['device study']}}),true);
+  assert.equal(hasClinicalScope({...detail,project:{name:'Synthetic'},plan:{is_biomed:false,trial_sponsors:['Synthetic hospital']}}),true);
 });

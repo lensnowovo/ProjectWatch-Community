@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS studio_event_dependency_links (
 CREATE TABLE IF NOT EXISTS studio_event_merge_receipts (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),
  before_state TEXT NOT NULL, after_state TEXT NOT NULL, undone INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS studio_event_undo_equivalences (
+ revision_id TEXT PRIMARY KEY REFERENCES studio_event_revisions(id),
+ restored_revision_id TEXT NOT NULL REFERENCES studio_event_revisions(id));
 CREATE TRIGGER IF NOT EXISTS immutable_event_revision_update BEFORE UPDATE ON studio_event_revisions
  BEGIN SELECT RAISE(ABORT,'event revision is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS immutable_event_revision_delete BEFORE DELETE ON studio_event_revisions
@@ -95,19 +98,6 @@ def previous_memberships(db, project_id, item_ids):
     return affected
 
 
-def current_membership_events(db, project_id, versions):
-    """Follow only previously frozen source IDs after a membership correction."""
-    events = set(versions)
-    for event_id, revision in versions.items():
-        prior = db.execute('SELECT record FROM studio_event_revisions WHERE project_id=? AND event_id=? AND id=?',
-                           (project_id, event_id, revision)).fetchone()
-        for item_id in json.loads(prior[0])['members'] if prior else []:
-            member = db.execute('SELECT event_id FROM studio_items WHERE project_id=? AND id=?', (project_id, item_id)).fetchone()
-            if member and member[0]:
-                events.add(member[0])
-    return sorted(events)
-
-
 @contextmanager
 def changing_items(db, item_ids):
     """Legacy item writers preserve event evidence before and after mutation."""
@@ -153,8 +143,23 @@ class EventRevisions:
         db.execute('UPDATE studio_analysis_dependencies SET record=? WHERE project_id=? AND artifact_key=?',
                    (_encoded(data), project_id, artifact_key))
 
-    def _check(self, db, project_id, expected):
+    def _check(self, db, project_id, expected, *, restored=False):
         for event_id, revision in expected.items():
+            if restored:
+                current = db.execute('SELECT revision_id FROM studio_event_revision_heads WHERE event_id=?', (event_id,)).fetchone()
+                resolved = current[0] if current else None
+                while resolved and resolved != revision:
+                    link = db.execute('SELECT restored_revision_id FROM studio_event_undo_equivalences WHERE revision_id=?', (resolved,)).fetchone()
+                    if not link:
+                        break
+                    resolved = link[0]
+                if resolved != revision:
+                    raise ValueError('event changed since review')
+                row = db.execute('SELECT record FROM studio_event_revisions WHERE id=? AND project_id=? AND event_id=?',
+                                 (revision, project_id, event_id)).fetchone()
+                if not row or json.loads(row[0]) != snapshot(db, project_id, event_id):
+                    raise ValueError('event changed since review')
+                continue
             row = db.execute('SELECT r.record FROM studio_event_revision_heads h JOIN studio_event_revisions r '
                 'ON r.id=h.revision_id WHERE h.event_id=? AND r.project_id=? AND r.id=?',
                 (event_id, project_id, revision)).fetchone()
@@ -204,7 +209,7 @@ class EventRevisions:
     def _undo(self, db, project_id, merge):
         if merge['undone']:
             return
-        self._check(db, project_id, json.loads(merge['after_state']))
+        self._check(db, project_id, json.loads(merge['after_state']), restored=True)
         saved = json.loads(merge['before_state'])
         if saved.get('kind') == 'attachment':
             from project_watch.studio.event_membership import undo_attachment
@@ -218,5 +223,11 @@ class EventRevisions:
             db.executemany('UPDATE studio_items SET event_id=? WHERE id=? AND project_id=?',
                            [(event_id, item, project_id) for item in old['members']])
         for event_id in before:
-            record(db, project_id, event_id)
+            revision = record(db, project_id, event_id)
+            prior = before[event_id]
+            old = db.execute('SELECT record FROM studio_event_revisions WHERE id=?', (prior,)).fetchone()[0]
+            # Only an exact receipt-driven restoration can bridge undo history.
+            # Ordinary edits (even edits back to similar text) remain stale.
+            if revision != prior and _encoded(snapshot(db, project_id, event_id)) == old:
+                db.execute('INSERT OR IGNORE INTO studio_event_undo_equivalences VALUES (?,?)', (revision, prior))
         db.execute('UPDATE studio_event_merge_receipts SET undone=1 WHERE id=?', (merge['id'],))

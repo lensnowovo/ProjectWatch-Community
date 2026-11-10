@@ -23,7 +23,7 @@ def test_routine_unread_and_old_read_major_do_not_alert(tmp_path):
     [project] = client.get("/api/studio/projects").json()
     # Routine industry news is not "未读"; the read major item no longer counts either.
     assert project["unread"] == 0 and project["major_recent"] == 1 and project["nav_alerts"] == []
-    store.create_event(pid, {"title": "竞品获批", "category": "competitor", "importance": "notable"}, [])
+    store.create_event(pid, {"title": "竞品获批", "category": "competitor", "importance": "notable", "event_at": datetime.now(UTC).isoformat()}, [])
     store.create_event(pid, {"title": "行业政策解读", "category": "policy", "importance": "notable"}, [])
     store.create_event(pid, {"title": "旧的重大事件", "category": "company", "importance": "major",
                              "event_at": "2024-01-01T00:00:00+00:00"}, [])

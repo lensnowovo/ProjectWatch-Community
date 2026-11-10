@@ -15,11 +15,11 @@ import os
 import sys
 from pathlib import Path
 
-from project_watch.studio import evaluation
 from project_watch.studio.http import Http, urllib_transport
 from project_watch.studio.llm import LLM
 from project_watch.studio.settings import ModelConfig
 from project_watch.studio.usage import UsageCounter
+from scripts import evaluation
 
 
 def main(argv: list[str] | None = None) -> int:

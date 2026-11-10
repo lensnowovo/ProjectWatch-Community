@@ -494,7 +494,7 @@ export function CompetitionView({ detail, onReload, financing, race, expandAll =
       {race}
 
       <details className="external-analysis-details" open={expandAll}><summary>竞对资料与跟踪管理 <span className="muted small">{peers.size} 家 · 定位、依据与最近报道</span></summary>
-      <Block card title="竞对资料" label="竞争对手" note="一行一家；点开看定位、依据与最近报道">
+      <Block card title="竞对资料" label="竞争对手">
         {cardViews.length > 0 && <ol className="rival-list">{cardViews.map((v) => {
           const { peer, selected, peerId, cells, peerFacts, latest, refs } = v;
           const open = expandAll || openPeer === peer.name;

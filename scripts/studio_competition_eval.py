@@ -12,8 +12,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from project_watch.studio import competition_evaluation as evaluation
 from project_watch.studio.usage import UsageCounter
+from scripts import competition_evaluation as evaluation
 
 
 def main(argv=None):

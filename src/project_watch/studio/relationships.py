@@ -140,10 +140,16 @@ class RelationshipStore:
             return record
 
     def _history(self, db, record):
+        previous = db.execute('SELECT record FROM studio_relationship_history WHERE project_id=? '
+                              'AND scope_key=? AND origin=? ORDER BY version DESC LIMIT 1',
+                              (record['project_id'], record['scope_key'], record['origin'])).fetchone()
+        def interpretation(value):
+            return {k: v for k, v in value.items() if k not in ('version', 'created_at', 'input_generation')}
+        changed = not previous or interpretation(json.loads(previous[0])) != interpretation(record)
         db.execute("INSERT INTO studio_relationship_history VALUES (?,?,?,?,?,?,?)",
                    (record["project_id"], record["scope_key"], record["origin"], record["version"],
                     record["visibility"], json.dumps(record), now()))
-        if record['origin'] == 'auto_research':
+        if record['origin'] == 'auto_research' and changed:
             # A changed automatic relationship also changes a judgment's
             # interpretation context. Existing rebuild rows coalesce the work.
             self.objects.evidence.dependencies.on_relationship_corrected(record['project_id'], db=db)

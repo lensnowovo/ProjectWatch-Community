@@ -137,10 +137,14 @@ def redirect_handler(monkeypatch):
     def build(*args):
         opener = original(*args)
         handlers.extend(opener.handlers)
+        def offline(*args, **kwargs):
+            raise TimeoutError('synthetic; no network')
+        opener.open = offline
         return opener
 
     monkeypatch.setattr(urllib.request, 'build_opener', build)
-    urllib_transport()
+    with pytest.raises(HttpError, match='connection_failed'):
+        urllib_transport()('GET', 'https://api.example/original', {}, None, 1)
     return next(h for h in handlers if isinstance(h, urllib.request.HTTPRedirectHandler))
 
 

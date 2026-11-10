@@ -63,7 +63,9 @@ def test_new_questions_need_parent_and_exit_legacy_unchanged(scope):
     plan = p.monitoring_plan
     legacy = add(plan, pid, {"text": "历史关注问题", "tier": "topic"})
     assert legacy["scope_kind"] == "" and plan.explorations.managed(legacy)
-    assert legacy["id"] in plan.view(pid)["scope"]["legacy_ids"]
+    view = plan.view(pid)
+    assert legacy["id"] in view["scope"]["legacy_ids"] == view["scope"]["direction_ids"]
+    assert next(item for item in view["items"] if item["id"] == legacy["id"])["scope_category"] == "direction"
     relation = add(plan, pid, RELATION)
     question = {"text": "合成光学路线是否获得许可", "scope_kind": "question",
                 "tier": "topic", "queries": ["合成光学路线 许可"]}

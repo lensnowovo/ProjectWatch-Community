@@ -78,6 +78,13 @@ class DependencyStore:
 
     def on_object_saved(self, record, previous, *, db):
         identity_unchanged = bool(previous and self._identity(record) == self._identity(previous))
+        # Adding source references does not change the identity on which an
+        # immutable fact was extracted. Removing/replacing refs or changing any
+        # other identity field still invalidates it. Judgments still see new inputs.
+        references_added = bool(previous and
+            {k: v for k, v in self._identity(record).items() if k != 'refs'} ==
+            {k: v for k, v in self._identity(previous).items() if k != 'refs'} and
+            all(ref in record.get('refs', []) for ref in previous.get('refs', [])))
         if identity_unchanged and not db.execute("SELECT 1 FROM studio_analysis_dependencies d JOIN studio_object_dependency_links l "
             "ON l.project_id=d.project_id AND l.artifact_key=d.artifact_key WHERE d.project_id=? AND l.object_id=? AND d.kind='insight'",
             (record['project_id'], record['id'])).fetchone():
@@ -92,6 +99,8 @@ class DependencyStore:
                           "WHERE d.project_id=? AND l.object_id=?", (project_id, record["id"])).fetchall()
         for row in rows:
             if identity_unchanged and row['kind'] != 'insight':
+                continue
+            if references_added and row['kind'] == 'fact':
                 continue
             data = {**json.loads(row["record"]), "status": "stale", "generation": generation,
                     "stale_reason": "object_revised", "invalidated_at": now()}

@@ -52,6 +52,8 @@ export function RoundProgress({ projectId, onReload }: { projectId: string; onRe
       <div><dt>分析</dt><dd>{analyzeLine(data.analyze, data.collect)}</dd></div>
       {finished && !data.running && <div><dt>完成</dt><dd className="muted">{relTime(finished)}</dd></div>}
     </dl>
+    {data.analyze?.result?.coverage && <p className="small muted">分析材料：{data.analyze.result.coverage.selected_materials} 份 · 已处理 {data.analyze.result.coverage.processed_fragments} / {data.analyze.result.coverage.fragments} 段
+      {data.analyze.result.coverage.excluded.length > 0 && ` · ${data.analyze.result.coverage.excluded.length} 份未纳入（待核实、不相关、无正文或无权限）`}</p>}
     {data.can_reanalyze && <Reanalyze projectId={projectId} onQueued={() => { reload(); onReload(); }} />}
     {data.quality && <QualityReport quality={data.quality} />}
   </section>;

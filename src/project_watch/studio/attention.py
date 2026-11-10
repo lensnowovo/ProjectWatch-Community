@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from project_watch.studio import signals as sig
+from project_watch.studio.events import recent_news_sql
 
 # Ordering inside the list: how urgent a kind of signal is by default.
 LEVEL_RANK = {"high": 0, "watch": 1, "medium": 1, "info": 2, "low": 2}
@@ -128,7 +129,7 @@ def mark_all_read(store, project_id: str | None = None, days: int | None = None)
         where.append("project_id=?")
         args.append(project_id)
     if days:
-        where.append("COALESCE(event_at, created_at) >= ?")
+        where.append(recent_news_sql())
         args.append((datetime.now(UTC) - timedelta(days=days)).isoformat())
     with closing(store._connect()) as db, db:
         return db.execute(f"UPDATE studio_events SET status='read' WHERE {' AND '.join(where)}", args).rowcount

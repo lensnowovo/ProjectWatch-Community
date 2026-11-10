@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { JobActivity, WorkIndicator, useVisiblePoll } from "../Operational";
 import { isCoverageNote, jobReason, unresolvedJobs } from "../workState";
-import { api, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
+import { api, supportsRefresh, type TaskBoard, type TaskDocument, type TaskJob } from "../api";
 import { Page } from "../motion";
 import PageHeader from "../PageHeader";
 import { ErrorNote, errorMessage, relTime, useAsync } from "../ui";
@@ -53,8 +53,8 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
 
   return (
     <Page className="page-workspace">
-      <PageHeader variant="feed" title="任务" label="运行看板" description="查看研究进展和已有结果；只有运行异常需要进一步确认。"
-        meta={data ? `${data.runtime?.label ?? (data.worker === "running" ? "后台运行中" : "后台未运行")} · ${busy ? "每 4 秒" : "每 30 秒"}自动刷新` : ""} />
+      <PageHeader variant="feed" title="任务"
+        meta={data ? data.runtime?.label ?? (data.worker === "running" ? "后台运行中" : "后台未运行") : ""} />
       {data?.runtime?.restart_required && <div className="note note-error" role="status">后台长时间没有进展。已保留结果；托管模式会尝试恢复，普通启动需重启应用。结果不明的请求不会自动重发。</div>}
       {data?.runtime?.state === "degraded" && <div className="note" role="status">后台调度暂时受阻，正在重试。</div>}
       {data && data.worker !== "running" && <div className="note note-error">后台任务未运行：排队中的任务不会开始。重启应用后会继续。</div>}
@@ -71,14 +71,14 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
 
         <section className="card card-pad task-now" data-stale={!!error}>
           <div className="card-head"><h3>正在处理</h3>
-            <span className="muted small">{working ? `${data.summary.running} 项运行中${data.summary.queued ? ` · ${data.summary.queued} 项排队` : ""}` : "后台一次执行一个任务"}</span>
+            {active.length > 0 && <span className="muted small">{data.summary.running} 项运行中{data.summary.queued ? ` · ${data.summary.queued} 项排队` : ""}</span>}
           </div>
-          {working === 0 ? <p className="task-idle">现在没有在处理的任务。{data.summary.done_24h ? `近 24 小时完成了 ${data.summary.done_24h} 项。` : ""}</p> : <>
+          {working === 0 ? <p className="task-idle">现在没有在处理的任务。</p> : <>
             {active.length > 0 && <ul className="task-list">{active.map((j) => <li key={j.id} className={j.status}>
               <span className="task-state"><WorkIndicator state={error ? "unavailable" : j.runtime?.state ?? j.status}
                 label={error ? "状态暂时无法读取" : j.runtime?.label ?? (j.status === "queued" ? `排队第 ${j.position} 位` : "正在执行")} /></span>
               <span className="task-what"><Link to={`/projects/${j.project_id}`} className="cell-title">{j.project_name}</Link> · {j.label}
-                {j.status === "running" && j.stage && <span className="muted"> — {j.stage}</span>}</span>
+                {j.stage && <span className="muted"> — {j.stage}</span>}</span>
               <span className="muted small num" title={j.runtime?.heartbeat_at ? `后台心跳：${j.runtime.heartbeat_at}` : undefined}>{j.runtime?.progress_at ? `进展 ${relTime(j.runtime.progress_at)}` : `加入于 ${relTime(j.created_at)}`}</span>
               <JobActivity job={j} stale={!!error} />
             </li>)}</ul>}
@@ -99,7 +99,7 @@ export default function TasksPage({ projects }: { projects: { id: string; name: 
 
         {dismissed.length > 0 && <details className="task-history">
           <summary>已收起的提醒 · {dismissed.length} 项仍未完成</summary>
-          <div className="task-history-body"><p className="muted small">仅收起提醒，不代表更新成功。已有结果保留，可在此查看原因和恢复选项。</p>
+          <div className="task-history-body">
             <ul className="fix-list">{dismissed.map(j => <FailureRow key={j.id} j={j} onChanged={reload} />)}</ul>
           </div>
         </details>}
@@ -177,6 +177,9 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
     : "请查看任务记录和服务状态，再决定是否重试。", action: "none" as const };
   const advice = { ...fallback, ...j.advice, why: j.advice?.why?.trim() || fallback.why,
     todo: j.advice?.todo?.trim() || fallback.todo };
+  const refreshKind = supportsRefresh(j.kind) ? j.kind : null;
+  const offersRetry = advice.action === "rerun" || advice.action === "settings";
+  const projectAction = offersRetry && !refreshKind;
   const act = async (fn: () => Promise<unknown>, message: string) => {
     setBusy(true); setError(null);
     try { await fn(); setDone(message); onChanged(); } catch (e) { setError(e); } finally { setBusy(false); }
@@ -189,12 +192,13 @@ export function FailureRow({ j, onChanged }: { j: TaskJob; onChanged: () => void
     </div>
     <dl className="fix-body">
       <div><dt>发生了什么</dt><dd>{advice.why}</dd></div>
-      <div><dt>怎么处理</dt><dd>{advice.todo}</dd></div>
+      <div><dt>怎么处理</dt><dd>{projectAction ? "打开项目查看本轮进度和可用操作。" : advice.todo}</dd></div>
     </dl>
     {done ? <p className="fix-done small">{done}</p> : <div className="fix-actions">
       {advice.action === "settings" && <Link className="btn btn-sm" to="/settings">去设置测试连接</Link>}
-      {(advice.action === "rerun" || advice.action === "settings") && <button className={`btn btn-sm${advice.action === "rerun" ? " btn-primary" : ""}`} disabled={busy}
-        onClick={() => act(() => api.refresh(j.project_id, j.kind), "已重新加入队列，可在上方“正在处理”里看到进度。")}>重新运行</button>}
+      {projectAction && <Link className="btn btn-sm" to={`/projects/${j.project_id}`}>查看本轮进度</Link>}
+      {offersRetry && refreshKind && <button className={`btn btn-sm${advice.action === "rerun" ? " btn-primary" : ""}`} disabled={busy}
+        onClick={() => act(() => api.refresh(j.project_id, refreshKind), "已重新加入队列，可在上方“正在处理”里看到进度。")}>重新运行</button>}
       {partial && <Link className="btn btn-sm" to={`/projects/${j.project_id}?tab=external`}>查看来源与结果</Link>}
       {!j.dismissed && <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => act(() => api.dismissTask(j.id), "提醒已收起，任务结果未改变。")}>收起提醒</button>}
       {j.error && <details className="fix-raw"><summary>原始信息</summary><code>{errorMessage(j.error)}</code></details>}

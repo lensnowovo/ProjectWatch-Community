@@ -133,7 +133,7 @@ export default function App() {
                 {/* Company changes remove the old workspace immediately, not after an exit animation. */}
                 <AnimatePresence key={section === "projects" ? routeKey : "sections"} mode="wait" initial={false}>
                   <Routes location={location} key={routeKey}>
-                    <Route path="/" element={<HomePage projects={projects} modelReady={modelReady || agentMode} error={projectError} onRetry={refreshProjects} />} />
+                    <Route path="/" element={<HomePage projects={projects} modelReady={modelReady || agentMode} agentMode={agentMode} error={projectError} onRetry={refreshProjects} />} />
                     <Route path="/feed" element={<FeedPage projects={projectList} />} />
                     <Route path="/projects" element={<ProjectsPage onChanged={refreshProjects} />} />
                     <Route path="/projects/:id" element={<ProjectPage onChanged={refreshProjects} />} />

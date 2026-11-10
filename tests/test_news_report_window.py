@@ -33,6 +33,16 @@ def test_unknown_invalid_old_and_future_are_not_recent_or_reported(app, date):
     # Reader filters do not delete the stored event or replace its date.
     assert len(store.list_events(project_id=p['id'])) == 1
     assert next(x for x in store.list_projects() if x['id'] == p['id'])['major_recent'] == 0
+    assert store.activity(p['id'])['major'] == 0
+    from project_watch.studio.landscape import _window_counts
+    from project_watch.studio.signals import _own_event_dates
+    assert _window_counts(store, p['id'], ('company',))[0] == 0
+    assert _own_event_dates(store, p['id'], 30) == []
+    project = next(x for x in store.list_projects() if x['id'] == p['id'])
+    if date != '2001-01-01':
+        assert project['last_event_at'] is None and project['last_event'] is None
+    else:
+        assert project['last_event_at'] == date
 
 
 def test_offset_date_compares_instants_not_strings(app):

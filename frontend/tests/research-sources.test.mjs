@@ -39,7 +39,8 @@ test('source rows are escaped, attribution stays a clue and no event mutation co
 test('professional navigation counts sources even when no model event exists',()=>{
   const detail={project:{id:'synthetic'},counts:{paper:0,trial:0,patent:0},research_source_counts:{paper:4,trial:1,patent:10},jobs:[],trials:[]};
   const html=renderToStaticMarkup(React.createElement(CategoryStrip,{detail,page:'patents',go:()=>{}}));
-  assert.match(html,/论文<\/span><b>4/);assert.match(html,/临床<\/span><b>1/);assert.match(html,/专利与注册<\/span><b>10/);
+  assert.match(html,/技术进展<\/span><b>15<small class="cat-count-note">研究来源/);
+  assert.match(html,/aria-current="page"/);
 });
 
 test('patent family keeps both document versions, with click-only expansion and separate owner fields',()=>{

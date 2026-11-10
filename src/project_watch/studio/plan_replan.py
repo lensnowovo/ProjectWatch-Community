@@ -23,7 +23,6 @@ from datetime import UTC, datetime, timedelta
 from project_watch.studio.monitoring_plan import (
     AXIS_LABEL,
     FRAMEWORK,
-    MAX_HOP,
     MODULES,
     SECTION_OF,
     MonitoringPlan,
@@ -289,16 +288,6 @@ def apply(plan: MonitoringPlan, project_id: str, rows: list, gathered: dict, *, 
                     continue
                 parent_run = gathered.get('explorations', {}).get(parent['id'])
                 parent_generation = parent_run['generation'] if parent_run else None
-                if int(parent.get('hop') or 0) >= MAX_HOP:
-                    plan.explorations.stop(parent, 'relation_limit', evidence=[e['ref'] for e in evidence], generation=parent_generation)
-                    counts['dropped'] += 1
-                    continue
-                live = [w for w in plan.items(project_id) if w['status'] != 'retired']
-                from project_watch.studio.monitoring_plan import MAX_ITEMS, MAX_PER_SECTION
-                if len(live) >= MAX_ITEMS or sum(w['axis'] == section for w in live) >= MAX_PER_SECTION:
-                    plan.explorations.stop(parent, 'capacity_limit', evidence=[e['ref'] for e in evidence], generation=parent_generation)
-                    counts['dropped'] += 1
-                    continue
                 explore = action == "explore"
                 plan.add(project_id, {
                     "text": text, "label": str(row.get("label") or text[:8])[:12], "axis": section,
@@ -481,7 +470,7 @@ def bootstrap(pipeline, llm, project_id: str) -> dict:
             kept += 1
             continue
         try:
-            hop = str(min(int(row.get("hop") or 0), MAX_HOP))
+            hop = str(max(0, int(row.get("hop") or 0)))
         except (TypeError, ValueError):
             hop = "0"
         try:

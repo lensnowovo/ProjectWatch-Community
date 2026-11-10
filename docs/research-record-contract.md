@@ -1,5 +1,7 @@
 # Research records in monitoring
 
+**Historical DSH pipeline contract.** This document describes the record schema and recovery rules used before the Studio rewrite. For the current collection and analysis paths, see [Developer architecture](developer-architecture.md).
+
 Structured papers and patents can enter the existing material pipeline as typed
 `RecordCandidate` values. These are research signals, not company profile facts.
 The pipeline retains the provider identity, immutable evidence version, original

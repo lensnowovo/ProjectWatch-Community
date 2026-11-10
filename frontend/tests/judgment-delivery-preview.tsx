@@ -1,0 +1,11 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {BrowserRouter} from 'react-router-dom';
+import {QuestionAnalysis} from '../src/questionAnalysis';
+import {api,type ProjectDetail,type InsightView} from '../src/api';
+import '../src/styles.css';
+window.fetch=async()=>{throw Error('Isolated preview: network blocked')};
+for(const key of Object.keys(api)) (api as any)[key]=async()=>{throw Error('No live calls')};
+const detail={project:{id:'synthetic'},jobs:[],capabilities:{insight_projections:false},page_summaries:{competition:{text:'合成公司的新产品进入客户验证阶段，同行已有小批量交付。后续比较重点是稳定性和交付效率。',refs:[],date:'2026-11-09'}}} as unknown as ProjectDetail;
+const view={record:null,job:null,generation_available:true,model_ready:false,section_states:{position:'pending',technology:'insufficient',operations:'pending',industry:'pending',chain:'pending'}} as unknown as InsightView;
+createRoot(document.getElementById('root')!).render(<BrowserRouter><main style={{padding:'32px',maxWidth:1400,margin:'auto'}}><h1>当前判断 · 合成数据</h1><QuestionAnalysis detail={detail} view={view} error={null} goto={()=>{}}/></main></BrowserRouter>);

@@ -90,12 +90,11 @@ export default function ProjectsPage({ onChanged }: { onChanged?: () => void }) 
 
   return (
     <Page className="page-workspace">
-      <PageHeader variant="portfolio" title="项目组合" label="关注的公司"
-        description="经营情况与最新变化。"
-        meta={data ? `${data.length} 个项目已加入` : error ? "暂时无法读取项目" : "正在读取项目…"}
+      <PageHeader variant="portfolio" title="项目组合"
+        meta={data ? `${data.length} 个项目` : error ? "暂时无法读取项目" : "正在读取项目…"}
         action={<Link to="/new" className="btn">＋ 添加项目</Link>} />
       <div className="filters">
-        <input className="search" placeholder="搜索公司、行业" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input className="search" aria-label="搜索公司或行业" placeholder="搜索公司或行业" value={query} onChange={(e) => setQuery(e.target.value)} />
         {view === "cards" && <Seg id="sort" value={sort} onChange={setSort} options={[
           { value: "recent", label: "最近动态" }, { value: "signals", label: "待处理" }, { value: "major", label: "重大事件" }, { value: "name", label: "名称" }]} />}
         <span className="spacer" />

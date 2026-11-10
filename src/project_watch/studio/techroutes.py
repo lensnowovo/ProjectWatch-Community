@@ -39,7 +39,9 @@ _TECHNICAL = {'FMCW', 'MEMS', 'SPAD', 'OPA', 'TOF', 'dToF', 'iToF', 'SiPM', 'VCS
 
 def _texts(e: dict) -> str:
     title, _url, _source = race._event_title(e)
-    return " ".join(x for x in (title, e.get("summary") or "", e.get("snippet") or "") if x)
+    # Generated summaries also contain relationship labels (e.g. 同领域),
+    # which are not technical terminology. Count original source text only.
+    return " ".join(x for x in (title, e.get("snippet") or "") if x)
 
 
 def _terms(text: str) -> set[str]:
@@ -47,6 +49,7 @@ def _terms(text: str) -> set[str]:
     # Capitalisation alone also matches brands, product models and paper acronyms.
     found |= {t for t in _TECHNICAL if re.search(r'(?<![A-Za-z0-9])' + re.escape(t) + r'(?![A-Za-z0-9])', text)}
     found |= {m.group(1) for m in _PHRASE.finditer(text) if m.group(1) not in _PHRASE_STOP
+              and not re.search(r'同领域|同路线|相关|所属|属于|关联|同行', m.group(1))
               and (re.search(r'[一-龥]', m.group(1)) or m.group(1) in _TECHNICAL)}
     return found
 
@@ -57,7 +60,9 @@ def suggest(*, industry: dict | None, docs: list[dict], self_texts: list[str], e
     seen_in: Counter = Counter()
     for fact in (industry or {}).get("facts") or []:
         if "技术" in (fact.get("kind") or ""):
-            for t in _terms(fact.get("text") or ""):
+            # Uncited generated prose cannot bootstrap a technical route.
+            quotes = ' '.join(r.get('quote') or '' for r in fact.get('refs') or [] if r.get('url'))
+            for t in _terms(quotes):
                 score[t] += 3
     for d in docs:
         text = _texts(d)

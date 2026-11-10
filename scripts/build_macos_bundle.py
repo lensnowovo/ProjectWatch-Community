@@ -1,7 +1,7 @@
 """Assemble a private, unsigned macOS .app with a pinned relocatable interpreter.
 
 This can assemble target files on Windows, but cannot certify native Mac behavior.
-Only the explicit wheel and pinned runtime are inputs; user data is never copied.
+The supplied wheel must match the checkout used for the launcher and notices.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 
+from scripts.build_manifest import verify_source_correspondence
 from scripts.build_windows_bundle import digest, validate_output, verify_product
 
 RUNTIMES = {
@@ -226,6 +227,7 @@ def build(args):
                      "project_watch/api.py", "project_watch/web/index.html"):
             if name not in z.namelist():
                 raise ValueError("Complete distribution required")
+    source_receipt = verify_source_correspondence(wheel, repo)
     uv = shutil.which(args.uv)
     if not uv:
         raise ValueError("Maintainer needs uv; end users do not")
@@ -263,7 +265,8 @@ def build(args):
     inventory = {p.relative_to(app).as_posix(): digest(p) for p in sorted(app.rglob("*")) if p.is_file()}
     manifest = {"format": "projectwatch-macos-bundle-v1", "version": metadata["Version"], "arch": args.arch,
                 "python": PYTHON_VERSION, "runtime_url": runtime_url(args.arch), "runtime_sha256": spec["sha256"],
-                "product_wheel_sha256": digest(wheel), "builder_sha256": digest(Path(__file__)),
+                "product_wheel_sha256": digest(wheel), "source_correspondence": source_receipt,
+                "builder_sha256": digest(Path(__file__)),
                 "launcher_sha256": digest(executable), "files": inventory,
                 "native_verified": False, "signed": False, "notarized": False, "publication_authorized": False}
     (resources / "bundle-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

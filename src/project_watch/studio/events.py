@@ -1,6 +1,6 @@
 """Group reports of the same real-world event across outlets.
 
-Deterministic first (title shingles + time window + conflicting-facts guard),
+Deterministic identity first (exact assertions or explicit business keys),
 then an optional model check for ambiguous pairs. Reports whose amounts, rounds
 or dates disagree are never merged, so a 2亿 and a 5亿 round stay separate.
 """
@@ -68,8 +68,8 @@ def _quantities(text):
 
 
 def _actor(text):
-    head = re.sub(r'^\s*(?:[【\[][^】\]]{0,30}[】\]]|[^｜|]{1,20}[｜|])\s*', '', text)
-    actor = re.split(r'20\d{2}|披露|公布|宣布|实现|发布|录得|报告|完成|获得|获批', head, maxsplit=1)[0].strip(' ：:')
+    head = re.sub(r'^\s*(?:[【\[][^】\]]{0,30}[】\]]|(?:快讯|最新|报道|[\w一-龥]{1,12}首发)[｜|])\s*', '', text)
+    actor = re.split(r'20\d{2}|披露|公布|宣布|实现|发布|录得|报告|完成|获得|获批|获', head, maxsplit=1)[0].strip(' ：:「」“”')
     return actor if re.fullmatch(r'[一-龥]{2,30}', actor) else None
 
 
@@ -89,10 +89,33 @@ def _sales_key(text):
             tuple(sorted(_quantities(text))))
 
 
+_FINANCING = re.compile(r'融资|投资|募资|领投|跟投|注资|funding|raises?|financing', re.I)
+
+
+def financing_key(text: str):
+    """(actor, rounds) for one company's named financing round; amounts are checked by `conflicting`."""
+    if not _FINANCING.search(text or ''):
+        return None
+    actor = _actor(text)
+    rounds = facts(text)[1] - {'ipo'}
+    return (actor, frozenset(rounds)) if actor and rounds else None
+
+
+def same_financing(a: str, b: str) -> bool:
+    ka, kb = financing_key(a), financing_key(b)
+    return bool(ka and kb and same_actor(ka[0], kb[0]) and ka[1] == kb[1])
+
+
 def lookback_days(items: list[dict]) -> int:
     """Load older quarterly reports only when the incoming batch can match them."""
     return SALES_WINDOW.days if any(_sales_key(' '.join([i['title'], i.get('summary') or '']))
                                    for i in items) else 21
+
+
+def earliest_window(items: list[dict]) -> str | None:
+    """Start of the window the oldest dated report can still match (an old story reported again)."""
+    dated = [t for t in (parse_time(i.get('published_at')) for i in items) if t]
+    return (min(dated) - WINDOW).isoformat() if dated else None
 
 
 def normalize(title: str) -> str:
@@ -124,12 +147,86 @@ def facts(text: str) -> tuple[set[float], set[str]]:
     return amounts, rounds
 
 
+def same_actor(a: str | None, b: str | None) -> bool:
+    """Only an exact extracted actor is an identity key; suffixes are not aliases."""
+    return bool(a and b and a == b)
+
+
+def headline_assertion(text: str) -> str:
+    """Remove presentation-only prefixes; never strip a causal clause or entity prefix."""
+    text = re.sub(r'^\s*(?:快讯|最新|报道|Breaking|Update)\s*[:：]\s*', '', text, flags=re.I)
+    return normalize(text)
+
+
+def event_stages(text: str) -> set[str]:
+    """Explicit action/stage conflicts apply to every automatic admission path."""
+    patterns = {
+        'market_reaction': r'股价|股市|涨停|跌停|share price|stock (?:falls|rises|drops)',
+        'denied': r'否认|辟谣|未获|未能|取消|终止|撤回|\b(?:denies|denied|cancelled|withdrawn|not)\b',
+        'planned': r'计划|拟于|拟完成|预计|预期|有望|\b(?:plans?|expects?|proposed)\b',
+        'contract': r'签订|签约|采购合同|\bcontract\b',
+        'delivery': r'交付|供货|\bdeliver(?:y|ed|ies)\b',
+        'application': r'提交|申请|\bapplication\b',
+        'approval': r'获批|批准|\bapproval\b',
+    }
+    stages = {name for name, pattern in patterns.items() if re.search(pattern, text, re.I)}
+    stages |= {'clinical:' + m.lower() for m in re.findall(r'([一二三四1234ⅠⅡⅢⅣ]+)期|phase\s+(I{1,3}V?|[1-4])', text, re.I)
+               for m in [next(v for v in m if v)]}
+    return stages
+
+
+def identity_supported(a: str, b: str, proof: dict | None = None) -> bool:
+    """Positive identity, shared by deterministic and model-assisted grouping.
+
+    Similarity is only retrieval. Model evidence must cover each complete headline,
+    not quote a common background clause while omitting a different main action.
+    """
+    if conflicting(a, b) or event_stages(a) != event_stages(b):
+        return False
+    if headline_assertion(a) and headline_assertion(a) == headline_assertion(b):
+        return True
+    sales = _sales_key(a)
+    if sales and sales == _sales_key(b):
+        return True
+    if same_financing(a, b):
+        return True
+    if proof is None:
+        return False
+    actor, action, qa, qb = (proof.get(k) for k in ('actor', 'action', 'quote_a', 'quote_b'))
+    if not all(isinstance(v, str) and v.strip() == v for v in (actor, action, qa, qb)):
+        return False
+    return bool(len(actor) >= 2 and len(action) >= 4 and actor != action
+                and qa in a and qb in b and all(actor in q and action in q for q in (qa, qb))
+                and headline_assertion(qa) == headline_assertion(a)
+                and headline_assertion(qb) == headline_assertion(b))
+
+
+class ConfirmedPairs(set):
+    """Confirmed indexes plus whether every requested comparison was decided."""
+
+    def __init__(self):
+        super().__init__()
+        self.complete = True
+        self.proofs = {}
+
+
+def confirmation_supported(result: dict, title_a: str, title_b: str) -> bool:
+    """A bare model boolean or a shared background mention cannot authorize a merge.
+
+    This is a conservative evidence gate, not proof of semantic identity. Both headline
+    quotes must independently contain the actor and action; summaries are insufficient.
+    """
+    return identity_supported(title_a, title_b, result)
+
+
 def conflicting(a: str, b: str) -> bool:
     actor_a, actor_b = _actor(a), _actor(b)
-    if actor_a and actor_b and actor_a != actor_b:
+    if actor_a and actor_b and not same_actor(actor_a, actor_b):
         return True
     da, db = scope_dimensions(a), scope_dimensions(b)
-    if any(da[k] and db[k] and not (da[k] <= db[k] or db[k] <= da[k]) for k in da):
+    # Forecast vs reported separates figures; a "计划" in prose about one deal does not.
+    keys = [k for k in da if k != 'basis' or (da['metric'] and db['metric'])]
+    if any(da[k] and db[k] and not (da[k] <= db[k] or db[k] <= da[k]) for k in keys):
         return True
     qa, qb = _quantities(a), _quantities(b)
     if da['metric'] and db['metric'] and qa and qb and not (qa <= qb or qb <= qa):
@@ -192,10 +289,18 @@ class Group:
         self.evidence = list(evidence if evidence is not None else titles)
 
     def score(self, item: dict) -> float:
-        incoming = _sales_key(' '.join([item['title'], item.get('summary') or '']))
+        text = ' '.join([item['title'], item.get('summary') or ''])
+        incoming = _sales_key(text)
         if incoming and any(_sales_key(t) == incoming for t in self.evidence):
             return 1.0
+        if any(same_financing(text, t) for t in self.evidence):
+            return 1.0  # one company's same named round; `accepts` already rules out other amounts
         return max((similarity(item["title"], t) for t in self.titles), default=0.0)
+
+    def ask_score(self, item: dict) -> float:
+        """Headlines differ by outlet; the screening summaries of one event read alike, so they may ask."""
+        summary = item.get('summary') or ''
+        return max([self.score(item), *(similarity(summary, t) for t in self.evidence if summary)])
 
     def accepts(self, item: dict) -> bool:
         text = " ".join([item["title"], item.get("summary") or ""])
@@ -205,6 +310,14 @@ class Group:
         timely = close_in_time(item_time(item), self.when) or (same_sales and ta and tb and abs(ta-tb) <= SALES_WINDOW)
         return (item["category"] == self.category and timely
                 and not any(conflicting(text, t) for t in self.evidence))
+
+    def admits(self, item: dict, proofs=()) -> bool:
+        """Every target member needs its own identity support; no transitive guesses."""
+        if not self.accepts(item):
+            return False
+        return all(identity_supported(item['title'], title)
+                   or any(a == item['title'] and b == title and identity_supported(a, b, proof)
+                          for a, b, proof in proofs) for title in self.titles)
 
     def add(self, item: dict) -> None:
         self.items.append(item)
@@ -228,16 +341,17 @@ def plan_groups(new_items: list[dict], existing: list[dict]) -> tuple[list[Group
               for e in existing]
     ambiguous: list[tuple[dict, Group]] = []
     for item in sorted(new_items, key=lambda i: item_time(i) or ""):
-        candidates = [(g.score(item), g) for g in groups if g.accepts(item)]
-        best_score, best = max(candidates, key=lambda c: c[0], default=(0.0, None))
-        if best is not None and best_score >= MERGE_SIMILARITY:
+        accepted = [g for g in groups if g.accepts(item)]
+        _best_score, best = max(((g.score(item), g) for g in accepted), key=lambda c: c[0], default=(0.0, None))
+        if best is not None and best.admits(item):
             best.add(item)
             continue
         group = Group(category=item["category"], titles=[], when=item_time(item))
         group.add(item)
         groups.append(group)
-        if best is not None and best_score >= ASK_SIMILARITY:
-            ambiguous.append((item, best))
+        ask_score, asked = max(((g.ask_score(item), g) for g in accepted), key=lambda c: c[0], default=(0.0, None))
+        if asked is not None and ask_score >= ASK_SIMILARITY:
+            ambiguous.append((item, asked))
     return groups, ambiguous
 
 
@@ -251,3 +365,20 @@ def summarise(group: Group) -> dict:
     when = min(dated, key=parse_time) if dated else None
     return {"title": lead["title"], "summary": lead.get("summary") or "", "impact": impact,
             "importance": importance, "category": lead["category"], "event_at": when}
+
+
+def news_date_sql(alias: str = '') -> str:
+    """Explicit event/report date only, never ingestion time. Alias is code-owned."""
+    if alias and not re.fullmatch(r'[a-zA-Z_][a-zA-Z_0-9]*', alias):
+        raise ValueError('invalid SQL alias')
+    prefix = alias + '.' if alias else ''
+    owner = prefix + 'id' if alias else 'studio_events.id'
+    raw = f"COALESCE(NULLIF({prefix}event_at,''), (SELECT max(ai.published_at) FROM studio_items ai WHERE ai.event_id={owner} AND ai.key LIKE 'agent:%'))"
+    return (f"CASE WHEN length(substr({raw},1,10))=10 "
+            f"AND date(substr({raw},1,10),'+0 days')=substr({raw},1,10) "
+            f"AND julianday({raw}) IS NOT NULL THEN {raw} END")
+
+
+def recent_news_sql(alias: str = '') -> str:
+    """One bound parameter (inclusive lower instant), with a shared current upper bound."""
+    return f"julianday({news_date_sql(alias)}) BETWEEN julianday(?) AND julianday('now')"

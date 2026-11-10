@@ -20,7 +20,7 @@ from project_watch.studio.normalize import (
     standard_name,
 )
 
-DEFAULT_CASES = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "studio_eval" / "cases.json"
+DEFAULT_CASES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "studio_eval" / "cases.json"
 TOLERANCE = 0.01
 
 

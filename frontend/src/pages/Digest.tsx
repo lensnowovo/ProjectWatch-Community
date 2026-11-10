@@ -45,9 +45,7 @@ export default function DigestPage() {
 
   return (
     <Page className="page-workspace">
-      <PageHeader variant="digest" title="周报" label="组合回顾"
-        description="本期重要变化，一份周报。"
-        meta={`近 ${days} 天 · 已收录信息`} />
+      <PageHeader variant="digest" title="周报" />
       <div className="filters digest-tools">
         <Seg id="digest-days" value={days} onChange={setDays} options={RANGES} />
         <div className="actions">

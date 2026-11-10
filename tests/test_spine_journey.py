@@ -89,7 +89,7 @@ def env(tmp_path, monkeypatch):
 
 
 def work(pipeline, kind):
-    job = pipeline.store.claim()
+    job = pipeline.store.claim(lane='round')
     assert job and job['kind'] == kind, job
     try:
         pipeline.run(job)
@@ -121,18 +121,37 @@ def test_one_update_reaches_sections_events_and_report(env):
     assert kinds == {'model'}
 
 
-def test_failed_analysis_is_redone_from_saved_material_without_collecting(env):
+def test_historical_5xx_analysis_is_redone_from_saved_material_without_collecting(env):
     pipeline, pid, state = env
     state['fail_draft'] = 1  # the provider answers the first draft request with a 500
     pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
     collected = work(pipeline, 'collect')
     with pytest.raises(ModelError, match='500'):
         work(pipeline, 'analyze')
+    with pipeline.store._connect() as db:
+        summary = db.execute("SELECT input_version,status FROM studio_jobs WHERE project_id=? AND kind='page_summary'",
+                             (pid,)).fetchone()
+        assert summary and summary['input_version'].startswith('analyze:') and summary['status'] == 'queued'
+    # Simulate a receipt predating automatic recovery permission.
+    with pipeline.store._connect() as db:
+        db.execute('UPDATE studio_job_calls SET retryable=0 WHERE response_status=500')
+        db.execute('DELETE FROM studio_provider_backoff')
+        failed_calls = [tuple(row) for row in db.execute(
+            'SELECT * FROM studio_job_calls WHERE response_status=500 ORDER BY job_id,call_key')]
     sent_before = list(state['sent'])
     # An automatic re-run may not resend the 5xx-answered draft request.
     pipeline.store.enqueue(pid, 'analyze', input_version='collect:' + collected.job['id'])  # e.g. a re-trigger
-    with pytest.raises(ModelError, match=r'请求已暂停'):  # definite "not sent", surfaced at once
-        work(pipeline, 'analyze')
+    held = work(pipeline, 'analyze')
+    assert held.read_checkpoint(analyze_job.RESULT)['status'] == 'partial'
+    from project_watch.studio.step_outcomes import CHECKPOINT
+    assert held.read_checkpoint(CHECKPOINT)  # Failed request remains blocked; independent work can finish.
+    with pipeline.store._connect() as db:
+        assert [tuple(row) for row in db.execute(
+            'SELECT * FROM studio_job_calls WHERE response_status=500 ORDER BY job_id,call_key')] == failed_calls
+        assert not db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? AND call_key IN '
+            '(SELECT call_key FROM studio_job_calls WHERE response_status=500)', (held.job['id'],)).fetchone()
+    work(pipeline, 'report')  # The partial analysis now has a truthful report to finish.
+    work(pipeline, 'brief')
     # The owner's explicit redo is consent to resend; still no collection.
     pipeline.store.enqueue(pid, 'analyze', input_version=dispatch.REDO_PREFIX + collected.job['id'])
     redo = work(pipeline, 'analyze')
@@ -290,3 +309,95 @@ def test_an_automatic_round_redoes_only_the_sections_its_new_material_touches(en
     outcomes = second.read_checkpoint(analyze_job.PUBLICATION)['sections']
     assert outcomes['operations']['status'] == 'unchanged' and outcomes['chain']['status'] == 'unchanged'
     assert _state['drafts'] in (drafts, drafts + 1)  # only never-published sections may be drafted
+
+
+@pytest.mark.parametrize('draft_protocol', [False, True])
+def test_legacy_unknown_batch_cannot_be_bypassed_by_new_draft_protocol(env, draft_protocol):
+    pipeline, pid, state = env
+    old = pipeline.store.enqueue(pid, 'analyze', input_version='collect:legacy-batch')
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='failed' WHERE id=?", (old['id'],))
+        if draft_protocol:
+            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
+                       (old['id'], analyze_job.PROTOCOL, json.dumps({'version': 2})))
+        db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at) VALUES (?,?,?,?,?,?)",
+                   (old['id'], 'old-payload-hash', 'model', 'synthetic', 'unknown', now()))
+        before = [tuple(r) for r in db.execute('SELECT * FROM studio_job_calls')]
+    pipeline.store.enqueue(pid, 'analyze', input_version='collect:legacy-batch')
+    with pytest.raises(ModelError, match='旧分析请求结果不明'):
+        work(pipeline, 'analyze')
+    assert state['sent'] == []
+    with pipeline.store._connect() as db:
+        assert [tuple(r) for r in db.execute('SELECT * FROM studio_job_calls')] == before
+
+
+def test_saved_analysis_snapshot_resumes_without_reentering_collection_preparation(env, monkeypatch):
+    from project_watch.studio import event_fold
+
+    pipeline, pid, state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    execution = work(pipeline, 'analyze')
+    snapshot = execution.read_checkpoint(analyze_job.SNAPSHOT)
+    assert snapshot and snapshot['id']
+    sent, drafts = list(state['sent']), state['drafts']
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE status='queued'")
+        db.execute("UPDATE studio_jobs SET status='queued',lease_token='',lease_until=NULL WHERE id=?",
+                   (execution.job['id'],))
+        # Model a stop after publishing sections but before the final task receipt.
+        db.execute('DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                   (execution.job['id'], analyze_job.RESULT))
+        calls = [tuple(r) for r in db.execute('SELECT * FROM studio_job_calls ORDER BY job_id,call_key')]
+    def already_completed(*args, **kwargs):
+        pytest.fail('saved snapshot must not re-enter completed triage, clustering or folding')
+    monkeypatch.setattr(pipeline, 'triage', already_completed)
+    monkeypatch.setattr(pipeline, 'cluster', already_completed)
+    monkeypatch.setattr(event_fold, 'fold', already_completed)
+    resumed = work(pipeline, 'analyze')
+    assert resumed.read_checkpoint(analyze_job.SNAPSHOT) == snapshot
+    assert resumed.read_checkpoint(analyze_job.RESULT)
+    assert state['sent'] == sent and state['drafts'] == drafts
+    with pipeline.store._connect() as db:
+        assert [tuple(r) for r in db.execute('SELECT * FROM studio_job_calls ORDER BY job_id,call_key')] == calls
+
+def test_rate_limit_resumes_same_analysis_after_worker_restart(env, monkeypatch):
+    from project_watch.studio.http import HttpError
+    from project_watch.studio.llm import LLM
+    from project_watch.studio.pipeline import StudioWorker
+    pipeline, pid, _ = env
+    job = pipeline.store.enqueue(pid, 'analyze', input_version='collect:synthetic')
+    sent = []
+    def run(job):
+        execution = JobExecution(pipeline.store, job)
+        def transport(*args):
+            sent.append(json.loads(args[3])['messages'][-1]['content'])
+            if sent == ['one', 'two']:
+                return Response(429, {}, b'{}')
+            return Response(200, {}, b'{"choices":[{"message":{"content":"{}"}}]}')
+        http = execution.http(Http(transport), lambda url: ('model','synthetic'))
+        llm = LLM(pipeline.settings_store.load().model, http)
+        for part in ('one','two'):
+            llm.json('test', part)
+        def fail():
+            raise HttpError('connection_failed', failure_kind='timeout', transport_phase='connect_or_headers')
+        with pytest.raises(HttpError):
+            execution.call('model','uncertain',fail)
+        with pytest.raises(dispatch.NotSent, match='unknown_not_resent'):
+            execution.call('model','uncertain',lambda: pytest.fail('unexpected resend'))
+    monkeypatch.setattr(pipeline, 'run', run)
+    worker = StudioWorker(pipeline, lane='round', schedules=False)
+    assert worker.step()
+    with closing(pipeline.store._connect()) as db:
+        saved = db.execute('select * from studio_jobs where id=?',(job['id'],)).fetchone()
+        assert saved['status']=='queued' and saved['retry_after'] > now(), dict(saved)
+    restarted = StudioWorker(pipeline, lane='round', schedules=False)
+    assert not restarted.step()
+    with closing(pipeline.store._connect()) as db, db:
+        db.execute("update studio_jobs set retry_after=? where id=?", (now(),job['id']))
+        db.execute("update studio_provider_backoff set retry_after=?", (now(),))
+    assert restarted.step()
+    assert sent == ['one','two','two']
+    with closing(pipeline.store._connect()) as db:
+        assert db.execute('select status from studio_jobs where id=?',(job['id'],)).fetchone()[0]=='done'
+        assert db.execute("select count(*) from studio_job_calls where status='unknown' and job_id=?", (job['id'],)).fetchone()[0]==1

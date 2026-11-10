@@ -26,7 +26,7 @@ export function closedResearch(item:PlanItem, exploration?:{state:string}) {
 }
 const title=(item:PlanItem)=>item.relation_target||item.label||item.text;
 
-export function MonitorScope({plan,company,renderDetail,renderState}:{plan:MonitoringPlanView;company:string;
+export function MonitorScope({plan,company,industryNews,renderDetail,renderState}:{plan:MonitoringPlanView;company:string;industryNews?:number;
  renderDetail:(item:PlanItem)=>ReactNode;renderState:(item:PlanItem)=>ReactNode}) {
  const [filter,setFilter]=useState('all'),[research,setResearch]=useState('open');
  const [limit,setLimit]=useState(12),[questionLimit,setQuestionLimit]=useState(12);
@@ -40,9 +40,9 @@ export function MonitorScope({plan,company,renderDetail,renderState}:{plan:Monit
  const branches=(id:string)=>questions.filter(q=>scopePath(q,plan.items).path.some(p=>p.id===id));
  return <>
   <section id="scope-relations" className="sd-section">
-   <header className="sd-section-head"><div><span className="eyebrow">长期主干</span><h2>关联监控</h2></div><span className="muted">{relations.length} 个对象</span></header>
+   <header className="sd-section-head"><h2>关联对象</h2><span className="muted">{relations.length} 个对象</span></header>
    <div className="sd-directions" aria-label="关联方向筛选">{directions.map(d=><button key={d.id} data-direction={d.id} aria-pressed={filter===d.id} onClick={()=>{setFilter(filter===d.id?'all':d.id);setLimit(12);}}><span>{d.label}</span><strong>{relations.filter(i=>scopeDirection(i,plan)===d.id).length} <small>个对象</small></strong></button>)}</div>
-   <div className="sd-list-caption"><span>{filter==='all'?'全部方向':directions.find(d=>d.id===filter)?.label} · {visible.length} 个对象</span><button className="link" disabled={filter==='all'} onClick={()=>{setFilter('all');setLimit(12);}}>查看全部</button></div>
+   <div className="sd-list-caption"><span>{filter==='all'?'全部关联对象':directions.find(d=>d.id===filter)?.label} · {visible.length} 个对象</span><button className="link" disabled={filter==='all'} onClick={()=>{setFilter('all');setLimit(12);}}>查看全部</button></div>
    <div className="sd-relations">{visible.slice(0,limit).map(item=>{
     const trail=scopePath(item,plan.items),news=plan.relation_updates?.[item.id];
     return <details key={item.id} className="sd-object" data-direction={scopeDirection(item,plan)}>
@@ -54,10 +54,11 @@ export function MonitorScope({plan,company,renderDetail,renderState}:{plan:Monit
       {renderDetail(item)}
      </div>
     </details>;
-   })}{!visible.length&&<p className="scope-empty">此方向尚未纳入关联对象，原有关注点和常规采集仍保留。</p>}</div>
+   })}{!visible.length&&<p className="scope-empty">此分类尚未单独跟踪关联对象。</p>}</div>
+   {industryNews!==undefined && <a className="link small" href="?tab=industry&macro=industry">查看行业信息 · {industryNews} 条</a>}
    {visible.length>limit&&<button className="link small" onClick={()=>setLimit(n=>n+12)}>查看更多对象（另 {visible.length-limit} 个）</button>}
   </section>
-  <section id="scope-research" className="sd-section"><header className="sd-section-head"><div><span className="eyebrow">临时分支</span><h2>临时研究问题</h2></div><span className="muted">{questions.length} 个问题</span></header>
+  <section id="scope-research" className="sd-section"><header className="sd-section-head"><h2>临时研究问题</h2><span className="muted">{openCount} 个进行中或待证据 · {questions.length-openCount} 个已停止或关闭</span></header>
    <div className="sd-tabs" role="group" aria-label="研究问题筛选">{[['open',`进行与待证据 · ${openCount}`],['closed',`已停止或关闭 · ${questions.length-openCount}`],['all',`全部 · ${questions.length}`]].map(([key,label])=><button key={key} aria-pressed={research===key} onClick={()=>{setResearch(key);setQuestionLimit(12);}}>{label}</button>)}</div>
    <div className="sd-questions">{shown.slice(0,questionLimit).map(item=>{
     const parent=plan.items.find(p=>p.id===item.parent_id),state=plan.explorations?.[item.id];

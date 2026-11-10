@@ -18,6 +18,7 @@ import uuid
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
+from project_watch.studio.events import news_date_sql, recent_news_sql
 from project_watch.studio.exploration import Explorations
 from project_watch.studio.plan_templates import MODULES, catalog, combine
 from project_watch.studio.store import now
@@ -114,14 +115,15 @@ CHANNELS = (
     ("patent", "专利", "science", "patent", "search"),
     ("policy", "政策监管", "rules", "policy", ""),
 )
-MAX_ITEMS = 16  # active + trial + reduced; retired items do not count
-MAX_HOP = 2  # 0 = the company itself, 1 = directly related (competitor asset, disease, customer, material), 2 = second order
-MAX_PER_SECTION = 4
+MAX_ITEMS = None  # Retained API keys: null means no application admission quota.
+MAX_HOP = None
+MAX_PER_SECTION = None
 STABLE_AFTER = 3  # consecutive revisions with no additions or proposals
 EDITABLE = ("text", "label", "queries", "criteria", "axis", "objects", "reason", "current_state", "sources",
             "cadence", "trigger_rule", "exit_rule", "tier", "status", "alert", "view", "view_params", "hop", "parent_id",
             "scope_kind", "relation_type", "relation_target", "relation_aliases")
-RELATION_TYPES = ("technology", "product", "indication", "competitor", "supplier", "customer", "industry", "policy")
+RELATION_TYPES = ("technology", "product", "indication", "competitor", "supplier", "customer", "industry", "policy",
+                  "partner", "pilot_partner", "investor")
 
 
 def _clean(fields: dict) -> dict:
@@ -160,8 +162,8 @@ def _clean(fields: dict) -> dict:
             raise ValueError("unknown scope kind")
         if key == "relation_type" and value and value not in RELATION_TYPES:
             raise ValueError("unknown relation type")
-        if key == "hop" and value not in ("0", "1", "2"):
-            raise ValueError(f"关联链最多延伸 {MAX_HOP} 层")
+        if key == "hop" and (not value.isdecimal() or int(value) < 0):
+            raise ValueError("关联层级应为非负整数")
         if key == "view" and value not in MODULES:
             raise ValueError("unknown display module")
         if key == "text" and not 2 <= len(value) <= 200:
@@ -284,6 +286,7 @@ class MonitoringPlan:
                       "ring": RING_OF[key]}
                      for key, label, base in FRAMEWORK]
         for w in items:
+            w["scope_category"] = w.get("scope_kind") or "direction"
             w["section"] = place(w.get("axis") or "asset", w.get("text") or "")
         return {"items": items, "changes": [c for c in log if c.get("state", "applied") != "proposed"],
                 "proposals": proposals, "framework": framework,
@@ -380,7 +383,8 @@ class MonitoringPlan:
         return {
             "relation_ids": [w["id"] for w in items if w.get("scope_kind") == "relation"],
             "question_ids": [w["id"] for w in items if w.get("scope_kind") == "question"],
-            "legacy_ids": [w["id"] for w in items if not w.get("scope_kind")],
+            "direction_ids": [w["id"] for w in items if not w.get("scope_kind")],
+            "legacy_ids": [w["id"] for w in items if not w.get("scope_kind")],  # compatibility for existing clients
         }
 
     def relation_updates(self, project_id, items):
@@ -451,15 +455,6 @@ class MonitoringPlan:
             raise ValueError("研究分支继承父范围别名，请在父范围修订")
         live = candidate.get('status', 'active') != 'retired'
         allocating = current is None or current['status'] == 'retired'
-        if live and allocating and len(others) >= MAX_ITEMS:
-            raise PlanCapacityError(f"每个项目最多 {MAX_ITEMS} 条运行中的方案条目，请先关闭或合并")
-        section = SECTION_OF.get(candidate.get('axis', 'asset'), 'asset')
-        moving = current is None or section != SECTION_OF.get(current['axis'], 'asset')
-        automatic = actor == 'system' or candidate.get('plan_origin') in ('system', 'bootstrap', 'internal')
-        if (live and (allocating or moving) and automatic and role != 'relation'
-                and sum(w.get('scope_kind') != 'relation' and SECTION_OF.get(w['axis'], 'asset') == section
-                        for w in others) >= MAX_PER_SECTION):
-            raise PlanCapacityError(f"「{AXIS_LABEL.get(section, section)}」已有 {MAX_PER_SECTION} 个关注点")
         if (live and (allocating or current.get('text') != candidate['text'])
                 and any(_norm(w['text']) == _norm(candidate['text']) for w in others)):
             raise ValueError('已有相同关注点，请更新原条目')
@@ -481,8 +476,6 @@ class MonitoringPlan:
             node = nodes[key]
             above = node.get('parent_id') or ''
             value = depth(above, visiting | {key}) + 1 if above else int(node.get('hop') or 0)
-            if value > MAX_HOP:
-                raise ValueError(f'关联链最多延伸 {MAX_HOP} 层')
             depths[key] = str(value)
             return value
         depth(wid, set())
@@ -938,7 +931,7 @@ class MonitoringPlan:
         since = (datetime.now(UTC) - timedelta(days=30)).isoformat()
         with self.monitor._db() as db:
             events = dict(db.execute("SELECT category, count(*) FROM studio_events WHERE project_id=? AND status!='dismissed' "
-                                     "AND COALESCE(event_at, created_at)>=? GROUP BY category", (project_id, since)).fetchall())
+                                     f"AND {recent_news_sql()} GROUP BY category", (project_id, since)).fetchall())
             sites = db.execute("SELECT count(*) FROM studio_site_pages WHERE project_id=?", (project_id,)).fetchone()[0]
 
             def count(sql, *args):
@@ -1037,11 +1030,11 @@ class MonitoringPlan:
                         continue
                     where = " OR ".join("title LIKE ?" for _ in names)
                     likes = [f"%{n}%" for n in names]
-                    found = db.execute(f"""SELECT title, category, COALESCE(event_at, created_at) AS at FROM studio_events
+                    found = db.execute(f"""SELECT title, category, {news_date_sql()} AS at FROM studio_events
                                            WHERE project_id=? AND status!='dismissed' AND ({where}) ORDER BY at DESC LIMIT 1""",
                                        (project_id, *likes)).fetchone()
                     recent = db.execute(f"""SELECT count(*) FROM studio_events WHERE project_id=? AND status!='dismissed'
-                                            AND ({where}) AND COALESCE(event_at, created_at) >= ?""",
+                                            AND ({where}) AND {recent_news_sql()}""",
                                         (project_id, *likes, since90)).fetchone()[0]
                     rows.append({"name": str(entry).split("|")[0].strip(), "latest": dict(found) if found else None,
                                  "recent_90d": recent})

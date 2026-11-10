@@ -2,6 +2,8 @@
 
 from datetime import date
 
+from project_watch.studio.business_identity import current_located_names, ownership_refs
+
 
 def current_fact(service, project_id, fact):
     dependency = fact.get('dependency') or service.evidence.dependencies.get(project_id, 'fact:' + fact['id'])
@@ -27,7 +29,12 @@ def project_relation(service, project_id, fact, *, include_internal=True):
         reasons.append('stale_or_outside_validity')
     if fact['subject_attribution'] != 'explicit' or fact['basis'] != 'actual':
         reasons.append('explicit_actual_attribution')
-    if not any(subject['name'] in r['quote'] and peer['name'] in r['quote'] for r in fact['refs']):
+    subject_names, current_refs = current_located_names(service.objects.store, project_id, subject, fact['refs'],
+                                                       include_internal=include_internal)
+    peer_names, _ = current_located_names(service.objects.store, project_id, peer, fact['refs'],
+                                         include_internal=include_internal)
+    if not any(ownership_refs(subject['name'], subject['name'], r['quote'], subject_names) is not None
+               and ownership_refs(peer['name'], peer['name'], r['quote'], peer_names) is not None for r in current_refs):
         reasons.append('located_both_parties')
     if role == 'customer' and stage not in ('order', 'delivery', 'acceptance', 'revenue', 'payment'):
         reasons.append('commercial_stage')

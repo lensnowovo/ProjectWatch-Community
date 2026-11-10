@@ -35,7 +35,7 @@ def main() -> None:
     installed_at = Path(project_watch.__file__).resolve()
     if not within_runtime(installed_at, Path(sys.prefix)):
         raise RuntimeError("Project Watch was loaded from source rather than the fresh venv")
-    private = ('competition', 'competition_evaluation', 'competition_research', 'landscape',
+    private = ('competition', 'competition_research', 'landscape',
                'product_matching', 'question_advisor', 'plan_replan', 'race', 'red_flags', 'registry_peers',
                'techroutes', 'track', 'insight_generation', 'brief_analysis', 'crosscheck_analysis')
     if without_insight:

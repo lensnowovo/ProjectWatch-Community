@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 from project_watch.studio import review
+from project_watch.studio.events import news_date_sql, parse_time, recent_news_sql
 
 _log = logging.getLogger(__name__)
 
@@ -244,10 +245,10 @@ def _equivalent_amounts(public: str, internal: str) -> bool:
 def _own_event_dates(store, project_id: str, days: int) -> list[str]:
     since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     with closing(store._connect()) as db:
-        rows = db.execute("""SELECT COALESCE(event_at, created_at) FROM studio_events WHERE project_id=? AND status!='dismissed'
-                             AND category IN ('company','trial','patent') AND COALESCE(event_at, created_at) >= ?""",
+        rows = db.execute(f"""SELECT {news_date_sql()} FROM studio_events WHERE project_id=? AND status!='dismissed'
+                             AND category IN ('company','trial','patent') AND {recent_news_sql()}""",
                           (project_id, since)).fetchall()
-    return [r[0] for r in rows]
+    return [parse_time(r[0]).isoformat() for r in rows]
 
 
 def silence(store, monitor, project_id: str, documents: list[dict] | None = None, *, base_hours=24) -> list[dict]:
@@ -311,9 +312,9 @@ def cadence(store, monitor, project_id: str, base_hours: int) -> dict:
     dates = _own_event_dates(store, project_id, 90)
     week = (datetime.now(UTC) - timedelta(days=14)).isoformat()
     with closing(store._connect()) as db:
-        hot = db.execute("""SELECT count(*) FROM studio_events WHERE project_id=? AND status!='dismissed'
+        hot = db.execute(f"""SELECT count(*) FROM studio_events WHERE project_id=? AND status!='dismissed'
                             AND category IN ('company','trial','patent')
-                            AND importance IN ('major','notable') AND COALESCE(event_at, created_at) >= ?""",
+                            AND importance IN ('major','notable') AND {recent_news_sql()}""",
                          (project_id, week)).fetchone()[0]
     open_threads = [t for t in monitor.threads(project_id) if t["status"] == "open"
                     and (age := _days_ago(t["last_at"])) is not None and age <= 30]

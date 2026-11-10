@@ -7,9 +7,10 @@ import { ErrorNote } from "../ui";
 
 /** A permanent cover: the drawn lines fill the page and nothing about any project is shown here.
  * What changed and what needs attention live on 今日动态 and 项目组合. */
-export default function HomePage({ projects, modelReady, error, onRetry }: {
+export default function HomePage({ projects, modelReady, agentMode, error, onRetry }: {
   projects: Project[] | null;
   modelReady: boolean | null;
+  agentMode: boolean;
   error: string | null;
   onRetry: () => void;
 }) {
@@ -22,12 +23,8 @@ export default function HomePage({ projects, modelReady, error, onRetry }: {
         <HeroWaves />
         <motion.div className="hero-copy" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, ease: EASE, delay: 0.1 }}>
-          <div className="eyebrow">ProjectWatch · 项目监控</div>
-          <h1 className="display">
-            {empty ? <>输入公司名，<br />或者拖入一份 BP。</>
-              : <>关注的公司，<br />持续看见变化。</>}
-          </h1>
-          <p>整理公司材料，跟踪公司、竞品与行业动态，保留出处。</p>
+          <h1 className="display">关注的公司，<br />持续看见变化。</h1>
+          {empty && modelReady && <p>{agentMode ? "在「授权项目」中输入公司名称，可附上商业计划书（BP）。" : "输入公司名称，或上传商业计划书（BP）识别公司。"}</p>}
           <div className="hero-actions">
             {hasProjects ? <>
               <Link to="/feed" className="btn btn-primary btn-lg">查看项目动态</Link>

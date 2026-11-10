@@ -285,7 +285,10 @@ def test_second_document_produces_change_set(tmp_path):
     assert detail["brief"]["headline"] == ""
     assert detail["brief"]["summary"] == "客户验证在推进。"
     assert detail["brief"]["watch"][0]["text"] == "关注客户验收。"
-    assert "此前预测6000万元" in detail["brief"]["changes"][0]["text"]
+    # The fake response has no source refs and describes historical internal
+    # metrics; it must not become a recent news change. The document comparison
+    # and its actual-vs-plan amounts are asserted in doc_changes above.
+    assert detail["brief"]["changes"] == []
     assert detail["brief"]["stale_removed"] == 3
 
 

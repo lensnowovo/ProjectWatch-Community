@@ -3,6 +3,7 @@ import { api, ApiError, type ResearchCategory, type ResearchSource, type Researc
 import { useVisiblePoll } from './Operational';
 import { CATEGORY_LABEL, dateNote, relTime, useAsync } from './ui';
 import './roundView.css';
+import { primaryPatent, presentSource } from './researchIntegrity';
 
 type Reader = typeof api.researchSources;
 
@@ -74,7 +75,9 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
     const key = item.category === 'patent' && item.family ? item.family.key : item.id;
     groups.set(key, [...(groups.get(key) || []), item]);
   });
-  const renderItem = (item: ResearchSource) => {
+  const renderItem = (original: ResearchSource) => {
+    const item = presentSource(original);
+    const patentClue = item.category === 'patent' && !primaryPatent(item);
     const x = item.extra;
     const href = /^https?:\/\//i.test(item.url) ? item.url : undefined;
     const search = x.paper_search as {query?: string; mode?: string} | undefined;
@@ -94,14 +97,15 @@ export function ResearchSourceList({items}: {items: ResearchSource[]}) {
       <div className="item-body">
         <div className="item-meta"><span className={`cat cat-${item.category}`}>{CATEGORY_LABEL[item.category]}</span>
           <span className="muted">{item.source}</span>
-          {item.processing_status === 'pending' ? <span className="muted">相关性待核</span>
+          {item.processing_status === 'pending' ? <span className="muted">相关性待核</span> : patentClue ? <span className="muted">检索线索</span>
             : item.review === 'unreviewed' ? <span className="research-relation relation-unreviewed" title="AI 筛选结果未能与原文对应，原样保留供你查看">待核实</span>
             : RELATION[text(x.research_relation)] && <span className={`research-relation relation-${text(x.research_relation)}`}>{RELATION[text(x.research_relation)]}</span>}
           <time className="muted item-date" title={dateNote(x)}>{item.published_at ? relTime(item.published_at) : '日期未知'}</time>
         </div>
         {href ? <a className="item-title" href={href} target="_blank" rel="noreferrer noopener">{item.title}</a> : <span className="item-title">{item.title}</span>}
-        {item.snippet && <Snippet text={item.snippet}/>}
+        {!patentClue && item.snippet && <Snippet text={item.snippet}/>}
         <details className="item-reading-detail"><summary className="muted small">来源与匹配信息</summary>
+          {patentClue && <><p className="muted small">原始检索标题：{original.title}</p><Snippet text={original.snippet}/></>}
           {(text(x.doi) || text(x.patent_number)) && <p className="muted small">{[text(x.doi) ? `DOI：${text(x.doi)}` : '', text(x.patent_number) ? `专利号：${text(x.patent_number)}` : ''].filter(Boolean).join(' · ')}</p>}
           <p className="muted small">{item.category === 'patent' ? '检索线索；权利人及法律状态以专利登记为准。' : '相关来源；不据检索命中认定公司归属。'}
             {item.read_scope === 'summary' ? ' 当前材料为搜索摘录或摘要。' : ''}</p>

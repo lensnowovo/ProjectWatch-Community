@@ -1,9 +1,9 @@
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
-import { api, type Confidence, type InsightPoint, type InsightRef, type InsightView } from "./api";
+import type { Confidence, InsightPoint, InsightRef, InsightView } from "./api";
 import { Block } from "./frame";
 import { EASE } from "./motion";
-import { useAsync, useOpenSource } from "./ui";
+import { useOpenSource } from "./ui";
 import { ChartHint } from "./chartHint";
 
 /**
@@ -36,11 +36,6 @@ export function verdictTone(scale: ScaleKey, verdict?: string): "up" | "down" | 
 }
 
 const CONFIDENCE_LABEL: Record<Confidence, string> = { high: "把握高", medium: "把握中", low: "把握低" };
-
-/** One insight request per project revision; every tab that shows a judgment reads the same record. */
-export function useInsight(projectId: string, revision: string) {
-  return useAsync(() => api.insight(projectId).catch(() => null), [projectId, revision]);
-}
 
 export function Confidence({ value }: { value?: Confidence }) {
   if (!value) return null;

@@ -24,7 +24,6 @@ from project_watch.studio.store import digest, now
 INPUT = 'collect_input_v1'
 RESULT = 'collect_result_v1'
 PATENTS = SUPPLEMENT_PREFIX + 'patent_documents'
-MAX_PATENT_DOCUMENTS = 6
 BODIES = 'collect_bodies_v1'
 WATCH_FIELDS = ('id', 'visibility', 'status', 'scope_kind', 'relation_type', 'relation_target',
                 'axis', 'queries', 'lifecycle_version')
@@ -106,7 +105,7 @@ def _current_paper_topics(pipeline, pid, project, stored):
     if old and all(topic_terms(q) for q in old):
         pipeline.store.put_plan(pid, marked)  # nothing to rewrite, no model request
         return marked
-    products = pipeline.objects.public_names(pid, kind='product')[:6]
+    products = pipeline.objects.public_names(pid, kind='product')
     _, _, llm, _ = pipeline.tools()
     if not llm.ready:
         return stored
@@ -127,10 +126,10 @@ def _merge_stored_plan(public_plan, stored):
     names = {c['name'] for c in public_plan['competitors']}
     public_plan['competitors'] = [*public_plan['competitors'], *[
         {k: c[k] for k in ('name', 'query') if c.get(k)} for c in stored.get('competitors') or []
-        if isinstance(c, dict) and c.get('name') and c['name'] not in names]][:8]
+        if isinstance(c, dict) and c.get('name') and c['name'] not in names]]
     for field in PLAN_FIELDS:
         merged = [*public_plan.get(field, []), *[q for q in stored.get(field) or [] if isinstance(q, str)]]
-        public_plan[field] = list(dict.fromkeys(merged))[:8]
+        public_plan[field] = list(dict.fromkeys(merged))
 
 
 def freeze(pipeline, execution, *, mode):
@@ -142,18 +141,18 @@ def freeze(pipeline, execution, *, mode):
     names = _names(pipeline, pid, project)
     if not names:
         raise ValueError('confirmed company name required')
-    products = pipeline.objects.public_names(pid, kind='product')[:4]
+    products = pipeline.objects.public_names(pid, kind='product')
     watches = [{k: w.get(k) for k in WATCH_FIELDS} for w in pipeline.monitoring_plan.items(pid)
                if w.get('visibility') == 'public' and w.get('status') != 'retired']
     relation = [w for w in watches if w['scope_kind'] == 'relation']
     public_plan = {
-        'company_queries': names[:3],
+        'company_queries': names,
         'affiliation_names': query_names.affiliation_names(names),
         'patent_index_assignees': query_names.affiliation_names(names),
-        'patent_assignees': names[:3],
+        'patent_assignees': names,
         'paper_queries': products,
         'trial_terms': products,
-        'trial_sponsors': [n for n in query_names.latin_first(names) if not query_names.cjk(n)][:2],
+        'trial_sponsors': [n for n in query_names.latin_first(names) if not query_names.cjk(n)],
         'competitors': [{'name': w['relation_target']} for w in relation
                         if w['relation_type'] == 'competitor' and w['relation_target']],
     }
@@ -209,11 +208,11 @@ def _patent_followups(execution, receipts_items):
         number = (extra.get('patent_number') or '') + (extra.get('patent_kind') or '')
         if applicant and any(c and c in applicant for c in cores) and re.fullmatch(r'[A-Z]{2}[0-9]{4,14}[A-Z][0-9]{0,2}', number):
             numbers.append(number)
-    return list(dict.fromkeys(numbers))[:MAX_PATENT_DOCUMENTS]
+    return list(dict.fromkeys(numbers))
 
 
 def read_bodies(pipeline, execution, collectors):
-    """Bounded article reading for this round's news: the model only picks what to read.
+    """Read the news items selected by this round's body prefilter.
 
     Reading is collection, so it happens here and never in analysis. Without a
     model every candidate stays readable by its summary; nothing is dropped.
@@ -306,7 +305,7 @@ def run(pipeline, execution, *, mode='refresh'):
                   bodies_read=bodies.get('read', 0),
                   not_collected=[dict(source=r['source'], outcome=r['outcome'], reason=(r['reason'] or '')[:80])
                                  for r in rows if r['capability'] == 'available'
-                                 and r['outcome'] not in ('success', 'not_due')][:30])
+                                 and r['outcome'] not in ('success', 'not_due')])
     execution.checkpoint(RESULT, result)
     _record_health(pipeline, pid, rows)
     # The scheduler's cadence counts attempts, so a failing source never loops;

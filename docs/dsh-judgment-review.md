@@ -1,5 +1,7 @@
 # DSH judgment evidence review
 
+**Historical DSH pipeline contract.** The correction loop and retry limits below applied to the former DSH judgment worker. The current Studio review flow is documented in [Developer architecture](developer-architecture.md).
+
 The host reviews a normalized public judgment before saving it. The review uses a
 separate model context containing the exact candidate and all exposed public
 evidence, including evidence the candidate did not cite. It has no tools and no

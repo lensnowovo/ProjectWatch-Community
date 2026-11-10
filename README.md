@@ -1,5 +1,7 @@
 <a id="top"></a>
 
+> 当前源码为 0.3.0a3 基线上的稳定性修复分支，尚未完成稳定版验收。下方下载链接指向既有公开版本，不代表本分支已发布。
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
   <img alt="ProjectWatch — 关注的公司，持续看见变化。" src="docs/assets/readme/hero-light.svg" width="100%">

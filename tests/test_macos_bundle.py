@@ -6,6 +6,7 @@ import struct
 import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,29 @@ def runtime(tmp_path, entries):
                 item.size = len(payload)
                 stream.addfile(item, io.BytesIO(payload))
     return archive
+
+
+def test_build_rejects_same_version_wheel_from_an_older_checkout(tmp_path, monkeypatch):
+    repo = tmp_path / "checkout"
+    monkeypatch.setattr(bundle, "__file__", str(repo / "scripts/build_macos_bundle.py"))
+    wheel = tmp_path / "projectwatch_local-0.3.0a3-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("projectwatch_local-0.3.0a3.dist-info/METADATA",
+                         "Name: projectwatch-local\nVersion: 0.3.0a3\n")
+        for name in ("studio/desktop.py", "studio/insight_generation.py", "api.py", "web/index.html"):
+            source = repo / "src/project_watch" / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(b"original")
+            archive.write(source, f"project_watch/{name}")
+    (repo / "src/project_watch/api.py").write_bytes(b"updated without a version bump")
+
+    archive = runtime(tmp_path, [])
+    monkeypatch.setitem(bundle.RUNTIMES["arm64"], "sha256", bundle.digest(archive))
+    args = SimpleNamespace(out=tmp_path / "out", wheel=wheel, runtime=archive, arch="arm64",
+                           uv="missing-synthetic-uv")
+    with pytest.raises(ValueError, match=r"correspondence failed: extra=0, missing=0, changed=1"):
+        bundle.build(args)
+    assert not args.out.exists()
 
 
 def test_extract_internal_links_and_keep_executable_mode(tmp_path):

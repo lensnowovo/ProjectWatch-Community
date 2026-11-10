@@ -13,6 +13,7 @@ import { SignalListDrawer } from "./signalList";
 import { raceRevision, useRace } from './raceData';
 import { jobWorkState, WORK_LABEL } from "./workState";
 import { WorkIndicator } from "./Operational";
+import { PageSummary, selectSummary, type SummarySubject } from './pageSummary';
 import { TrackSignalRows } from './TrackSignalRows';
 
 /**
@@ -20,7 +21,7 @@ import { TrackSignalRows } from './TrackSignalRows';
  * made for that question beside its conclusion card, with every cited point available on demand.
  */
 type Key = "operations" | "position" | "technology" | "chain" | "industry";
-type Tab = "competition" | "industry" | "numbers" | "overview";
+type Tab = "competition" | "industry" | "numbers" | "overview" | "tech-progress" | "chain";
 interface Question { key: Key; label: string; ask: string; scale: ScaleKey; pro: string; con: string[]; proTitle: string; conTitle: string; goto?: Tab; more?: string }
 const QUESTIONS: Question[] = [
   { key: "operations", label: "公司本体", ask: "公司自己的经营与资金撑得住吗？", scale: "operations", pro: "for", con: ["against"],
@@ -28,9 +29,9 @@ const QUESTIONS: Question[] = [
   { key: "position", label: "竞争位置", ask: "和同路线对手比，领先还是落后？", scale: "position", pro: "for", con: ["against"],
     proTitle: "支持这个判断", conTitle: "相反的依据", goto: "competition", more: "竞争对手" },
   { key: "technology", label: "技术路线", ask: "押注的技术路线是前沿还是趋于落后？", scale: "maturity", pro: "academic", con: ["risks"],
-    proTitle: "学术与产业信号", conTitle: "技术路线风险", goto: "industry", more: "行业环境" },
+    proTitle: "学术与产业信号", conTitle: "技术路线风险", goto: "tech-progress", more: "技术进展" },
   { key: "chain", label: "产业链", ask: "客户、供应与合作方是助力还是掣肘？", scale: "chain", pro: "for", con: ["against"],
-    proTitle: "支持这个判断", conTitle: "相反的依据", goto: "overview", more: "公司概览" },
+    proTitle: "支持这个判断", conTitle: "相反的依据", goto: "chain", more: "产业链动态" },
   { key: "industry", label: "行业环境", ask: "赛道在扩张还是降温？", scale: "industry", pro: "drivers", con: ["headwinds"],
     proTitle: "驱动", conTitle: "阻力", goto: "industry", more: "行业环境" },
 ];
@@ -62,7 +63,7 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
     return next;
   }, { replace: true, preventScrollReset: true });
   const selected = QUESTIONS.find(q => q.key === chosen);
-  const active = selected && judged(view, selected) ? selected.key : first;
+  const active = selected?.key ?? first ?? "operations";
   const running = !!view?.job && ["queued", "running"].includes(view.job.status);
   const analysisJob = detail.jobs?.find(j => j.id === view?.job?.id);
   const analysisState = analysisJob ? jobWorkState(detail, analysisJob) : view?.job ? jobWorkState(detail, {
@@ -70,9 +71,17 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   }) : "idle";
   const q = QUESTIONS.find((x) => x.key === active);
   const j = q ? judged(view, q) : null;
+  const summarySubject: Record<Key, SummarySubject> = {operations:'operations',position:'competition',technology:'technology',chain:'chain',industry:'industry'};
+
+  const stateText: Record<string, string> = {
+    insufficient: '现有证据不足以支持本栏结论', missing_draft: '本轮未形成可复核的判断',
+    review_blocked: '本栏判断未通过复核', unknown: '模型请求结果待确认，已保留进度',
+    rate_limited: view?.job?.retry_after ? '模型限流，预计 ' + new Date(view.job.retry_after).toLocaleString('zh-CN', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) + ' 继续' : '模型限流，等待恢复',
+    pending: '本轮分析进行中', no_material: '本轮未筛到相关材料', waiting_model: '等待配置模型', unfinished: '本轮未完成本栏判断',
+  };
   const labelsFor = (x: Question) => view?.labels?.[x.scale === "maturity" ? "maturity" : (x.key as "position")] ?? {};
   const canGenerate = view?.generation_available === true;
-  if (view?.generation_available === false && !analysis) return <section className="qa" aria-label="判断记录">
+  if (view?.generation_available === false && !analysis && !QUESTIONS.some(x => selectSummary(detail, summarySubject[x.key]))) return <section className="qa" aria-label="判断记录">
     <p className="muted small">暂无判断记录。可由外部 Agent 写入，或启用分析扩展。</p>
   </section>;
   return (
@@ -81,17 +90,22 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
         <WorkIndicator state={analysisState} label={`综合判断 · ${analysisJob?.runtime?.label || WORK_LABEL[analysisState] || "状态待同步"}`} />
         {analysis && <span className="muted small">当前显示上次结果</span>}
       </div>}
+      {view?.section_states && Object.keys(view.section_states).length > 0 && <p className="muted small" role="status">
+        本轮已发布 {Object.values(view.section_states).filter(state => state === 'published').length}/5 项判断
+      </p>}
       <div className="rj-tiles qa-tiles" role="tablist" aria-label="选择问题">
         {QUESTIONS.map((x, i) => {
           const v = judged(view, x);
-          return <button key={x.key} role="tab" aria-selected={active === x.key} disabled={!v}
+          const tileCopy = selectSummary(detail, summarySubject[x.key]);
+          return <button key={x.key} role="tab" aria-selected={active === x.key}
             className={`rj-tile${active === x.key ? " on" : ""}${v ? "" : " empty"}`} onClick={() => setParams(previous => {
               const next = new URLSearchParams(previous); next.set('question', x.key); next.delete('evidence'); return next;
             }, { replace: true, preventScrollReset: true })}>
             <span className="rj-tile-head"><span className="rj-tile-label"><span className="qa-no">0{i + 1}</span>{x.label}</span>
               <span className={`rj-verdict ${v ? verdictTone(x.scale, v.verdict) : ""}`}>{v ? labelsFor(x)[v.verdict] ?? v.verdict : "—"}</span></span>
-            <span className="rj-tile-summary">{v ? v.summary : error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : analysis ? "下次 AI 交叉分析时生成" : "还没有 AI 交叉分析"}</span>
-            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : "暂无结果"}
+            <span className="rj-tile-summary">{v ? v.summary : tileCopy?.text || (error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : view?.evidence_gaps?.[x.key] || (stateText[view?.section_states?.[x.key] ?? ''] ?? (analysis ? "本轮未发布本栏判断" : "还没有 AI 交叉分析")))}</span>
+            <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : ""}
+              {v && view?.section_states?.[x.key] && !['published','retained'].includes(view.section_states[x.key]) && <small>{stateText[view.section_states[x.key]]} · 显示上次判断</small>}
               {view?.record?.section_versions?.[x.key] && <small> · {view.record.section_versions[x.key].generated_at?.slice(0, 10)}
                 {view.record.section_versions[x.key].status !== 'current' ? ' · 待更新' : ''}</small>}
             </span>
@@ -101,6 +115,12 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
       </div>
       {!analysis && !running && !error && onStart && canGenerate && view?.model_ready && <p className="rj-empty">
         <button className="link small" onClick={onStart}>开始 AI 交叉分析 →</button></p>}
+      {q && !j && <section role="tabpanel" className="qa-panel" aria-label={q.label}>
+        {selectSummary(detail, summarySubject[q.key])
+          ? <><PageSummary key={q.key} detail={detail} subject={summarySubject[q.key]}/><p className="muted small">已整理信息，综合判断尚未形成。</p></>
+          : <p role="status" className="muted">{error ? '判断暂时无法读取，请稍后刷新。' : stateText[view?.section_states?.[q.key] ?? ''] || (running ? '正在分析本栏材料，完成后自动显示。' : '本栏尚未形成判断。')}</p>}
+        {q.goto && <button className="link small" onClick={()=>goto(q.goto!)}>查看{q.more} →</button>}
+      </section>}
       {q && j && <motion.div key={q.key} role="tabpanel" className={`qa-panel qa-panel-${q.key}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
         transition={{ duration: .28, ease: EASE }}>
         <div className="qa-main">

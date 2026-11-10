@@ -1,3 +1,4 @@
+import { entityIssue } from "../entityValidation";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -94,6 +95,8 @@ export default function NewProjectPage() {
         aliases: entity.aliases.filter(Boolean),
         entity_source: source,
       };
+      const issue = entityIssue(payload);
+      if (issue) throw new Error(issue);
       const points = focus.split(/\n+/).map((t) => t.trim()).filter((t) => t.length >= 2).slice(0, 3);
       if (points.some((t) => t.length > 200)) throw new Error("每条关注点请控制在 200 字以内");
       const companyNames = payload.short_name ? [payload.short_name] : [];

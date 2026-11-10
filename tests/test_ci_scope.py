@@ -18,7 +18,8 @@ STAMP = (NOW - timedelta(hours=1)).isoformat()
 REPO = 'synthetic/project'
 ROWS = [{'path': p, 'mode': '100644', 'blob': str(i) * 40} for i, p in enumerate((
     'src/project_watch/studio/pipeline.py', 'frontend/src/App.tsx', 'docs/support.md',
-    'tests/test_studio.py', 'tests/test_web_preview.py', ci.WORKFLOW, 'scripts/ci_scope.py'), 1)]
+    'tests/test_studio.py', 'tests/test_web_preview.py', ci.WORKFLOW, 'scripts/ci_scope.py',
+    'README.md'), 1)]
 CONTEXT = {'event': 'pull_request', 'pr_number': 5, 'head_repository': REPO, 'base_branch': 'main'}
 
 
@@ -30,6 +31,7 @@ def fingerprints(rows=ROWS, flow=FLOW):
     ('frontend/src/App.tsx', {'frontend', 'installed'}),
     ('tests/test_web_preview.py', {'frontend'}),
     ('tests/test_studio.py', set(ci.DOMAINS)),
+    ('README.md', {'installed'}),
     ('docs/support.md', set()), (ci.WORKFLOW, set()),
     ('src/project_watch/studio/pipeline.py', set(ci.DOMAINS)),
     ('unknown/new-input', set(ci.DOMAINS)),

@@ -368,7 +368,10 @@ class Collectors:
     def original_search(self, lead: dict, *, count: int = 5) -> list[dict]:
         from project_watch.studio.article_lookup import matches_original, title_query
 
-        query = title_query(lead.get('title'))
+        # Use a shared valid hint for the selected providers; never truncate
+        # ordinary queries or their site/date operators in web_search.
+        limit = 128 if 'deepseek' in self.search_config.enabled() else 202
+        query = title_query(lead.get('title'), max_chars=limit)
         if not query:
             return []
         return self.web_search(query, count=count,

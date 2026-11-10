@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from project_watch.studio import competition_evaluation as ev
+from scripts import competition_evaluation as ev
 
 CASES = Path(__file__).parent / 'fixtures/studio_eval/competition.json'
 

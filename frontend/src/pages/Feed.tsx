@@ -51,8 +51,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
   if (!projects.length) {
     return (
       <Page className="page-workspace">
-        <PageHeader variant="feed" title="今日动态" label="动态汇总"
-          description="公司、竞品、行业与政策的新进展。" />
+        <PageHeader variant="feed" title="今日动态" />
         <Empty title="还没有项目" action={<Link to="/new" className="btn btn-primary">添加第一个项目</Link>} />
       </Page>
     );
@@ -79,8 +78,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
 
   return (
     <Page className="page-workspace">
-      <PageHeader variant="feed" title="今日动态" label="动态汇总"
-        description="公司、竞品、行业与政策的新进展。"
+      <PageHeader variant="feed" title="今日动态"
         meta={<>{today}{updating > 0 && <span> · {updating} 个项目正在更新</span>}</>} />
       {/* The band follows the two columns below it: the three feed figures over the list,
         * and 待核对 / 异常 over the 需要你处理 card it belongs to. */}
@@ -96,11 +94,11 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
         <Seg id="level" value={level} onChange={setLevel}
           options={[{ value: "", label: "全部" }, { value: "major", label: "重大" }, { value: "notable", label: "关注" }]} />
         <label className="check check-inline"><input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />只看未读{unreadHere > 0 && <span className="count">{unreadHere}</span>}</label>
-        <select value={category} onChange={(e) => setCategory(e.target.value as Category | "")}>
+        <select aria-label="动态类型" value={category} onChange={(e) => setCategory(e.target.value as Category | "")}>
           <option value="">全部类型</option>
           {Object.entries(CATEGORY_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+        <select aria-label="筛选项目" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
           <option value="">全部项目</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
@@ -111,7 +109,7 @@ export default function FeedPage({ projects }: { projects: Project[] }) {
       {staged.failed && <p className="muted small">新动态暂时无法检查，当前列表保留。</p>}
       {staged.pending && <button className="link op-new" onClick={() => { setData(staged.pending); staged.clear(); attention.reload(); summary.reload(); }}>{added > 0 ? `新增 ${added} 条` : '动态内容有更新'} · 点击查看</button>}
       {loading && !data && <Skeleton lines={8} />}
-      {data && items.length === 0 && unreadOnly && all.length > 0 && <Empty title="都读完了">“全部”中可回看已读动态。</Empty>}
+      {data && items.length === 0 && unreadOnly && all.length > 0 && <Empty title="当前列表没有未读动态">取消“只看未读”可查看已读动态。</Empty>}
       {data && all.length === 0 && (
         <Empty title="这段时间没有新动态">
           <ErrorNote error={summary.error} />

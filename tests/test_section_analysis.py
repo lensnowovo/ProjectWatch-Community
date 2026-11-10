@@ -49,6 +49,21 @@ def test_bad_reference_rejects_only_its_section_and_preserves_sources(host):
     assert not research.store.list_events(project_id=research.project_id)
 
 
+def test_unreferenced_counterevidence_blocks_an_otherwise_supported_summary(host):
+    called = []
+    def prepared(payload):
+        called.append(payload)
+        return {'issues': [{'field': 'operations.summary', 'code': 'evidence_contradicted',
+                            'reason': 'synthetic unreferenced counterevidence'}], 'receipts': ['counter-receipt']}
+    def scoped(system, payload):
+        return reviewer(system, payload)
+    scoped.prepare = prepared
+    result, _ = apply(host, {'operations': part()}, scoped)
+    assert len(called) == 1
+    assert result['sections']['operations']['status'] == 'rejected'
+    assert 'counter-receipt' in result['sections']['operations']['review_receipts']
+
+
 def test_missing_new_section_retains_previous_version_and_date(host):
     _, first = apply(host, dict(operations=part()))
     result, second = apply(host, dict(chain=part()))
@@ -313,6 +328,120 @@ def json_text(payload):
     return json.dumps(payload, ensure_ascii=False)
 
 
+def test_repair_uses_only_reviewed_points_and_keeps_the_rejection_receipt(host):
+    import json
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+
+    research, context, sources = host
+    research.execution.checkpoint(analyze_job.REVIEW_PROTOCOL, {'version': 2})
+    raw = {'operations': two_points()}
+    raw['operations']['summary'] = '合成材料显示公司全面领先。'
+    bad = raw['operations']['for'][1]['text']
+    def review(system, payload):
+        unsupported = {'operations.summary', 'operations.for.1.text'} if '全面领先' in json_text(payload) else set()
+        return judging(unsupported)(system, payload)
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, review, lambda: None)
+    requests = []
+    def rewrite(system, user):
+        requests.append(json.loads(user))
+        return {'summary': '合成材料仍在招募阶段。'}
+    result = analyze_job.repair_summaries(research.pipeline.insight_generator, research.execution,
+        SimpleNamespace(ready=True, json=rewrite), raw, sources, outcomes, review, lambda: None, None)
+    assert [v['text'] for v in requests[0]['kept_points']['for']] == ['合成材料记录招募状态。']
+    assert result['operations']['status'] == 'approved'
+    assert bad in result['operations']['dropped']
+    assert [v['text'] for v in raw['operations']['for']] == ['合成材料记录招募状态。']
+    assert section_analysis.publish(research.pipeline, research.execution, context, raw, sources, result,
+                                    lambda: None)['published'] == ['operations']
+
+
+def test_repair_does_not_invent_a_summary_when_no_reviewed_points_remain(host):
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+    research, _, sources = host
+    research.execution.checkpoint(analyze_job.REVIEW_PROTOCOL, {'version': 2})
+    raw = {'operations': part()}
+    review = judging({'operations.summary', 'operations.for.0.text'})
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, review, lambda: None)
+    llm = SimpleNamespace(ready=True, json=lambda *args: pytest.fail('no verified basis for rewrite'))
+    result = analyze_job.repair_summaries(research.pipeline.insight_generator, research.execution, llm,
+                                         raw, sources, outcomes, review, lambda: None, None)
+    assert result['operations']['status'] == 'rejected'
+
+
+def test_guard_placeholder_is_repaired_and_not_counted_as_completed(host):
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+    research, context, sources = host
+    research.execution.checkpoint(analyze_job.REVIEW_PROTOCOL, {'version': 2})
+    raw = {'operations': dict(part(), verdict='pressured', summary='经营状况持续改善。')}
+    generator = research.pipeline.insight_generator
+    assert analyze_job._normalization_problem(generator, 'operations', raw['operations'], sources) is None  # legacy
+    assert analyze_job._normalization_problem(generator, 'operations', raw['operations'], sources, modern=True)
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, judging(), lambda: None)
+    result = section_analysis.publish(research.pipeline, research.execution, context, raw, sources, outcomes, lambda: None)
+    assert result['published'] == []
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, judging(), lambda: None)
+    llm = SimpleNamespace(ready=True, json=lambda *args: {'summary': '合成材料仍在招募阶段。'})
+    outcomes = analyze_job.repair_summaries(generator, research.execution, llm, raw, sources, outcomes,
+                                          judging(), lambda: None, None)
+    assert outcomes['operations']['repaired_summary']['status'] == 'approved'
+
+
+@pytest.mark.parametrize('previous_version', [None, 1, 2, 3, 4])
+def test_new_attempt_inherits_collection_review_protocol(host, previous_version):
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+    research, _, _ = host
+    prior = research.store.enqueue(research.project_id, 'analyze', input_version='collect:synthetic-batch')
+    with closing(research.store._connect()) as db, db:
+        if previous_version is not None:
+            db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)',
+                       (prior['id'], analyze_job.REVIEW_PROTOCOL, json_text({'version': previous_version})))
+    saved = {}
+    execution = SimpleNamespace(store=research.store, job={'id': 'synthetic-next', 'project_id': research.project_id},
+        read_checkpoint=saved.get, checkpoint=lambda k, v: saved.update({k: v}))
+    analyze_job.freeze_review_protocol(execution, 'synthetic-batch', fresh=True)
+    assert saved[analyze_job.REVIEW_PROTOCOL]['version'] == (previous_version or 1)
+    analyze_job.freeze_review_protocol(execution, None, fresh=True)
+    assert saved[analyze_job.REVIEW_PROTOCOL]['version'] == (previous_version or 1)
+
+
+def test_only_fresh_analysis_opts_into_new_review(host):
+    from project_watch.studio import analyze_job
+    research, _, _ = host
+    analyze_job.freeze_review_protocol(research.execution, None, fresh=True)
+    assert analyze_job._review_version(research.execution) == 4
+
+
+def test_normalization_repair_does_not_drop_a_shifted_valid_point_twice(host):
+    import json
+    from types import SimpleNamespace
+
+    from project_watch.studio import analyze_job
+    research, _, sources = host
+    research.execution.checkpoint(analyze_job.REVIEW_PROTOCOL, {'version': 2})
+    raw = {'operations': dict(two_points(), verdict='pressured', summary='经营状况持续改善。')}
+    raw['operations']['for'].reverse()  # bad item 0; good item becomes 0 after trimming
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, judging({'operations.for.0.text'}), lambda: None)
+    assert len(raw['operations']['for']) == 1
+    requests = []
+    def rewrite(system, user):
+        requests.append(json.loads(user))
+        return {'summary': '合成材料仍在招募阶段。'}
+    result = analyze_job.repair_summaries(research.pipeline.insight_generator, research.execution,
+        SimpleNamespace(ready=True, json=rewrite), raw, sources, outcomes, judging(), lambda: None, None)
+    assert len(requests) == 1
+    assert requests[0]['kept_points']['for'] == raw['operations']['for']
+    assert raw['operations']['for'][0]['text'] == '合成材料记录招募状态。'
+    assert result['operations']['status'] == 'approved'
+
+
 def test_a_summary_a_guard_would_blank_is_rewritten_before_publication(host):
     from types import SimpleNamespace
 
@@ -366,3 +495,17 @@ def test_published_text_has_no_inline_source_codes_and_gaps_come_from_sections(h
     part = view['analysis']['operations']
     assert part['summary'] == '合成材料仍在招募阶段。' and part['for'][0]['text'] == '合成材料记录招募状态。'
     assert view['analysis']['gaps'] == ['合成材料未披露入组人数。']  # the older record's gaps are not carried over
+
+def test_unknown_section_keeps_independent_judgment(host):
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.section_progress import outcome_state
+    def interrupted(system, payload):
+        if any(path.startswith('operations.') for path in payload.get('fields', {})):
+            raise ModelError('timeout', code='request_outcome_unknown')
+        return reviewer(system, payload)
+    result, view = apply(host, dict(operations=part(), chain=part()), interrupted)
+    assert result['published'] == ['chain'] and view['analysis']['chain']['summary']
+    assert outcome_state(result['sections']['operations']) == 'unknown'
+    assert outcome_state(result['sections']['technology']) == 'missing_draft'
+    assert outcome_state({'status':'rejected','blocking':[{'code':'evidence_insufficient'}]}) == 'insufficient'
+    assert outcome_state({'status':'rejected','blocking':[{'code':'invalid_review'}]}) == 'review_blocked'

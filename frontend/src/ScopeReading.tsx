@@ -6,7 +6,6 @@ import { Skeleton } from './frame';
 import { publicLink } from './relationScope';
 import { workRevision } from './workState';
 import { ChainJudgment } from './judgment';
-import { businessIntro } from './companyDossier';
 import './scopeReading.css';
 import './externalNews.css';
 
@@ -84,39 +83,24 @@ export function ChainReading({plan,detail}: {plan:MonitoringPlanView;detail:Proj
   const reports=scopeReports(plan,relations);
   const groups=[{key:'supply',title:'供应端',note:'已标注的供应商',items:relations.filter(i=>chainLane(i)==='supply')},{key:'demand',title:'客户端',note:'已标注的客户',items:relations.filter(i=>chainLane(i)==='demand')}];
   const other=relations.filter(i=>chainLane(i)==='other');
-  const intro=businessIntro(detail);
   const projections=detail.capabilities?.insight_projections===true;
   const insight=useAsync(()=>projections?api.insight(detail.project.id):Promise.resolve(null),[detail.project.id,workRevision(detail),projections]);
   const outline=insight.data?.record?.analysis.chain?.outline;
   return <div className="scope-reading">
-    <header className="scope-reading-head"><div><span className="eyebrow">纵向关联</span><h2>产业链动态</h2><p>沿已有供应、合作与客户关系，看变化如何影响公司。</p></div><Link className="link small" to={`/projects/${detail.project.id}?tab=plan`}>管理监控范围 →</Link></header>
+    <header className="scope-reading-head"><h2>产业链动态</h2><Link className="link small" to={`/projects/${detail.project.id}?tab=plan`}>管理监控范围 →</Link></header>
     <dl className="scope-metrics" aria-label="已保存的产业链记录概览">
       <div><dt>已纳入关联</dt><dd>{relations.length}<span>个对象</span></dd></div>
       <div><dt>其中试关注</dt><dd>{relations.filter(i=>i.status==='trial').length}<span>个对象</span></dd></div>
       <div><dt>最近匹配报道</dt><dd>{reports.length}<span>条 · 去重后</span></dd></div>
-      <div><dt>关注问题与旧记录</dt><dd>{items.length-relations.length}<span>条 · 不计入关联</span></dd></div>
+      <div><dt>监控方向</dt><dd>{items.filter(i=>!i.scope_kind).length}<span>项</span></dd></div>
+      <div><dt>临时研究问题</dt><dd>{items.filter(i=>i.scope_kind==='question').length}<span>个未关闭</span></dd></div>
     </dl>
     {projections && <SavedChainJudgment key={detail.project.id} insight={insight}/>}
-    <section className="chain-atlas" aria-label="已纳入的产业链关联">
-      <header className="chain-atlas-head"><h3>关系地图</h3><span>已关注的关联对象</span></header>
-      <div className="chain-atlas-grid">
-        <ChainGroup key={`${detail.project.id}-supply`} title={groups[0].title} note={groups[0].note} items={groups[0].items} stages={outline?.upstream} stageTitle="上游环节"/>
-        <section className="chain-company-lane">
-          <header className="chain-lane-heading"><div className="chain-lane-head"><h3>关注的公司</h3></div><p className="chain-lane-note">已保存的公司信息</p></header>
-          <div className={`chain-atlas-core${groups[0].items.length?' has-supply':''}${groups[1].items.length?' has-demand':''}`}>
-          <h3>{detail.project.short_name||detail.project.name}</h3>
-          <span className="chain-core-label">已保存的公司简介</span>
-          <p>{intro||'暂无公司简介。'}</p>
-          <Link className="link small" to={`/projects/${detail.project.id}`}>查看公司概览 →</Link>
-          </div>
-        </section>
-        <ChainGroup key={`${detail.project.id}-demand`} title={groups[1].title} note={groups[1].note} items={groups[1].items} stages={outline?.downstream} stageTitle="下游环节"/>
-      </div>
-      {!!other.length && <div className="chain-atlas-other"><ChainGroup key={`${detail.project.id}-other`} title="其他关联 / 角色待确认" note="合作、资本及延伸关联" items={other}/></div>}
-      {!!relations.length && <details className="chain-counts chart-evidence" aria-label="关联报道分布"><summary>匹配报道分布 · 共 {reports.length} 条去重报道</summary>
-        <p>只统计本次读取的匹配报道，不代表供应集中度、交易额或重要性；同一报道可涉及两侧。</p>
-        <ul>{[...groups,{key:'other',title:'其他关联',items:other}].map(g=><li key={g.key}><span>{g.title}</span><b>{scopeReports(plan,g.items).length} 条</b></li>)}</ul>
-      </details>}
+    <section className="chain-brief" aria-label="产业链解读">
+      <header className="chain-brief-heading"><h3>产业链解读</h3></header>
+      <ChainNarrative title="供应与生产" items={groups[0].items} stages={outline?.upstream} side="上游"/>
+      <ChainNarrative title="客户与应用" items={groups[1].items} stages={outline?.downstream} side="下游"/>
+      {!!other.length && <ChainNarrative title="合作与其他关联" items={other}/>}
     </section>
     <ScopeTopics items={scopeItems(plan,detail.project.id,'chain')}/>
     <ScopeReports key={detail.project.id} plan={plan} relations={relations} title="产业链关联报道"/>
@@ -136,23 +120,29 @@ export function ScopeTopics({items}: {items:PlanItem[]}) {
     {topics.map(i=><div key={i.id}><p>{i.text||i.label}</p>{i.reason && <p className="muted small">{i.reason}</p>}</div>)}
   </details>;
 }
-function ChainGroup({title,note,items,stages,stageTitle}: {title:string;note?:string;items:PlanItem[];stages?:ChainStage[];stageTitle?:string}) {
-  const [all,setAll]=useState(false);
-  const shown=all?items:items.slice(0,3);
-  return <section className="chain-lane"><header className="chain-lane-heading"><div className="chain-lane-head"><h3>{title}</h3><span>{items.length} 个</span></div>
-    {note && <p className="chain-lane-note">{note}</p>}
-    </header>
-    <div className={`chain-lane-list${items.length?' has-records':''}`}>
-    {!!stages?.length && <div className="chain-stages"><p className="chain-stages-head">{stageTitle} <span className="muted small" title="AI 按行业常识整理的环节，不是来源核实的事实；公司名只取自已收录材料">· 行业常识整理</span></p>
-      <ul>{stages.map(s=><li key={s.stage}><b>{s.stage}</b>{!!s.players.length && <span className="muted small">{s.players.join('、')}</span>}</li>)}</ul></div>}
-    {!items.length && <p className="muted small chain-lane-empty">{stages?.length?'尚未纳入具体关联公司':'尚未纳入关联'}</p>}
-    {shown.map(i=><article className="chain-node" key={i.id}>
-      <div className="chain-node-meta"><span>{i.relation_type==='supplier'?'供应商':i.relation_type==='customer'?'客户':'角色待确认'}{i.parent_id || (i.hop && i.hop!=='1')?' · 延伸层级待核对':''}</span><span className="scope-state">{i.status==='trial'?'试关注':'已纳入'}</span></div>
-      <h4>{i.relation_target||i.label}</h4>
-      <p className="chain-node-state">{i.current_state||'尚未记录当前状态'}</p>
-      <details className="chart-evidence"><summary>关注原因与依据</summary><p>{i.reason||'尚未记录纳入原因'}</p><p className="muted small">纳入依据：{i.sources||'尚未记录'}</p>{i.updated_at && <p className="muted small">记录更新 {i.updated_at.slice(0,10)}</p>}</details>
-    </article>)}</div>
-    {items.length>3 && <button className="link small chain-lane-more" aria-expanded={all} onClick={()=>setAll(!all)}>{all?'收起':`显示 ${shown.length} / 共 ${items.length} 个 · 展开全部`}</button>}
+function ChainNarrative({title,items,stages,side}: {title:string;items:PlanItem[];stages?:ChainStage[];side?:string}) {
+  const stageNames=[...new Set((stages??[]).map(s=>s.stage.trim()).filter(Boolean))];
+  const states=items.filter(i=>i.current_state?.trim()).slice(0,2);
+  const sentence=(text:string)=>/[。！？.!?]$/.test(text.trim())?text.trim():text.trim()+'。';
+  return <section className="chain-brief-section">
+    <header className="chain-section-title">{side && <span>{side}</span>}<h4>{title}</h4></header>
+    <div className="chain-brief-copy">
+      {stageNames.length>0 && <p>{side}环节包括{stageNames.join('、')}。</p>}
+      {states.length>0 && <p>{states.map(i=>(i.relation_target||i.label)+'：'+sentence(i.current_state!)).join('')}</p>}
+      {!stageNames.length && !states.length && <p className="muted">{items.length?'已关注'+items.map(i=>i.relation_target||i.label).join('、')+'，暂无进展摘要。':'暂无相关材料。'}</p>}
+      {(!!stages?.length || !!items.length) && <details className="chain-brief-evidence chart-evidence">
+        <summary>对象与依据</summary>
+        {!!stages?.length && <div className="chain-brief-basis"><p className="muted small">产业环节按行业常识整理；下列名称来自已收录材料，不等同于已确认的交易关系。</p>
+          <ul>{stages.map((s,index)=><li key={s.stage+'-'+index}><strong>{s.stage}</strong>{s.players.length>0 && <span>：{s.players.join('、')}</span>}</li>)}</ul>
+        </div>}
+        {items.map(i=><div className="chain-brief-basis" key={i.id}>
+          <h5>{i.relation_target||i.label} <span className="muted small">{i.status==='trial'?'试关注':'已关注'}{i.parent_id || (i.hop && i.hop!=='1')?' · 延伸关联':''}</span></h5>
+          {i.current_state && <p>{i.current_state}</p>}
+          {i.reason && <p>{i.reason}</p>}
+          <p className="muted small">纳入依据：{i.sources||'暂无来源记录'}{i.updated_at?' · 更新 '+i.updated_at.slice(0,10):''}</p>
+        </div>)}
+      </details>}
+    </div>
   </section>;
 }
 

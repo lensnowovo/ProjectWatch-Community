@@ -160,7 +160,7 @@ def test_display_modules_draw_only_on_stored_records(tmp_path):
 
     peers = plan.add(pid, {**ITEM, "text": "同行动作", "axis": "competition", "objects": ["甲公司（Alpha）", "乙公司"],
                            "view": "peer_table"}, actor="human", origin="human")
-    store.create_event(pid, {"title": "甲公司宣布新产线投产", "category": "competitor", "importance": "notable"}, [])
+    store.create_event(pid, {"title": "甲公司宣布新产线投产", "category": "competitor", "importance": "notable", "event_at": datetime.now(UTC).isoformat()}, [])
     rows = client.get(f"/api/studio/projects/{pid}/monitoring-plan").json()["modules"][peers["id"]]["rows"]
     assert rows[0]["latest"]["title"] == "甲公司宣布新产线投产" and rows[0]["recent_90d"] == 1 and rows[1]["latest"] is None
 
@@ -287,7 +287,7 @@ def test_routine_collection_is_shown_per_section_beside_the_focus_points(tmp_pat
     store.put_plan(pid, {"company_queries": ["合成药业"], "has_search": False, "has_registry": False,
                          "last_report": {"company": {"checked": 2, "added": 3, "errors": []},
                                          "competitor": {"checked": 0, "added": 0, "errors": ["bing: http_failure"]}}})
-    store.create_event(pid, {"title": "竞品融资", "category": "competitor", "importance": "notable"}, [])
+    store.create_event(pid, {"title": "竞品融资", "category": "competitor", "importance": "notable", "event_at": datetime.now(UTC).isoformat()}, [])
     coverage = client.get(f"/api/studio/projects/{pid}/monitoring-plan").json()["coverage"]
     assert set(coverage) == {"asset", "operations", "peers", "alternatives", "customer", "partners", "market", "science", "rules"}
     competitor = next(c for c in coverage["peers"] if c["key"] == "competitor")

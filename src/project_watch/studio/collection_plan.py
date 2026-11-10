@@ -179,29 +179,3 @@ def channel_status(rows):
     return dict(execution=execution, capabilities=sorted({r['capability'] for r in rows}),
                 due_count=sum(r['schedule_due'] for r in rows), query_count=len(rows),
                 successful_count=sum(r['outcome'] == 'success' for r in rows))
-
-
-def resolved_scopes(base, supplements):
-    """Link initially unscoped requirements to evidence-bound concrete queries.
-
-    A sponsor-less clinical discovery requirement may be scoped by an explicit
-    intervention query. This mirrors build_collection_plan's sponsor/term
-    alternatives; it does not claim the sponsor endpoint was queried.
-    Capability errors and real failed queries can never be removed this way.
-    """
-    result = {}
-    for parent in base['units']:
-        if parent['capability'] != 'needs_scope' or parent['query'] or parent['target_id'] != base['project_id']:
-            continue
-        adapters = {'clinical_sponsor', 'clinical_term'} if parent['source'] in (
-            'clinical_sponsor', 'clinical_term') else {parent['source']}
-        children = [unit['id'] for plan in supplements
-                    if plan['project_id'] == base['project_id'] and plan['round_id'] == base['round_id']
-                    and plan['binding'] == base['binding']
-                    for unit in plan['units'] if unit['source'] in adapters and unit['query'].strip()
-                    and unit['category'] == parent['category'] and unit['disposition'] == 'pending'
-                    and unit['target_id'].startswith('scope:') and unit['applicability_evidence_ids']
-                    and unit['capability'] == 'available']
-        if children:
-            result[parent['id']] = list(dict.fromkeys(children))
-    return result

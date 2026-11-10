@@ -31,6 +31,7 @@ import { FinanceAnalysisView } from "../financeAnalysis";
 import { useDossierMotion } from '../DossierMotion';
 import { ScopeReading, scopeRelations, scopeReports } from '../ScopeReading';
 import { externalCollection } from '../externalCollection';
+import { PageSummary, type SummarySubject } from "../pageSummary";
 import { hasClinicalScope } from '../externalNavigation';
 
 /** Five sections (8945); each holds one or more of the original pages, which stay the URL's ?tab= values so every
@@ -39,7 +40,7 @@ type Section = "home" | "internal" | "external" | "scope" | "analysis";
 const SECTIONS: { id: Section; label: string; pages: { id: Tab; label: string }[] }[] = [
   { id: "analysis", label: "当前判断", pages: [{ id: "brief", label: "按问题看判断" }] },
   { id: "home", label: "项目总览", pages: [{ id: "overview", label: "公司概览" }] },
-  { id: "external", label: "外部信息", pages: [{ id: "external", label: "公司进展" }, { id: "trials", label: "临床" }, { id: "papers", label: "论文" },
+  { id: "external", label: "外部信息", pages: [{ id: "external", label: "公司进展" }, { id: "tech-progress", label: "技术进展" }, { id: "trials", label: "临床" }, { id: "papers", label: "论文" },
     { id: "patents", label: "专利与注册" }, { id: "competition", label: "竞争对手" }, { id: "chain", label: "产业链动态" }, { id: "industry", label: "宏观环境" }] },
   { id: "internal", label: "内部信息", pages: [{ id: "ops", label: "经营概览" }, { id: "business", label: "业务与研发" }, { id: "numbers", label: "财务报表" },
     { id: "fin", label: "财务分析" }, { id: "risks", label: "风险与核对" }, { id: "documents", label: "资料与版本" }] },
@@ -65,6 +66,10 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
     || data?.documents.some((d) => d.status === "queued" || d.status === "processing")
     || (data?.model_ready && (data?.pending_documents ?? 0) > 0);
 
+  useEffect(()=>{
+    window.addEventListener('project-summary-requested',reload);
+    return ()=>window.removeEventListener('project-summary-requested',reload);
+  },[reload]);
   const stopped = data?.execution?.analysis === "stopped" && data?.execution?.parsing === "stopped";
   useVisiblePoll(reload, busy && !stopped ? 4000 : 30000);
 
@@ -102,6 +107,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
       </nav>
       </div>
       {section.id === "external" && <CategoryStrip key={`categories:${data.project.id}`} detail={data} page={tab} go={setTab} />}
+      {section.id === "external" && isTechnicalPage(tab) && <TechnologyNavigation detail={data} page={tab} go={setTab} />}
       {section.id === "external" && <DiscoveredSources key={`sources:${data.project.id}`} projectId={data.project.id}
         revision={data.collection_report?.observed_at ?? commercialRevision} />}
       {section.id === "internal" && <PageStrip label="内部信息分区" page={tab} go={setTab} cells={internalCounts(data)} />}
@@ -112,6 +118,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div key={tab} className="tab-panel" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: EASE } }}
           exit={{ opacity: 0, transition: { duration: 0.1 } }}>
+          {["overview","external","trials","papers","patents","competition","chain","ops","business","numbers","fin","risks"].includes(tab) && <PageSummary key={`${id}:${tab}`} detail={data} subject={tab as SummarySubject} />}
           {tab === "overview" && <CompanyOverview detail={data} onReload={reload} dossierMotion={dossierMotion} />}
           {tab === "plan" && <PlanView projectId={id} company={data.project.short_name || data.project.name} detail={data} />}
           {tab === "brief" && <CurrentBrief detail={data} goto={setTab} onReload={reload}
@@ -123,6 +130,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
           {tab === "numbers" && <MetricsView metrics={data.metrics} issues={data.issues ?? []} finance={data.finance} risks={data.profile?.risks}
             figures={<KeyFigures numbers={data.finance?.key_numbers} />} />}
           {tab === "external" && <NewsView detail={data} financing={<CommercialSources projectId={id} revision={commercialRevision} onChanged={reload} />} />}
+          {tab === "tech-progress" && <TechnologyProgress detail={data} />}
           {tab === "trials" && <ClinicalView detail={data} />}
           {tab === "papers" && <PapersView detail={data} />}
           {tab === "patents" && <PatentsView detail={data} />}
@@ -500,9 +508,7 @@ function IndustryInsight({ projectId, revision, part, onSettled }: { projectId: 
 /** 外部信息 at a glance (8945) and its navigation: one cell per page with the count of what was collected for it. */
 const STRIP: { page: Tab; label: string; cats: Category[]; always: true }[] = [
   { page: "external", label: "公司进展", cats: ["company"], always: true },
-  { page: "trials", label: "临床", cats: ["trial"], always: true },
-  { page: "papers", label: "论文", cats: ["paper"], always: true },
-  { page: "patents", label: "专利与注册", cats: ["patent"], always: true },
+  { page: "tech-progress", label: "技术进展", cats: ["paper", "patent", "trial"], always: true },
   { page: "competition", label: "竞品动态", cats: ["competitor"], always: true },
   { page: "chain", label: "产业链动态", cats: [], always: true },
   { page: "industry", label: "宏观环境", cats: ["industry", "policy"], always: true },
@@ -511,18 +517,16 @@ const STRIP: { page: Tab; label: string; cats: Category[]; always: true }[] = [
 export function CategoryStrip({ detail, page, go }: { detail: ProjectDetail; page: Tab; go: (page: Tab) => void }) {
   const {data:plan,error,loading}=useAsync(()=>api.monitoringPlan(detail.project.id),[detail.project.id,workRevision(detail)]);
   const chainCount=plan&&!error&&!loading?scopeReports(plan,scopeRelations(plan,detail.project.id,'chain')).length:null;
-  // Preserve an explicitly opened historical clinical URL, even before its scope loads.
-  const cells = STRIP.filter(s => s.page !== 'trials' || hasClinicalScope(detail) || page === 'trials').map((s) => {
+  const cells = STRIP.map((s) => {
     const collection=externalCollection(detail, s.page==='chain'?['chain']:s.page==='industry'?['industry','policy','technology']:s.cats);
     const counts = {...detail.counts, ...detail.research_source_counts};
     const empty = s.cats.every(c => !(counts[c] ?? 0));
-    const professional = ['trials', 'papers', 'patents'].includes(s.page);
     return ({ ...s,
     n: s.page==='chain'?chainCount:s.cats.reduce((a, c) => a + (counts[c] ?? 0), 0),
-    note: s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):empty?collection.label:professional?'来源':undefined,
-    hint: s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':empty?`本栏目暂无收录。${collection.description}`:professional?'已保存的公开相关来源，检索命中不代表公司归属。':undefined,
+    note: s.page==='tech-progress'?(empty?collection.label:'研究来源'):s.page==='chain'?(error?'读取失败':loading?'读取中':'近期匹配'):empty?collection.label:undefined,
+    hint: s.page==='tech-progress'?'已收录的论文、专利与临床来源总数；不包含摘要和技术关联报道，不代表技术突破数量。':s.page==='chain'?'已纳入产业链关联的近期匹配报道，按事件去重；每个关联最多读取 3 条，不是全部产业链新闻数。':empty?`本栏目暂无收录。${collection.description}`:undefined,
   }); });
-  return <PageStrip label="外部信息分区" page={page} go={go} cells={cells} />;
+  return <PageStrip label="外部信息分区" page={isTechnicalPage(page)?"tech-progress":page} go={go} cells={cells} />;
 }
 
 /** One strip for every multi-page section: each cell is a page and the count of what it reads. */
@@ -548,7 +552,8 @@ export function MacroEnvironment({detail}: {detail:ProjectDetail}) {
       if(index<0)return;e.preventDefault();select(MACRO_TABS[index].id);document.getElementById(`macro-${MACRO_TABS[index].id}`)?.focus();
     }}>{t.label}</button>)}</nav>
     <div id="macro-panel" role="tabpanel" aria-labelledby={`macro-${selected}`} key={selected}>
-      <header className="scope-reading-head macro-reading-head"><div><span className="eyebrow">宏观环境 · 已收录信息</span><h2>{MACRO_TABS.find(t=>t.id===selected)?.label}</h2><p>{selected==='industry'?'从需求、价格与资本变化，理解公司的外部环境。':selected==='policy'?'先看政策记录与适用影响，再核对文件和报道。':'结合技术路线判断与材料提及趋势，观察研究和产业信号。'}</p></div></header>
+      <PageSummary detail={detail} subject={selected} />
+      <header className="scope-reading-head macro-reading-head"><h2>{MACRO_TABS.find(t=>t.id===selected)?.label}</h2></header>
       {projections?<IndustryFrame projectId={detail.project.id} revision={`${detail.project.last_external_at??''}|${detail.jobs.map(j=>`${j.id}:${j.status}`).join('|')}`} insightRevision={insightRevision(detail)} part={selected} details={details}/>:<div className="macro-reading">{selected==='technology' && <p className="muted small">当前版本尚无技术路线分析；以下保留已纳入的技术关联报道。</p>}{details}</div>}
     </div>
   </section>;
@@ -562,4 +567,20 @@ export function IndustryFrame({ projectId, revision, insightRevision, details, p
     {part==='technology' && <><IndustryInsight projectId={projectId} revision={insightRevision} part="technology"/><TechRoutes projectId={projectId} revision={insightRevision}/></>}
     {details}
   </div>;
+}
+
+
+const isTechnicalPage = (page: Tab) => ['tech-progress','trials','papers','patents'].includes(page);
+export function TechnologyNavigation({detail,page,go}: {detail:ProjectDetail;page:Tab;go:(page:Tab)=>void}) {
+  const tabs: {id:Tab;label:string}[] = [{id:'tech-progress',label:'研发进展'},
+    ...(hasClinicalScope(detail)||page==='trials'?[{id:'trials' as Tab,label:'临床进展'}]:[]),
+    {id:'papers',label:'论文'},{id:'patents',label:'专利与注册'}];
+  return <nav className="macro-navigation" aria-label="技术进展分类">{tabs.map(t=><button key={t.id} aria-current={page===t.id?'page':undefined} className={page===t.id?'on':''} onClick={()=>go(t.id)}>{t.label}</button>)}</nav>;
+}
+function TechnologyProgress({detail}: {detail:ProjectDetail}) {
+  return <section className="tab-frame macro-reading" aria-label="技术进展">
+    <PageSummary detail={detail} subject="technology" />
+    <IndustryInsight projectId={detail.project.id} revision={insightRevision(detail)} part="technology" />
+    <ScopeReading detail={detail} scope="science" />
+  </section>;
 }

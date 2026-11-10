@@ -58,6 +58,7 @@ _RULES: dict[str, list[tuple[int, re.Pattern]]] = {
     ],
 }
 _PLANNED = re.compile(r"拟|计划|预计|有望|将于|将在|目标|力争|规划|筹备|传闻|或将|加速|推动|探索|助力|布局")
+_UNATTAINED = re.compile(r'取消|延期|终止|暂停|否认|未|没有|尚无|并非|不是|不具备|难以|仍需|待|在即|即将|能否|是否|[?？]|如果|若能')
 
 # Storyline stage → template step (hardware/software); pharma storylines go through the title rules.
 _THREAD_STEP = {
@@ -133,7 +134,9 @@ def _within(day: str, today: date, days: int) -> bool:
 
 
 def classify_step(text: str, template: str) -> int | None:
-    if not text or _PLANNED.search(text) or re.search(r'取消|延期|终止|暂停|否认|尚未|未能|未获|未实现|在即|即将', text):
+    # Stage words are not attainment. Reject both preposed and postposed
+    # negation, questions and conditional/comparative language before matching.
+    if not text or _PLANNED.search(text) or _UNATTAINED.search(text):
         return None
     if template in ('hardware', 'software'):
         buyer = re.search(r'采购|购买|购入|招标|收到供应商|接收供应商', text)
@@ -144,6 +147,29 @@ def classify_step(text: str, template: str) -> int | None:
         if pattern.search(text):
             return step
     return None
+
+
+def headline_step(title: str, names: list[str], template: str) -> int | None:
+    """Only the named actor's first clause may supply a title-based clue.
+
+    A later clause about a partner/competitor never advances the leading actor.
+    The title remains a labelled clue, not a confirmed company-wide stage.
+    """
+    if not _leads(title, names):
+        return None
+    # Company names can themselves contain words such as “竞品”. Inspect the
+    # predicate only, after removing the longest leading name.
+    leading = next((name for name in sorted(names, key=len, reverse=True)
+                    if title.startswith(name)), '')
+    predicate = title[len(leading):] if leading else title
+    # A postposed qualification still belongs to the headline; splitting at a
+    # comma must not turn “量产，尚未实现” into an attained milestone.
+    if _PLANNED.search(predicate) or _UNATTAINED.search(predicate):
+        return None
+    predicate = re.split(r'[，,。；;：:！!]', predicate, maxsplit=1)[0]
+    if re.search(r'旗下|子公司|合作方|供应商|客户|竞品|同行|对手|表示|称|报道|关注|看好|助力|支持', predicate):
+        return None
+    return classify_step(predicate, template)
 
 
 def _event_title(e: dict) -> tuple[str, str, str]:
@@ -206,6 +232,10 @@ def _best_stage(cands: list[dict], steps: list[str], today: date | None = None) 
     cands = [c for c in cands if c["index"] is not None and _within(c['date'], today, 36500)]
     if not cands:
         return None
+    # Prefer attributed records over a keyword clue from a headline.
+    supported = [c for c in cands if c['basis'] != 'title']
+    if supported:
+        cands = supported
     top = max(c["index"] for c in cands)
     at_top = sorted((c for c in cands if c["index"] == top), key=lambda c: (GRADES.index(c["grade"]), c["date"]))
     best = dict(at_top[0])
@@ -392,7 +422,7 @@ def build(*, project: dict, plan: dict | None, peers: list[dict], company_events
     for e in company_events:
         title, url, source = _event_title(e)
         if _leads(title, self_names):
-            step = classify_step(title, tpl)
+            step = headline_step(title, self_names, tpl)
             if step is not None:
                 cands.append(_candidate(step, _event_day(e),
                                         grade_of(url, source, own_hosts), "title", title, url, _outlets(e)))
@@ -423,7 +453,7 @@ def build(*, project: dict, plan: dict | None, peers: list[dict], company_events
         for e in mine:
             title, url, source = _event_title(e)
             if _leads(title, names):
-                step = classify_step(title, tpl)
+                step = headline_step(title, names, tpl)
                 if step is not None:
                     pc.append(_candidate(step, _event_day(e),
                                          grade_of(url, source), "title", title, url, _outlets(e)))

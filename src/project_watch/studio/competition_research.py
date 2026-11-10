@@ -27,6 +27,7 @@ from project_watch.studio.business_profile import model_payload as business_payl
 from project_watch.studio.company_leads import CompanyLeads
 from project_watch.studio.competition import assess_relation
 from project_watch.studio.http import HttpError
+from project_watch.studio.llm import ModelError
 from project_watch.studio.peer_contracts import Candidate as Candidate
 from project_watch.studio.peer_contracts import Discovery as Discovery
 from project_watch.studio.peer_discovery import atomic_discovery_name as atomic_discovery_name
@@ -64,6 +65,29 @@ matching 只给小范围词表的候选交集，不是结论；核查原文中�
 suggested_matches 仅是共位候选，核对原文后才可选；其余事实仍要检查矛盾，不成立则 disputed/unknown。
 输出 {"verdict":"supported|disputed|unknown","reason":"简短具体理由","fact_ids":["全部给定事实ID"],
 "matched_fact_ids":["用于本次具体比较的双方事实ID"]}。'''
+
+
+def _unheld_unknown(execution):
+    """Only explicitly isolated peer model calls may coexist with later peers."""
+    held = execution.read_checkpoint('competition_peer_model_holds') or []
+    for kind, usage in execution.usage().items():
+        if usage['unknown'] and (kind != 'model' or usage['unknown'] > len(held)):
+            return True
+    return False
+
+
+def _hold_peer_model(execution, index, exc):
+    if not isinstance(exc, ModelError) or getattr(exc, 'code', '') not in ('model_timeout', 'request_outcome_unknown', 'unknown_not_resent'):
+        return False
+    with closing(execution.store._connect()) as db:
+        keys = [r[0] for r in db.execute(
+            "SELECT call_key FROM studio_job_calls WHERE job_id=? AND kind='model' AND status IN ('unknown','started')",
+            (execution.job['id'],))]
+    if not keys:
+        return False
+    execution.checkpoint('competition_peer_model_holds', keys)
+    execution.checkpoint(f'peer_unresolved:{index}', {'code': 'request_outcome_unknown', 'call_keys': keys})
+    return True
 
 
 def research_inputs(service, project_id):
@@ -403,7 +427,9 @@ class CompetitionResearch(CompanyLeads):
         stage = 'original_lookup:' + key
         saved = execution.read_checkpoint(stage)
         if saved is not None:
-            return saved
+            return [h for h in saved if matches_original(lead, h, different_publisher=True)]
+        if _unheld_unknown(execution):
+            raise HttpError('request_outcome_unknown')
         reservations = execution.read_checkpoint('original_lookup_reservations') or []
         if key not in reservations:
             execution.checkpoint('original_lookup_reservations', [*reservations, key])
@@ -411,7 +437,7 @@ class CompetitionResearch(CompanyLeads):
             guard()
         lookup = getattr(collectors, 'original_search', None)
         results = lookup(lead, count=5) if lookup else collectors.web_search(query, count=5)
-        if any(u['unknown'] for u in execution.usage().values()):
+        if _unheld_unknown(execution):
             raise HttpError('request_outcome_unknown')
         if guard:
             guard()
@@ -447,7 +473,7 @@ class CompetitionResearch(CompanyLeads):
                 page = read_page(execution, self.pipeline.reader(), hit['url'])
             except HttpError as exc:
                 if (exc.code in ('request_outcome_unknown', 'request_budget', 'provider_backoff')
-                        or any(u['unknown'] for u in execution.usage().values())):
+                        or _unheld_unknown(execution)):
                     raise
                 page = {'status': 'unavailable', 'text': '',
                         'error_code': exc.code if exc.code in READER_FAILURE_CODES else 'fetch_failed'}
@@ -472,7 +498,19 @@ class CompetitionResearch(CompanyLeads):
                 if (collectors is not None and not lookup_used
                         and title_query(hit.get('title'))):
                     lookup_used = True
-                    donors = self._original_lookup(hit, execution, collectors, guard)
+                    try:
+                        donors = self._original_lookup(hit, execution, collectors, guard)
+                    except HttpError as exc:
+                        if _unheld_unknown(execution):
+                            raise HttpError('request_outcome_unknown') from exc
+                        if exc.code != 'search_query_invalid':
+                            raise
+                        # A rejected query is local to this source. Keep its
+                        # receipt and read the remaining independent originals.
+                        record['lookup_error_code'] = exc.code
+                        execution.checkpoint('original_lookup_invalid:' + hashlib.sha256(hit['url'].encode()).hexdigest(),
+                                             {'code': exc.code})
+                        continue
                     replacements = []
                     for donor in donors:
                         url = donor['url'].split('#', 1)[0]
@@ -606,7 +644,8 @@ class CompetitionResearch(CompanyLeads):
                     return {'product_ids': [], 'reading': reading}
                 proposals = pipeline._extract_all_parts(pid, business, llm, BUSINESS_SYSTEM, business_payload,
                     'peer_' + subject_id, lambda: pipeline.business_profiles.inputs(pid,
-                        binding=pipeline.model_view(llm).binding, subject_id=subject_id, evidence_ids=evidences))
+                        binding=pipeline.model_view(llm).binding, subject_id=subject_id, evidence_ids=evidences),
+                    isolate_failures=False)
                 guard()
                 return {**pipeline.business_profiles.apply(pid, business, None, batch_outputs=proposals,
                     guard=execution._guard), 'reading': reading}
@@ -614,6 +653,8 @@ class CompetitionResearch(CompanyLeads):
             if execution.read_checkpoint('competition_target_input_version') is None:
                 execution.checkpoint('competition_target_input_version', research_inputs(service, pid)['input_version'])
             outcome['reading'] = {'target': target.get('reading', {}), 'peers': []}
+            errors.extend(r['lookup_error_code'] for r in target.get('reading', {}).get('pages', [])
+                          if r.get('lookup_error_code'))
             target_products = list(dict.fromkeys([*target.get('product_ids', []), *inputs['products']]))
             previous = self.saved(pid) or {}
             start = stage('competition_peer_offset', lambda: int(previous.get('next_peer_offset', 0)))
@@ -653,11 +694,20 @@ class CompetitionResearch(CompanyLeads):
                     guard()
                     pipeline.relationships.save_assessment(pid, assessment, guard=execution._guard)
                     supported += assessment['support'] == 'supported'
-                return {'supported_count': supported, 'reading': result.get('reading', {})}
+                reading = result.get('reading', {})
+                failure = any(r.get('lookup_error_code') for r in reading.get('pages', []))
+                return {'supported_count': supported, 'reading': reading,
+                        **({'failure': 'search_query_invalid'} if failure else {})}
             for index, peer in enumerate(selected):
                 guard()
                 completed = execution.read_checkpoint(f'peer_completed:{index}')
                 if completed is not None:
+                    if completed.get('failure') == 'request_outcome_unknown':
+                        errors.append('request_outcome_unknown')
+                        outcome.setdefault('unresolved_peers', []).append(peer['id'])
+                        continue
+                    if completed.get('failure'):
+                        errors.append(completed['failure'])
                     outcome['researched_count'] += 1
                     outcome['supported_count'] += completed['supported_count']
                     outcome['reading']['peers'].append({'company_id': peer['id'], **completed.get('reading', {})})
@@ -668,16 +718,29 @@ class CompetitionResearch(CompanyLeads):
                     continue
                 try:
                     completed = research_peer(index, peer)
-                except HttpError as exc:
+                except (HttpError, ModelError) as exc:
+                    if _hold_peer_model(execution, index, exc):
+                        completed = {'supported_count': 0, 'failure': 'request_outcome_unknown'}
+                        execution.checkpoint(f'peer_completed:{index}', completed)
+                        errors.append('request_outcome_unknown')
+                        outcome.setdefault('unresolved_peers', []).append(peer['id'])
+                        continue
+                    if not isinstance(exc, HttpError):
+                        raise
                     if exc.code in ('request_outcome_unknown', 'request_budget', 'provider_backoff') or exc.status in (401, 403, 429):
                         raise
-                    errors.append(exc.code)
                     completed = {'supported_count': 0, 'failure': exc.code}
+                if completed.get('failure'):
+                    errors.append(completed['failure'])
                 outcome['researched_count'] += 1
                 outcome['supported_count'] += completed['supported_count']
                 outcome['reading']['peers'].append({'company_id': peer['id'], **completed.get('reading', {})})
                 execution.checkpoint(f'peer_completed:{index}', completed)
             outcome['status'] = 'partial' if errors else 'completed_bounded_batch'
+            if outcome['reading']['target'].get('body_count') or any(p.get('body_count') for p in outcome['reading']['peers']):
+                guard()
+                pipeline.store.enqueue(pid, 'page_summary', automatic=True,
+                    input_version='competition-summary:' + job['id'], once_per_input=True)
         except HttpError as exc:
             if exc.code == 'request_outcome_unknown':
                 raise

@@ -10,6 +10,8 @@ from project_watch.studio.settings import ModelConfig
 
 @pytest.mark.parametrize('host,model,protocol,expected', [
     ('open.bigmodel.cn', 'glm-5.3', 'openai', 'low'),
+    ('open.bigmodel.cn', 'glm-5.3-flash', 'openai', 'low'),
+    ('gateway.example', 'glm-5.3-flash', 'openai', None),
     ('gateway.example', 'glm-5.3', 'openai', None),
     ('open.bigmodel.cn', 'glm-4.7', 'openai', None),
     ('open.bigmodel.cn', 'glm-5.3', 'anthropic', None),
@@ -29,7 +31,12 @@ def test_json_reasoning_is_provider_model_and_protocol_scoped(host, model, proto
     assert payloads[0].get('response_format') == ({'type': 'json_object'} if expected else None)
     assert 'thinking' not in payloads[0]
     llm.complete('s', 'u')
-    assert 'reasoning_effort' not in payloads[1]
+    if (host, model, protocol) == ('open.bigmodel.cn', 'glm-5.3-flash', 'openai'):
+        assert payloads[1]['reasoning_effort'] == 'low'
+        assert payloads[1]['stream'] is True
+        assert payloads[1]['max_tokens'] == 131072
+    else:
+        assert 'reasoning_effort' not in payloads[1]
     assert 'response_format' not in payloads[1]
 
 
@@ -47,3 +54,11 @@ def test_read_timeout_is_not_repeated_or_exposed(monkeypatch):
     assert len(calls) == 1
     assert exc.value.code == 'model_timeout'
     assert 'PRIVATE' not in str(exc.value)
+
+
+@pytest.mark.parametrize('text', ['{"a":1', '{"a":"unfinished', '{"a":[{"x":1}'])
+def test_incomplete_content_is_not_returned_as_success(text):
+    from project_watch.studio.llm import _extract_json
+    with pytest.raises(ModelError) as exc:
+        _extract_json(text)
+    assert exc.value.code == 'model_output_incomplete'

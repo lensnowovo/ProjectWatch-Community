@@ -20,15 +20,15 @@ function load(path) {
 const Header = load("../src/PageHeader.tsx");
 const ProjectHeader = load("../src/ProjectHeader.tsx");
 const render = (props) => renderToStaticMarkup(React.createElement(Header, {
-  title: "项目组合", label: "关注的公司", description: "合成页面说明", ...props,
+  title: "项目组合", ...props,
 }));
 
 test("page header keeps hierarchy and native action without decorative content", () => {
-  const html = render({ meta: "3 个项目已加入", action: React.createElement("a", { href: "/new" }, "添加项目") });
+  const html = render({ meta: "3 个项目", action: React.createElement("a", { href: "/new" }, "添加项目") });
   assert.match(html, /<h1><span class="header-blur-text" aria-label="项目组合">/);
   assert.doesNotMatch(html, /opacity:0(?:;|")/);
-  assert.match(html, /page-header-label/);
-  assert.match(html, /page-header-meta[^>]*>3 个项目已加入/);
+  assert.doesNotMatch(html, /page-header-label|<p>/);
+  assert.match(html, /page-header-meta[^>]*>3 个项目/);
   assert.match(html, /href="\/new"/);
   assert.doesNotMatch(html, /<img|<canvas|role="button"/);
 });
@@ -36,7 +36,8 @@ test("page header keeps hierarchy and native action without decorative content",
 test("optional footer and action leave no empty UI", () => {
   const html = render();
   assert.doesNotMatch(html, /page-header-meta|page-header-action/);
-  assert.match(html, /<p>合成页面说明<\/p>/);
+  assert.match(html, /<h1><span class="header-blur-text" aria-label="项目组合">/);
+  assert.doesNotMatch(html, /<p>/);
 });
 
 test("feed with existing projects preserves updating status in the new header", () => {

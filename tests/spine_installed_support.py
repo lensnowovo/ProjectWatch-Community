@@ -84,7 +84,10 @@ def run(home):
 
         spine.request_round(pipeline.store, project.id, 'manual')
         kinds = []
-        while (job := pipeline.store.claim()) is not None and job['kind'] in spine.ROUND_KINDS:
+        for expected in spine.ROUND_KINDS:
+            job = pipeline.store.claim(lane='round')
+            if not job or job['kind'] != expected:
+                raise AssertionError(f'expected {expected} in the round queue')
             kinds.append(job['kind'])
             pipeline.run(job)
             pipeline.store.finish(job['id'], lease_token=job['lease_token'])

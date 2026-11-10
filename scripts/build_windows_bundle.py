@@ -91,6 +91,9 @@ def build(args):
     wheel = args.wheel.resolve()
     if not wheel.is_file() or not args.wheelhouse.is_dir() or not args.compiler.is_file():
         raise ValueError('Missing wheel, offline wheelhouse or C# compiler')
+    from scripts.build_manifest import verify_source_correspondence
+
+    source_receipt = verify_source_correspondence(wheel, repo)
     dependencies = verify(args.dependency_lock.resolve(), args.wheelhouse.resolve(), wheel)
     if distlib.__version__ != '0.4.2':
         raise ValueError('Build requires reviewed distlib 0.4.2 from pip')
@@ -150,7 +153,7 @@ def build(args):
     manifest = {'format': 'projectwatch-windows-bundle-v1', 'python': PYTHON_VERSION,
         'launcher_source_sha256': hashlib.sha256((repo/'scripts/windows/Launcher.cs').read_text(encoding='utf-8').encode()).hexdigest(),
         'version': version, 'runtime_url': RUNTIME_URL, 'runtime_sha256': RUNTIME_SHA256,
-        'product_wheel_sha256': digest(wheel),
+        'product_wheel_sha256': digest(wheel), 'source_correspondence': source_receipt,
         'dependency_lock_sha256': digest(dest/'dependency-lock.json'),
         'portable_dependency_scripts': portable_scripts,
         'files': inventory, 'runtimes': runtimes, 'publication_authorized': False}

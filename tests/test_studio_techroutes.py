@@ -21,7 +21,8 @@ def test_term_extraction_units_acronyms_phrases():
 
 
 def test_suggest_prefers_route_comparisons_and_marks_own():
-    industry = {"facts": [{"kind": "技术路线", "text": "905nm 与 1550nm 路线之争，成本仍是核心变量"}]}
+    industry = {"facts": [{"kind": "技术路线", "text": "905nm 与 1550nm 路线之争，成本仍是核心变量",
+                           "refs": [{"url": "https://x.example/route", "quote": "905nm 与 1550nm 路线之争，成本仍是核心变量"}]}]}
     docs = [doc("1550nm激光雷达方案获更多车企采用", "2026-09-01"), doc("905nm发射模组降本", "2026-08-01"),
             doc("合成竞品甲发布新品", "2026-08-02")]
     out = techroutes.suggest(industry=industry, docs=docs, self_texts=["合成视界905nm发射模组获定点"],

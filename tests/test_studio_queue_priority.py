@@ -165,6 +165,18 @@ def test_two_lanes_start_and_stop_together(tmp_path):
     assert worker.runtime_state() == 'stopped' and worker._side.runtime_state() == 'stopped'
 
 
+def test_same_round_summary_can_publish_while_analysis_is_running(tmp_path):
+    store, (pid,) = setup(tmp_path)
+    analysis = store.enqueue(pid, 'analyze')
+    assert store.claim('round')['id'] == analysis['id']
+    old = store.enqueue(pid, 'page_summary', input_version='analyze:other')
+    assert store.claim('side') is None
+    with store._connect() as db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE id=?", (old['id'],))
+    summary = store.enqueue(pid, 'page_summary', input_version='analyze:' + analysis['id'])
+    assert store.claim('side')['id'] == summary['id']
+
+
 
 def test_a_round_does_not_start_while_its_project_has_a_side_job_running(tmp_path):
     store, ids = setup(tmp_path, 2)

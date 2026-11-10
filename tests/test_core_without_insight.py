@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 # Freeze the approved private set independently of future inventory changes.
 INSIGHT_MODULES = (
-    'competition', 'competition_evaluation', 'competition_research', 'landscape',
+    'competition', 'competition_research', 'landscape',
     'product_matching', 'question_advisor', 'plan_replan', 'race', 'red_flags', 'registry_peers',
     'techroutes', 'track', 'insight_generation', 'brief_analysis', 'crosscheck_analysis',
 )

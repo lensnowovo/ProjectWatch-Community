@@ -6,10 +6,21 @@ from copy import deepcopy
 from project_watch.studio import judgment_review as review
 from project_watch.studio import material_snapshot
 from project_watch.studio.llm import ModelError
+from project_watch.studio.step_outcomes import ISOLATABLE
 from project_watch.studio.store import digest, now
 
 SECTIONS = ('position', 'technology', 'industry', 'operations', 'chain')
 PREFIX = 'snapshot-section:'
+UNKNOWN_ERRORS = frozenset({'request_outcome_unknown', 'model_timeout', 'unknown_not_resent', 'request_in_flight'})
+
+
+def _isolated(execution):
+    return (execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1) >= 3
+
+
+def blocked_outcome(exc):
+    code = 'request_outcome_unknown' if exc.code in UNKNOWN_ERRORS else exc.code
+    return dict(status='blocked', issues=[code])
 # Classification labels are judgments, not quotable facts; the consistency review covers them.
 LABELS = frozenset({'verdict', 'confidence', 'maturity', 'consensus'})
 # General industry outline (chain.outline): stated as AI industry knowledge, never quote-checked.
@@ -35,7 +46,7 @@ def _inherent(conflict):
     return len({p.split('.')[0] for p in paths}) == 1 and lists == {'for', 'against'}
 
 
-def trim(part, issues):
+def trim(part, issues, *, keep_blocked=False):
     """Drop the list items an issue names; any issue on the summary or route blocks the section."""
     drop, blocking = set(), []
     for issue in issues:
@@ -47,7 +58,7 @@ def trim(part, issues):
                 drop.add(_item(path))
             elif _reviewed(path):
                 blocking.append(issue)
-    if blocking:
+    if blocking and not keep_blocked:
         return None, [], blocking
     trimmed, dropped = deepcopy(part), []
     for key in {k for k, _ in drop}:
@@ -56,7 +67,18 @@ def trim(part, issues):
         trimmed[key] = [v for i, v in enumerate(values) if (key, i) not in drop]
     if dropped:
         trimmed['confidence'] = 'low'
-    return trimmed, dropped, []
+    return trimmed, dropped, blocking
+
+
+def normalization_problem(generator, name, part, sources):
+    """A guard-produced placeholder is not a completed, supported summary."""
+    full = generator.normalize({name: part}, sources)
+    checks = [c for c in (*full.get('consistency_checks', ()), *full.get('qualifier_checks', ()))
+              if str(c.get('path', '')) == name + '.summary'
+              and c.get('action') in ('omitted', 'uncertain', 'neutralized')]
+    if full[name].get('summary') and not checks:
+        return None
+    return '；'.join(str(c.get('reason') or '') for c in checks) or '总结句含未能核实的表述'
 
 
 def _review(reviewer, system, payload):
@@ -144,10 +166,42 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
     raw is updated in place with the trimmed sections that publish() will use.
     """
     outcomes, valid = {}, {}
+    isolated = _isolated(execution)
+    counter_signature = None
+    if isolated:
+        from project_watch.studio import review_source_traversal as traversal
+        frozen_version = (execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1)
+        contract = [frozen_version, review.VERSION, traversal.PROTOCOL,
+                    traversal.COUNTER_SYSTEM + traversal.METRIC_SCOPE]
+        if frozen_version >= 4:
+            contract.append(getattr(reviewer, 'contract', ''))
+        counter_signature = digest(contract)
+        # Freeze before any provider work. A changed contract cannot turn an old
+        # successful/uncertain review into a fresh request under a different key.
+        scope = digest([raw, sources, retained])[:32]
+        meta_key = 'section-counter-meta-v3:' + scope
+        frozen = execution.read_checkpoint(meta_key)
+        if frozen is None:
+            execution.checkpoint_chunked(meta_key, {'signature': counter_signature})
+        elif frozen.get('signature') != counter_signature:
+            raise RuntimeError('analysis counterevidence contract changed; existing results retained')
+    counter = {'issues': [], 'receipts': []}
+    if hasattr(reviewer, 'prepare') and not isolated:
+        combined, evidence = combine(raw, sources, retained)
+        payload = review.review_input(combined, {'numbered': evidence})
+        payload['fields'] = {path: text for path, text in payload['fields'].items() if _reviewed(path)}
+        counter = reviewer.prepare(payload)
     for name in SECTIONS:
         part = raw.get(name)
         if not isinstance(part, dict) or not part:
             outcomes[name] = dict(status='missing', issues=['section_missing'])
+            continue
+        unit_key = 'section-unit-v3:' + digest([name, part, sources, retained])[:40]
+        unit = execution.read_checkpoint(unit_key) if isolated else None
+        if unit is not None:
+            outcomes[name] = unit['outcome']
+            if unit.get('raw') is not None:
+                valid[name] = raw[name] = unit['raw']
             continue
         try:
             refs = _refs(part, sources)
@@ -159,39 +213,98 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
         except (ValueError, TypeError, KeyError):
             outcomes[name] = dict(status='rejected', issues=['invalid_section_or_reference'])
             continue
-        issues, receipts = [], []
-        for batch in batches:
-            found, keys = _checked(execution, reviewer, guard, batch, refs, sources)
-            issues.extend(found)
-            receipts.extend(keys)
+        if isolated:
+            counter = {'issues': [], 'receipts': []}
+        issues = [issue for issue in counter['issues'] if issue['field'].split('.')[0] == name]
+        receipts = list(counter['receipts'])
+        try:
+            for batch in batches:
+                found, keys = _checked(execution, reviewer, guard, batch, refs, sources)
+                issues.extend(found)
+                receipts.extend(keys)
+        except ModelError as exc:
+            if exc.code not in (ISOLATABLE | UNKNOWN_ERRORS if isolated else UNKNOWN_ERRORS):
+                raise
+            outcomes[name] = blocked_outcome(exc)
+            if isolated:
+                execution.checkpoint_chunked(unit_key, dict(outcome=outcomes[name], raw=None))
+            continue
         trimmed, dropped, blocking = trim(part, issues)
         if trimmed is not None and not _refs(trimmed, sources):
             trimmed, blocking = None, [dict(code='section_without_supported_items', field=name)]
         outcomes[name] = dict(status='approved' if trimmed is not None else 'rejected', issues=issues,
                               refs=sorted(_refs(trimmed, sources) if trimmed is not None else refs),
                               review_receipts=receipts, dropped=dropped, blocking=blocking)
+        if trimmed is None:
+            basis, removed, _ = trim(part, issues, keep_blocked=True)
+            outcomes[name].update(repair_basis=basis, dropped=removed)
         if trimmed is not None:
             valid[name] = raw[name] = trimmed
-    combined, evidence = deepcopy(valid), dict(sources)
-    for name, record in (retained or {}).items():
-        if name in combined:
-            continue
-        aliases = {ref: 'retained_' + name + '_' + ref for ref in record['numbered']}
-        def remap(value, aliases=aliases):
-            if isinstance(value, dict):
-                return {key: [aliases[ref] for ref in child] if key == 'refs' else remap(child)
-                        for key, child in value.items()}
-            return [remap(child) for child in value] if isinstance(value, list) else value
-        combined[name] = remap(record['raw'])
-        evidence.update({aliases[ref]: value for ref, value in record['numbered'].items()})
+        if isolated:
+            execution.checkpoint_chunked(unit_key, dict(outcome=outcomes[name], raw=trimmed))
+            from project_watch.studio.review_source_traversal import safe_yield
+            safe_yield(execution)
+    if isolated and valid and hasattr(reviewer, 'prepare'):
+        # Direct support is independent; the complete counterevidence traversal
+        # is shared. An uncertain shared request blocks every dependent section.
+        # Use the supported drafts consistently so field identities match trim().
+        _, counter_sources = combine({}, sources, retained)
+        payload = review.review_input(valid, {'numbered': counter_sources})
+        payload['fields'] = {path: text for path, text in payload['fields'].items() if _reviewed(path)}
+        key = 'section-counter-v3:' + digest([counter_signature, payload])[:40]
+        guard()
+        counter = execution.read_checkpoint(key)
+        if counter is None:
+            try:
+                counter = reviewer.prepare(payload)
+            except ModelError as exc:
+                if exc.code not in ISOLATABLE | UNKNOWN_ERRORS:
+                    raise
+                counter = {'blocked_code': exc.code}
+            execution.checkpoint_chunked(key, counter)
+        if counter.get('blocked_code'):
+            for name in valid:
+                outcomes[name] = blocked_outcome(ModelError('shared counter unavailable', code=counter['blocked_code']))
+            return outcomes
+        for name in list(valid):
+            found = [issue for issue in counter['issues'] if issue['field'].split('.')[0] == name]
+            candidate = valid[name]
+            trimmed, dropped, blocking = trim(candidate, found)
+            outcome = outcomes[name]
+            outcome['issues'] = outcome['issues'] + found
+            outcome['review_receipts'] = outcome['review_receipts'] + list(counter['receipts'])
+            outcome['dropped'] = outcome['dropped'] + dropped
+            if trimmed is None or not _refs(trimmed, sources):
+                outcome.update(status='rejected', blocking=blocking or [dict(code='section_without_supported_items', field=name)])
+                basis, _, _ = trim(candidate, found, keep_blocked=True)
+                outcome['repair_basis'] = basis
+                del valid[name]
+            else:
+                raw[name] = valid[name] = trimmed
+                outcome['refs'] = sorted(_refs(trimmed, sources))
+    combined, evidence = combine(valid, sources, retained)
     if valid and len(combined) > 1:
         payload = {**review.review_input(combined, {'numbered': evidence}), 'phase': 'consistency'}
         key = 'section-consistency:' + digest([review.VERSION, payload])[:40]
         guard()
         saved = execution.read_checkpoint(key)
         if saved is None:
-            saved = _review(reviewer, review.CONSISTENCY_SYSTEM, payload)
+            try:
+                saved = _review(reviewer, review.CONSISTENCY_SYSTEM, payload)
+            except ModelError as exc:
+                if not isolated or exc.code not in ISOLATABLE | UNKNOWN_ERRORS:
+                    raise
+                # Every new candidate in this combined review depends on its
+                # completion. Keep old publications; do not publish unchecked peers.
+                saved = dict(response=None, blocked_code=exc.code)
             execution.checkpoint_chunked(key, saved)
+        if saved.get('blocked_code'):
+            for name in valid:
+                code = saved['blocked_code']
+                outcomes[name] = dict(status='blocked', issues=[
+                    'request_outcome_unknown' if code in UNKNOWN_ERRORS else code])
+            guard()
+            return outcomes
         try:
             conflicts = [c for c in review.validate_consistency(saved['response'], payload) if not _inherent(c)]
         except ValueError:
@@ -207,12 +320,30 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
             trimmed, dropped, blocking = trim(valid[name], mine)
             if trimmed is None or not _refs(trimmed, sources):
                 outcomes[name].update(status='rejected', issues=outcomes[name]['issues'] + mine, blocking=blocking or mine)
+                basis, removed, _ = trim(valid[name], mine, keep_blocked=True)
+                outcomes[name].update(repair_basis=basis, dropped=outcomes[name]['dropped'] + removed)
                 continue
             raw[name] = valid[name] = trimmed
             outcomes[name].update(refs=sorted(_refs(trimmed, sources)), dropped=outcomes[name]['dropped'] + dropped,
                                   issues=outcomes[name]['issues'] + mine)
     guard()
     return outcomes
+
+
+def combine(raw, sources, retained=None):
+    combined, evidence = deepcopy(raw), dict(sources)
+    for name, record in (retained or {}).items():
+        if name in combined:
+            continue
+        aliases = {ref: 'retained_' + name + '_' + ref for ref in record['numbered']}
+        def remap(value, aliases=aliases):
+            if isinstance(value, dict):
+                return {key: [aliases[ref] for ref in child] if key == 'refs' else remap(child)
+                        for key, child in value.items()}
+            return [remap(child) for child in value] if isinstance(value, list) else value
+        combined[name] = remap(record['raw'])
+        evidence.update({aliases[ref]: value for ref, value in record['numbered'].items()})
+    return combined, evidence
 
 
 def retained_sections(store, pid, context):
@@ -245,6 +376,9 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
         if result['status'] != 'approved':
             continue
         try:
+            if ((execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1) >= 2
+                    and normalization_problem(generator, name, raw[name], sources)):
+                raise ValueError('section summary replaced by normalization guard')
             full = generator.normalize({name: raw[name]}, sources)
             normalized = full[name]
             if not normalized.get('summary'):

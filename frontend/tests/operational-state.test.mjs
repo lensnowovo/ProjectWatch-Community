@@ -229,3 +229,18 @@ test('active work is named at the top, not duplicated in the loop footer',()=>{
   assert.match(html,/进行中/); assert.doesNotMatch(html,/补全外部信息|ml-orbit-repeat/);
   assert.match(html,/步骤说明与明细/);
 });
+test('analysis failures lead to the project instead of posting an unsupported refresh kind', () => {
+  const j = {...job('failed'), kind:'analyze', project_id:'synthetic', project_name:'合成项目',
+    label:'分析本轮信息', advice:{action:'rerun',why:'分析暂停',todo:'点重新运行'}};
+  const html = render(MemoryRouter,{children:React.createElement(FailureRow,{j,onChanged(){}})});
+  assert.match(html,/href="\/projects\/synthetic"[^>]*>查看本轮进度/);
+  assert.doesNotMatch(html,/重新运行/);
+});
+
+test('task actions do not expose validation enums in API errors', async (t) => {
+  const { api } = load('../src/api.ts');
+  t.mock.method(globalThis,'fetch',async () => new Response(JSON.stringify({
+    detail:[{type:'literal_error',msg:"Input should be 'internal' or 'external'"}]
+  }), {status:422}));
+  await assert.rejects(api.refresh('synthetic','external'), /请检查填写的信息，修改后再提交。/);
+});

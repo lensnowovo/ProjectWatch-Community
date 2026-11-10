@@ -73,7 +73,12 @@ def test_each_failure_says_what_happened_what_to_do_and_which_button():
     assert "2 次请求" in taskboard.advice({"error": "request_outcome_unknown", "unknown": 2})["why"]
     assert taskboard.advice({"error": "interrupted: request outcome uncertain or recovery limit", "unknown": 0})["action"] == "none"
     assert taskboard.advice({"error": "provider_backoff", "unknown": 0})["action"] == "settings"
-    assert taskboard.advice({"error": "request_budget", "unknown": 0})["action"] == "rerun"
+    for code in ('request_budget', 'project_budget'):
+        legacy = taskboard.advice({'error': code, 'unknown': 0})
+        assert legacy['action'] == 'none' and '已移除' in legacy['todo']
+        assert '下月' not in legacy['todo']
+        unknown = taskboard.advice({'error': code, 'unknown': 1})
+        assert unknown['action'] == 'none' and '不会自动重发' in unknown['why']
     refusal = taskboard.advice({"error": "模型服务拒绝分析本批内容；已保留资料和响应，未自动重发", "unknown": 0})
     assert refusal["action"] == "settings" and "换一个模型" in refusal["todo"]
     for advice in (refusal, taskboard.advice({"error": "内部错误：AttributeError", "unknown": 0})):
@@ -94,7 +99,8 @@ def test_dismissed_failures_leave_the_attention_list_but_stay_in_history(tmp_pat
         db.execute("UPDATE studio_jobs SET status='failed', error='request_budget', started_at=created_at, finished_at=created_at WHERE id=?",
                    (job["id"],))
     [row] = client.get("/api/studio/tasks").json()["jobs"]
-    assert row["advice"]["action"] == "rerun" and row["dismissed"] is False
+    assert row["advice"]["action"] == "none" and row["dismissed"] is False
+    assert "已移除" in row["advice"]["todo"]
     assert client.post(f"/api/studio/tasks/{job['id']}/dismiss").status_code == 204
     [row] = client.get("/api/studio/tasks").json()["jobs"]
     assert row["dismissed"] is True and row["status"] == "failed"

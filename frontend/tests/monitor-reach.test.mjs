@@ -29,7 +29,7 @@ test("malformed parentage, duplicates and unknown roots fail closed with notice"
 test("empty and legacy-only plans keep four gray trunks",()=>{
  const html=render(plan([node("legacy","",{scope_kind:""})]));
  assert.equal((html.match(/class="mr-trunk"/g)||[]).length,4);
- assert.doesNotMatch(html,/class="mr-lit"/);assert.match(html,/原有关注点仍保留/);
+ assert.doesNotMatch(html,/class="mr-lit"/);assert.match(html,/尚未建立对象间的关联层级/);
 });
 test("markup contains no object details or interactive tree; paused is not running",()=>{
  const html=render(plan([node("a"),node("b","a")]),{paused:true,company:"<script>alert(1)</script>"});

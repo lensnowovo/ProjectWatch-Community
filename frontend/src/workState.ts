@@ -36,7 +36,7 @@ export const WORK_LABEL: Record<string, string> = {
 
 export const JOB_LABEL: Record<string, string> = {
   internal: "分析内部资料", external: "收集公开信息", external_followup: "补全外部信息",
-  brief: "生成简报", public_profile: "补充公开档案", landscape: "整理竞争与行业",
+  brief: "生成简报", page_summary: "整理页面摘要", internal_page_summary: "整理内部资料摘要", public_profile: "补充公开档案", landscape: "整理竞争与行业",
   business: "整理产品与用途", competition: "更新竞对资料", details: "整理商业关系与政策条件",
   commercial: "更新专业来源", insight: "深度分析",
   collect: "收录公开信息", analyze: "分析本轮信息", report: "整理本轮动态",
