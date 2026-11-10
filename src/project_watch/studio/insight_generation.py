@@ -278,12 +278,17 @@ def gather(pipeline, project_id: str, llm=None) -> dict:
         peers = [p["name"] for p in peers_for(project, store.get_plan(project_id),
                                               pipeline.relationships.view(project_id, include_internal=False),
                                               public_objects=pipeline.objects.page(project_id, include_internal=False, current_aliases_only=True))]
+        peers_failed = False
     except Exception:  # Peer discovery is optional context; the analysis still runs without it.
-        peers = []
+        # A failed read is not an empty list. Saying "尚未确认" here told the model there
+        # were no known competitors and invited it to invent some.
+        peers, peers_failed = [], True
 
+    peer_note = ('（名单读取失败，本次未提供；不要据此推断竞争格局）' if peers_failed
+                 else '、'.join(peers) if peers else '（尚未确认，请从素材中识别并说明依据）')
     lines = [_source_line(code, entry) for code, entry in numbered.items()]
     text = (f"被监控公司：{project.get('legal_name') or project.get('name')}（{project.get('industry') or '行业未注明'}，{project.get('stage') or '阶段未注明'}）\n"
-            f"已知竞争对手：{'、'.join(peers) if peers else '（尚未确认，请从素材中识别并说明依据）'}\n"
+            f"已知竞争对手：{peer_note}\n"
             f"素材统计：" + "，".join(f"{SOURCE_LABEL[p]} {n}" for p, n in counts(numbered).items()) + "\n\n" + "\n".join(lines))
     # Include provenance and identity, not just prose. A corrected source or a
     # newly resolved peer must invalidate the old judgment as well.
@@ -329,7 +334,10 @@ def _evidence_counts(part: dict, name: str) -> dict:
         support, oppose = len(part.get('drivers') or []), len(part.get('headwinds') or [])
     else:
         support, oppose = len(part.get('for') or []), len(part.get('against') or [])
-    refs = {r.get('code') for key in _LIST_KEYS for item in (part.get(key) or [])
+    # Competition signals are neither support nor opposition, but their citations are
+    # sources this section rests on, so they belong in the source count.
+    refs = {r.get('code') for key in (*_LIST_KEYS, 'competition_signals')
+            for item in (part.get(key) or [])
             if isinstance(item, dict) for r in item.get('refs') or []}
     return {'support': support, 'oppose': oppose, 'sources': len(refs)}
 

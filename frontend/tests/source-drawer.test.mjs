@@ -1,0 +1,66 @@
+import assert from 'node:assert/strict';
+import { createRequire, Module } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+const require = createRequire(new URL('../package.json', import.meta.url));
+const { buildSync } = require('esbuild'), React = require('react'), { renderToStaticMarkup } = require('react-dom/server');
+function load(path) {
+  const entry = fileURLToPath(new URL(path, import.meta.url));
+  const mod = new Module(entry);
+  mod.paths = require.resolve.paths('react');
+  mod._compile(buildSync({ entryPoints: [entry], bundle: true, write: false, platform: 'node', format: 'cjs', packages: 'external', loader: { '.css': 'empty' } }).outputFiles[0].text, entry);
+  return mod.exports;
+}
+const { createLatest } = load('../src/latestRequest.ts');
+const { AnnotatedSummary } = load('../src/judgment.tsx');
+
+test('a slow earlier reply cannot overwrite a newer source', async () => {
+  const latest = createLatest();
+  let shown = null;
+  const open = (name, promise) => {
+    const seq = latest.next();
+    shown = name; // the title always follows the newest click
+    promise.then((text) => { if (latest.isCurrent(seq)) shown = text; });
+  };
+  let releaseA, releaseB;
+  const a = new Promise((r) => releaseA = r), b = new Promise((r) => releaseB = r);
+  open('A', a);
+  open('B', b);
+  releaseB('B-text');
+  await b;
+  releaseA('A-text'); // late, and must be dropped
+  await a;
+  await Promise.resolve();
+  assert.equal(shown, 'B-text');
+});
+
+test('a failed earlier request does not replace the newer error state', async () => {
+  const latest = createLatest();
+  let error = null;
+  const open = (promise) => {
+    const seq = latest.next();
+    error = null;
+    promise.catch((cause) => { if (latest.isCurrent(seq)) error = cause.message; });
+  };
+  const a = Promise.reject(new Error('older failure'));
+  open(a);
+  open(new Promise(() => {})); // newer request still pending
+  await a.catch(() => {});
+  await Promise.resolve();
+  assert.equal(error, null);
+});
+
+test('every occurrence of a neutralised clause is marked, not just the first', () => {
+  const notes = [{ span: '收入确认情况待核实', code: 'recognition_not_supported', original: '由于没有确认收入' }];
+  const html = renderToStaticMarkup(React.createElement(AnnotatedSummary, {
+    text: '收入确认情况待核实，订单仍在交付；收入确认情况待核实，不改判断。', notes,
+  }));
+  assert.equal(html.split('<mark').length - 1, 2);
+  assert.match(html, /订单仍在交付/);
+});
+
+test('an unannotated summary stays plain text', () => {
+  const html = renderToStaticMarkup(React.createElement(AnnotatedSummary, { text: '公司领先。', notes: [] }));
+  assert.doesNotMatch(html, /<mark/);
+  assert.match(html, /公司领先。/);
+});

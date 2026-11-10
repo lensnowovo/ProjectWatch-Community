@@ -132,3 +132,26 @@ def test_an_invented_code_costs_the_item_not_the_section():
     assert [s['peer'] for s in cleaned['competition_signals']] == []
     assert [p['text'] for p in cleaned['for']] == ['本公司获批']
     assert lost == 1
+
+
+def test_competition_citations_count_toward_the_section_sources():
+    """Signals are not support/oppose, but their sources are sources the section rests on."""
+    p = normalize(SIGNALS)
+    assert p['evidence_counts'] == {'support': 1, 'oppose': 0, 'sources': 3}  # N1 + C1 + C2
+
+
+def test_a_failed_peer_read_is_not_reported_as_no_competitors(tmp_path, monkeypatch):
+    """An exception used to render as "尚未确认", inviting the model to invent peers."""
+    from test_studio_insight import _setup
+
+    from project_watch.studio import peer_names
+
+    project, _store, pipeline = _setup(tmp_path)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError('synthetic peer store failure')
+
+    monkeypatch.setattr(peer_names, 'peers_for', boom)
+    text = gen.gather(pipeline, project.id)['text']
+    assert '名单读取失败' in text
+    assert '尚未确认' not in text

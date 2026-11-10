@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { Confidence, InsightAnalysis, InsightPoint, InsightRef, InsightView } from "./api";
 import { Block } from "./frame";
 import { EASE } from "./motion";
@@ -112,11 +112,13 @@ export function AnnotatedSummary({ text, notes, className = "jd-summary" }: {
 }) {
   const note = (notes ?? []).find((n) => n.span && text.includes(n.span));
   if (!note) return <p className={className}>{text}</p>;
-  const head = text.slice(0, text.indexOf(note.span));
-  const tail = text.slice(text.indexOf(note.span) + note.span.length);
-  return <p className={className}>{head}
-    <mark className="jd-annot" title={`原文为「${note.original || note.span}」，未找到同口径依据，已改为中性表述`}>{note.span}</mark>
-    {tail}</p>;
+  // Every occurrence, not just the first: the same neutralised clause can appear twice
+  // in one summary, and an unmarked second one would read as verified.
+  const parts = text.split(note.span);
+  return <p className={className}>{parts.map((part, i) => <Fragment key={i}>{part}
+    {i < parts.length - 1 && <mark className="jd-annot"
+      title={`原文为「${note.original || note.span}」，未找到同口径依据，已改为中性表述`}>{note.span}</mark>}
+  </Fragment>)}</p>;
 }
 
 function ChangeIf({ items }: { items: string[] }) {

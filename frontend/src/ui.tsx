@@ -1,7 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ShinyText from "./bits/ShinyText";
 import { api, ApiError, type Category, type Fragment, type Importance, type Ref } from "./api";
+import { createLatest } from "./latestRequest";
 
 export const CATEGORY_LABEL: Record<Category, string> = {
   company: "公司",
@@ -193,12 +194,18 @@ export function SourceDrawerProvider({ children }: { children: ReactNode }) {
   const [fragments, setFragments] = useState<Fragment[] | null>(null);
   const [error, setError] = useState<unknown>(null);
 
+  const latest = useRef(createLatest()).current;
   const open = useCallback((ref: Ref) => {
+    // A slow reply must not overwrite a newer source: the drawer title follows the
+    // latest click, so an unguarded late response pairs one name with another's text.
+    const seq = latest.next();
     setState({ ref });
     setFragments(null);
     setError(null);
-    api.fragments(ref.source_id).then(setFragments).catch(setError);
-  }, []);
+    api.fragments(ref.source_id)
+      .then((data) => { if (latest.isCurrent(seq)) setFragments(data); })
+      .catch((cause) => { if (latest.isCurrent(seq)) setError(cause); });
+  }, [latest]);
 
   useEffect(() => {
     if (!fragments || !state) return;
