@@ -154,7 +154,11 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         pending = sorted(
             (w for w in watches if w.get('id') and w.get('visibility') == 'public'
              and w.get('status') != 'retired' and w.get('scope_kind') == 'relation'
+             and w.get('queries') and w.get('cadence') != 'event'
+             and w['id'] not in due_ids
              and watch_direction(w) == 'chain'),
+            # Least recently run first. A watch without a run date sorts ahead of every
+            # dated one, so a new relation gets searched before the rotation repeats.
             key=lambda w: (str(w.get('last_run_at') or ''), str(w['id'])))
         chain_due = {w['id'] for w in pending[:2]}
     for watch in watches:

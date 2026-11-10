@@ -64,3 +64,36 @@ def test_non_chain_relations_are_still_not_pulled_into_incremental_rounds():
     plan = build(mode='incremental', watches=watches)
     competitor = [u for u in plan['units'] if u['target_id'].startswith('watch:')]
     assert competitor and not any(u['schedule_due'] for u in competitor)
+
+
+def test_rotation_picks_the_least_recently_run_relations():
+    """Ordering by last_run_at only works if the field reaches the plan; it used to be stripped."""
+    from project_watch.studio.collect_job import WATCH_FIELDS
+    assert {'cadence', 'last_run_at'} <= set(WATCH_FIELDS)
+    watches = [watch(id=f'relation-{i}', queries=[f'Synthetic Supplier {i}'],
+                     last_run_at=f'2026-10-{i + 1:02d}T00:00:00+08:00') for i in range(5)]
+    plan = build(mode='incremental', watches=watches)
+    due = {u['target_id'] for u in plan['units']
+           if u['category'] == 'chain' and u['schedule_due'] and u['target_id'].startswith('watch:')}
+    assert due == {'watch:relation-0', 'watch:relation-1'}
+
+
+def test_event_driven_and_unscoped_chain_relations_are_not_rotated_in():
+    """Rotation must respect the same gates as cadence scheduling, or it re-arms event watches."""
+    watches = [watch(id='event-1', cadence='event'), watch(id='unscoped-1', queries=[]),
+               watch(id='plain-1', queries=['Synthetic Supplier'])]
+    plan = build(mode='incremental', watches=watches)
+    due = {u['target_id'] for u in plan['units']
+           if u['category'] == 'chain' and u['schedule_due'] and u['target_id'].startswith('watch:')}
+    assert due == {'watch:plain-1'}
+
+
+def test_rotation_does_not_spend_a_slot_on_a_relation_already_due():
+    watches = [watch(id='relation-0', last_run_at='2026-09-01T00:00:00+08:00'),
+               watch(id='relation-1', last_run_at='2026-09-02T00:00:00+08:00'),
+               watch(id='relation-2', last_run_at='2026-09-03T00:00:00+08:00')]
+    plan = build(mode='incremental', watches=watches, due_watch_ids=['relation-0'])
+    added = {u['target_id'] for u in plan['units']
+             if u['category'] == 'chain' and u['schedule_due']
+             and u['target_id'].startswith('watch:')} - {'watch:relation-0'}
+    assert added == {'watch:relation-1', 'watch:relation-2'}

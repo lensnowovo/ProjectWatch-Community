@@ -52,12 +52,26 @@ moved from 12 to 19 fields and from one to at most two batches; `peer` was added
 to `STRUCTURAL` so a missing name no longer drops the record that carries the
 comparison.
 
+Three review findings were fixed on top of that: an unsupported `basis` now drops
+the window (number included) instead of rejecting the section; `months` survives
+only when `basis` carries two dated ends, since an integer never reaches review;
+and a `peer` must appear in its own cited material — membership in `peers` is
+model output too, so it cannot ground a name. An invented citation code now
+costs the item that named it rather than the whole section, via `_sanitize()`
+before review.
+
 **Chain collection.** Five places used to erase the material; all five are
 closed: one already-triaged duplicate no longer rolls back the rest of a query
 (the refusal is counted in `skipped`), `chain` keeps its own category instead of
 being rewritten to `company`, `AFFECTS['chain']` invalidates only the chain page,
 `SOURCE_KINDS` records chain and technology failures, and ordinary rounds rotate
 up to two chain relations instead of reserving them for first/refresh.
+
+The rotation only works because `cadence` and `last_run_at` now reach the plan
+(`WATCH_FIELDS`); without them every round re-picked the two lowest ids. It also
+skips event-driven and query-less relations and does not spend a slot on one
+that is already due this round. `chain` is labelled 产业链 in the interface so the
+material is not shown under a raw English category name.
 
 Data note: historical rows written before this change remain under
 `category = 'company'` because the old mapping erased their origin. They are not

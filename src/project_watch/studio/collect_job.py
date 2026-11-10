@@ -26,7 +26,7 @@ RESULT = 'collect_result_v1'
 PATENTS = SUPPLEMENT_PREFIX + 'patent_documents'
 BODIES = 'collect_bodies_v1'
 WATCH_FIELDS = ('id', 'visibility', 'status', 'scope_kind', 'relation_type', 'relation_target',
-                'axis', 'queries', 'lifecycle_version')
+                'axis', 'queries', 'lifecycle_version', 'cadence', 'last_run_at')
 
 
 def subject_names(pipeline, project_id):
