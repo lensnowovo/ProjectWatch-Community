@@ -3187,6 +3187,15 @@ g[role="button"]:hover > .bar { fill: color-mix(in srgb, var(--brass) 70%, var(-
 /* Neutralised span: kept in the sentence, marked so it is not read as a verified fact. */
 .jd-annot { background: none; color: inherit; border-bottom: 1px dashed #b4532a; padding-bottom: 1px; cursor: help; }
 .jd-status { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.jd-competition { margin-top: 12px; display: grid; gap: 10px; }
+.jd-window { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.jd-window span:first-child { font-size: 12px; color: var(--muted); }
+.jd-window-basis { color: var(--muted); font-size: 12px; }
+.jd-signals h4 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.jd-signals ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.jd-signals li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+.jd-signals li b { font-weight: 600; color: var(--ink); }
+.jd-signals .jd-impact { color: var(--muted); }
 .jd-meta { font-size: 12px; color: var(--muted); }
 .jd-label { font-size: 12px; color: var(--muted); }
 .jd-conf { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); }

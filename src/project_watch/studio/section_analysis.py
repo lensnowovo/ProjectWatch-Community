@@ -23,15 +23,18 @@ def blocked_outcome(exc):
     return dict(status='blocked', issues=[code])
 # Classification labels are judgments, not quotable facts; the consistency review covers them.
 LABELS = frozenset({'verdict', 'confidence', 'maturity', 'consensus'})
+# Validated against the section itself (a peer must be a listed competitor), not against a quote.
+STRUCTURAL = frozenset({'peer'})
 # General industry outline (chain.outline): stated as AI industry knowledge, never quote-checked.
 OUTLINE = 'outline'
 
 
 def _reviewed(path: str) -> bool:
     parts = path.split('.')
-    return parts[-1] not in LABELS and OUTLINE not in parts
+    return parts[-1] not in LABELS and parts[-1] not in STRUCTURAL and OUTLINE not in parts
 # Evidence lists: each item stands on its own refs and can be dropped without the section.
-ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds', 'peers', 'change_if', 'gaps'})
+ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds', 'peers', 'change_if', 'gaps',
+                   'competition_signals'})
 
 
 def _item(path):

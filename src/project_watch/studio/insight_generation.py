@@ -53,11 +53,17 @@ SYSTEM = """你是一级市场投资研究员。根据给定的编号素材，�
   summary 的整体方向须与该板块 verdict 一致；无法判断时写明缺口，不同时声称“整体向好/承压/平稳”。
 - 缺口写在对应板块里："gaps": ["本板块缺少的关键信息"]，每板块不超过 3 条。只写素材里确实没有的信息；
   素材中已有的数据（例如已披露的半年报数字）不能写成“未披露”。
+- 竞品：竞争的判断只写能落到具体公司上的事。"competition_signals" 每条写「谁做了什么 → 对我们意味着什么」，
+  只有事件而说不出影响的，不要写进来；最多 3 条，竞品名须出现在 peers 里，且须有出处。
+  "competition_window.months" 只有在「本公司预计完成某节点的时间」与「竞品完成该节点的时间」都能从素材确定时才填，
+  否则不填 months，只在 basis 用一句话说明依据（例如“3 家同类已进入注册临床”）。宁可只给定性，不要编造月数。
 
 输出 JSON：
 {"headline": "一句话总判断（≤60字）",
  "position": {"verdict": "leading|ahead|on_par|behind|lagging|unclear", "confidence": "high|medium|low",
    "summary": "≤80字", "peers": ["对比的公司名"],
+   "competition_window": {"months": 0, "basis": "≤60字，说明按什么算"},
+   "competition_signals": [{"peer": "竞品名", "event": "≤50字，含时间", "impact": "≤60字，对我们意味着什么", "refs": ["C2"]}],
    "for": [{"text": "支持该判断的依据", "refs": ["N1"]}], "against": [{"text": "相反的依据", "refs": ["C2"]}],
    "change_if": ["什么新信息会改变判断"]},
  "technology": {"route": "押注的技术路线（≤30字）", "maturity": "frontier|advanced|mainstream|mature|dated|unclear",
@@ -325,6 +331,49 @@ def _evidence_counts(part: dict, name: str) -> dict:
     refs = {r.get('code') for key in _LIST_KEYS for item in (part.get(key) or [])
             if isinstance(item, dict) for r in item.get('refs') or []}
     return {'support': support, 'oppose': oppose, 'sources': len(refs)}
+
+
+def _competition(raw: dict, peers: list[str], numbered: dict) -> dict:
+    """Competitor signals, not a competitor directory.
+
+    Each entry must say what it changes for us and carry a source; a name on its own is not
+    research. `competition_status` separates "there was nothing to say" from "the model skipped it",
+    the failure mode that silently emptied `peers`.
+    """
+    known = {str(p).casefold() for p in peers}
+    out: dict = {}
+    window = raw.get('competition_window')
+    if isinstance(window, dict):
+        basis = _clip(strip_inline_codes(window.get('basis') or ''), 80)
+        months = window.get('months')
+        if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= 60:
+            months = None
+        if basis:
+            out['competition_window'] = ({'months': months} if months else {}) | {'basis': basis}
+    signals = []
+    for item in raw.get('competition_signals') or []:
+        if not isinstance(item, dict):
+            continue
+        peer = _clip(strip_inline_codes(item.get('peer') or ''), 30)
+        event = _clip(strip_inline_codes(item.get('event') or ''), 60)
+        impact = _clip(strip_inline_codes(item.get('impact') or ''), 80)
+        codes = [str(code).strip().upper() for code in item.get('refs') or [] if str(code).strip()]
+        refs = [r for r in (_ref(code, numbered) for code in codes) if r]
+        # In the peer list, or literally present in a cited source. A company the material never
+        # names is not a competitor this round can report on.
+        grounded = peer.casefold() in known or any(
+            peer and peer in str((numbered.get(code) or {}).get('context')
+                                 or (numbered.get(code) or {}).get('text') or '')
+            for code in codes)
+        if not (peer and event and impact and refs and grounded):
+            continue
+        signals.append({'peer': peer, 'event': event, 'impact': impact, 'refs': refs[:3]})
+    if signals:
+        out['competition_signals'] = signals[:3]
+    present = 'competition_signals' in raw or 'competition_window' in raw
+    out['competition_status'] = ('produced' if (out.get('competition_window') or out.get('competition_signals'))
+                                 else 'empty' if present else 'omitted')
+    return out
 
 
 def _confidence(value, points: list[dict]) -> str:
@@ -706,6 +755,7 @@ def normalize(data: dict, numbered: dict) -> dict:
     position["verdict"] = raw.get("verdict") if raw.get("verdict") in VERDICTS["position"] and evidence else "unclear"
     position["peers"] = [_clip(p, 30) for p in (raw.get("peers") or []) if isinstance(p, str) and p.strip()][:8]
     position["change_if"] = [_clip(t, 120) for t in (raw.get("change_if") or []) if isinstance(t, str) and t.strip()][:4]
+    position.update(_competition(raw, position["peers"], numbered))
 
     technology, raw, evidence = section("technology", ("academic", "industry", "risks"))
     technology["route"] = _clip(raw.get("route"), 60)

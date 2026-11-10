@@ -268,7 +268,12 @@ export interface InsightDisplay {
 }
 export interface InsightAnalysis {
   headline: string;
-  position: InsightDisplay & { verdict: string; confidence: Confidence; summary: string; peers: string[]; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] };
+  position: InsightDisplay & { verdict: string; confidence: Confidence; summary: string; peers: string[]; for: InsightPoint[]; against: InsightPoint[]; change_if: string[];
+    /** Remaining lead time; months only when both ends are dated in the material. */
+    competition_window?: { months?: number; basis: string };
+    /** Who did what, and what it changes for us. Entries without impact are dropped upstream. */
+    competition_signals?: { peer: string; event: string; impact: string; refs: InsightRef[] }[];
+    competition_status?: 'produced' | 'empty' | 'omitted' };
   technology: InsightDisplay & { route: string; maturity: string; consensus: string; confidence: Confidence; summary: string;
     academic: InsightPoint[]; industry: InsightPoint[]; risks: InsightPoint[] };
   industry: InsightDisplay & { verdict: string; confidence: Confidence; summary: string; drivers: InsightPoint[]; headwinds: InsightPoint[] };

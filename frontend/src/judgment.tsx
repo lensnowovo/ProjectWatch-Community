@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
-import type { Confidence, InsightPoint, InsightRef, InsightView } from "./api";
+import type { Confidence, InsightAnalysis, InsightPoint, InsightRef, InsightView } from "./api";
 import { Block } from "./frame";
 import { EASE } from "./motion";
 import { useOpenSource } from "./ui";
@@ -162,6 +162,23 @@ function Provenance({ view }: { view: InsightView }) {
 }
 
 /** Remaining lead time and the events that shorten it. Names alone are not a comparison. */
+export function CompetitionReading({ position }: { position: InsightAnalysis["position"] }) {
+  const window = position.competition_window;
+  const signals = position.competition_signals ?? [];
+  if (!window && !signals.length) return null;
+  return <div className="jd-competition">
+    {window && <p className="jd-window"><span>窗口期</span>
+      <b>{window.months ? `约 ${window.months} 个月` : '正在收窄'}</b>
+      <span className="jd-window-basis">{window.basis}</span></p>}
+    {signals.length > 0 && <div className="jd-signals">
+      <h4>竞争信号</h4>
+      <ul>{signals.map((s, i) => <li key={`${s.peer}-${i}`}>
+        <b>{s.peer}</b><span>{s.event}</span><span className="jd-impact">→ {s.impact}</span><Refs refs={s.refs} />
+      </li>)}</ul>
+    </div>}
+  </div>;
+}
+
 /** 竞争对手: where the company stands against its peers. */
 export function PositionJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const p = view?.record?.analysis.position;
@@ -169,6 +186,7 @@ export function PositionJudgment({ view, compact = false }: { view: InsightView 
   return <Block card title="竞争位置判断" note={<Provenance view={view} />} action={<Confidence value={p.confidence} />}>
     <JudgmentBody compact={compact} scale="position" verdict={p.verdict} labels={view.labels.position} pro={p.for} con={p.against} changeIf={p.change_if}
       state={p.state} reasons={p.reason_codes} annotations={p.annotations}>
+      <CompetitionReading position={p} />
       {p.peers.length > 0 && <p className="jd-peers"><span>对比对象</span>{p.peers.map((n) => <b key={n}>{n}</b>)}</p>}
     </JudgmentBody>
   </Block>;
