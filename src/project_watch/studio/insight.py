@@ -10,13 +10,13 @@ STATE_KEY = "insight:{}"
 HISTORY_KEY = "insight_history:{}"
 
 VERDICTS: dict[str, dict[str, str]] = {
-    "position": {"leading": "领先", "ahead": "略领先", "on_par": "相当", "behind": "略落后", "lagging": "落后", "unclear": "无法判断"},
-    "maturity": {"frontier": "前沿", "advanced": "较先进", "mainstream": "主流", "mature": "成熟", "dated": "趋于落后", "unclear": "无法判断"},
-    "consensus": {"consensus": "行业共识", "forming": "共识正在形成", "contrarian": "非共识", "unclear": "无法判断"},
-    "industry": {"expanding": "快速扩张", "growing": "增长", "stable": "平稳", "consolidating": "整合", "cooling": "降温", "unclear": "无法判断"},
+    "position": {"leading": "领先", "ahead": "略领先", "on_par": "相当", "behind": "略落后", "lagging": "落后", "unclear": "未定"},
+    "maturity": {"frontier": "前沿", "advanced": "较先进", "mainstream": "主流", "mature": "成熟", "dated": "趋于落后", "unclear": "未定"},
+    "consensus": {"consensus": "行业共识", "forming": "共识正在形成", "contrarian": "非共识", "unclear": "未定"},
+    "industry": {"expanding": "快速扩张", "growing": "增长", "stable": "平稳", "consolidating": "整合", "cooling": "降温", "unclear": "未定"},
     # 四圈 judgments shown on 当前判断: the company itself and its chain (customers, suppliers, partners, investors).
-    "operations": {"improving": "向好", "steady": "平稳", "pressured": "承压", "unclear": "无法判断"},
-    "chain": {"favorable": "有利", "steady": "平稳", "pressured": "承压", "unclear": "无法判断"},
+    "operations": {"improving": "向好", "steady": "平稳", "pressured": "承压", "unclear": "未定"},
+    "chain": {"favorable": "有利", "steady": "平稳", "pressured": "承压", "unclear": "未定"},
 }
 
 SOURCE_LABEL = {"D": "内部资料", "M": "财务指标", "F": "融资数据库", "N": "公司新闻", "C": "竞品动态", "I": "行业与政策", "A": "论文",

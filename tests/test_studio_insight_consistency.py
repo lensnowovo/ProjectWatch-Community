@@ -58,15 +58,20 @@ def test_event_or_publication_period_does_not_qualify_financial_claim(text):
     assert '收入仍靠' not in out['headline'] and '亏损扩大' not in out['headline']
 
 
-def test_downgraded_operating_summary_drops_direction_but_keeps_evidence():
+def test_unsupported_caveat_is_annotated_instead_of_discarding_the_verdict():
+    """A caveat no source supports is neutralised in place; it no longer invalidates a verdict
+    that rests on other, verified evidence. Premise position still downgrades (see the qualifier
+    tests), and an explicit contradictory overall direction still falls."""
     raw = answer('产品上市，但侵入式收入尚未确认，改善与承压并存、整体略向好', '2026年9月已售12套')
     out = gen.normalize(raw, {'N1': source('2026年上半年侵入式未确认收入。2026年9月已售12套。')})
     part = out['operations']
-    assert part['verdict'] == 'unclear' and part['confidence'] == 'low'
-    assert '确认情况待核实' in part['summary'] and '无法判断' in part['summary']
-    assert '向好' not in part['summary'] and '承压' not in part['summary']
+    assert part['verdict'] == 'improving' and part['confidence'] == 'low'
+    assert '确认情况待核实' in part['summary'] and '尚未确认' not in part['summary']
+    assert part['state'] == 'judged_annotated' and part['verdict_source'] == 'model'
+    assert 'recognition_not_supported' in part['reason_codes']
+    assert part['annotations'][0]['span'] == '收入确认情况待核实'
     assert part['for'][0]['text'] == '2026年9月已售12套'
-    assert any(c['reason'] == 'summary_verdict_downgraded' for c in out['consistency_checks'])
+    assert not any(c['reason'] == 'summary_verdict_downgraded' for c in out['consistency_checks'])
 
 
 @pytest.mark.parametrize(('verdict', 'summary'), [
@@ -79,7 +84,8 @@ def test_explicit_operating_summary_label_conflict_is_not_resolved_by_guessing(v
     out = gen.normalize(raw, {'N1': source('产品已上市。')})
     assert out['operations']['verdict'] == 'unclear'
     assert out['operations']['confidence'] == 'low'
-    assert '无法判断' in out['operations']['summary']
+    assert '本栏未形成结论' in out['operations']['summary']
+    assert '无法判断' not in out['operations']['summary']
     assert out['operations']['summary'] != summary
     assert any(c['reason'] == 'summary_verdict_conflict' for c in out['consistency_checks'])
 

@@ -3184,6 +3184,9 @@ g[role="button"]:hover > .bar { fill: color-mix(in srgb, var(--brass) 70%, var(-
   .jd-body-compact .jd-overview-split { grid-template-columns: minmax(0, 1fr); gap: var(--s4); }
 }
 .jd-summary { margin: 0; font-size: 15px; line-height: 1.75; color: var(--ink-2); max-width: 52em; }
+/* Neutralised span: kept in the sentence, marked so it is not read as a verified fact. */
+.jd-annot { background: none; color: inherit; border-bottom: 1px dashed #b4532a; padding-bottom: 1px; cursor: help; }
+.jd-status { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .jd-meta { font-size: 12px; color: var(--muted); }
 .jd-label { font-size: 12px; color: var(--muted); }
 .jd-conf { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); }

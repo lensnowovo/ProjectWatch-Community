@@ -310,6 +310,23 @@ def _points(values, numbered: dict, limit: int = 6) -> list[dict]:
     return out[:limit]
 
 
+_LIST_KEYS = ('for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds')
+
+
+def _evidence_counts(part: dict, name: str) -> dict:
+    """Support/oppose counts and distinct sources; zeros are shown, not omitted."""
+    if name == 'technology':
+        support = len(part.get('academic') or []) + len(part.get('industry') or [])
+        oppose = len(part.get('risks') or [])
+    elif name == 'industry':
+        support, oppose = len(part.get('drivers') or []), len(part.get('headwinds') or [])
+    else:
+        support, oppose = len(part.get('for') or []), len(part.get('against') or [])
+    refs = {r.get('code') for key in _LIST_KEYS for item in (part.get(key) or [])
+            if isinstance(item, dict) for r in item.get('refs') or []}
+    return {'support': support, 'oppose': oppose, 'sources': len(refs)}
+
+
 def _confidence(value, points: list[dict]) -> str:
     """Model confidence is capped by evidence: high needs 3+ distinct sources, medium needs 2."""
     distinct = {r["code"] for p in points for r in p["refs"]}
@@ -363,8 +380,14 @@ def _qualifier_text(text: str, entries: dict) -> tuple[str, list[dict]]:
                 if entry.get('context_kind') == '原文摘录' or entry.get('kind') == 'internal'
                 for s in re.split(_CLAUSE_BREAK, _source_prose(entry)))
             if not supported:
+                # Neutralised in place, not discarded. The clause asserts a negative accounting
+                # fact that no source supports, so it cannot stand as written; but dropping it used
+                # to hold the whole section's verdict hostage to one unverified caveat.
+                original = _RECOGNITION.search(clause)
                 clause = _RECOGNITION.sub('收入确认情况待核实', clause)
-                issues.append({'reason': 'recognition_not_supported', 'action': 'uncertain'})
+                issues.append({'reason': 'recognition_not_supported', 'action': 'annotated',
+                               'span': '收入确认情况待核实', 'original': original.group()[:60],
+                               'leading': index == 0})
         # Already qualified mixed/intent orders are not collapsed into firm orders.
         matches = list(_ORDERS.finditer(clause))
         for match in reversed(matches):
@@ -621,27 +644,42 @@ def normalize(data: dict, numbered: dict) -> dict:
     uncertain_sections = set()
     rejected_sections = set()
     dropped_sections = set()
+    section_notes: dict[str, list] = {}
 
     def qualify(text, entries, path):
         corrected, checks = _qualifier_text(str(text or ''), entries)
+        # A neutralised clause is kept only where it is a caveat. At the head of a summary, or
+        # anywhere outside one, it is the premise the direction rests on: the section still falls
+        # with it, as before. This is what keeps "由于没有确认收入，公司承压" from surviving.
+        checks = [{**c, 'action': 'uncertain'}
+                  if c.get('action') == 'annotated' and (not path.endswith('.summary') or c.get('leading'))
+                  else c for c in checks]
         qualifier_checks.extend({'path': path, **check} for check in checks)
-        return corrected, {c['reason'] for c in checks if c['action'] == 'uncertain'}
+        return (corrected,
+                {c['reason'] for c in checks if c['action'] == 'uncertain'},
+                [{'span': c['span'], 'code': c['reason'], 'original': c.get('original', '')}
+                 for c in checks if c['action'] == 'annotated' and c.get('span')])
 
     def section(name: str, lists: tuple[str, ...]) -> dict:
         raw = data.get(name) if isinstance(data.get(name), dict) else {}
         out = {key: _points(raw.get(key), numbered) for key in lists}
+        notes: list[dict] = []
         for key in lists:
             valid = [p for p in out[key] if not _undated_zero_income(p['text'])]
             if len(valid) != len(out[key]):
                 temporal_sections.add(name)
             out[key] = []
             for index, point in enumerate(valid):
-                text, uncertain = qualify(point['text'], {r['code']: numbered[r['code']] for r in point['refs']},
-                                          f'{name}.{key}.{index}')
+                text, uncertain, annotated = qualify(
+                    point['text'], {r['code']: numbered[r['code']] for r in point['refs']},
+                    f'{name}.{key}.{index}')
+                notes.extend(annotated)
                 if uncertain:
-                    # The unsafe point is dropped; the section falls with it only if the summary rests on it.
+                    # The unsafe point is dropped; the section falls with it only if the summary
+                    # rests on it — that is, only when it appears before any contrast marker.
                     dropped_sections.add(name)
-                    if any(_PREMISE[reason].search(str(raw.get('summary') or '')) for reason in uncertain
+                    premise = re.split(r'(?:但|然而|不过|；|;)', str(raw.get('summary') or ''))[0]
+                    if any(_PREMISE[reason].search(premise) for reason in uncertain
                            if reason in _PREMISE):
                         uncertain_sections.add(name)
                         rejected_sections.add(name)
@@ -649,7 +687,8 @@ def normalize(data: dict, numbered: dict) -> dict:
                     out[key].append({**point, 'text': text})
         evidence = [p for key in lists for p in out[key]]
         entries = {r['code']: numbered[r['code']] for p in evidence for r in p['refs']}
-        summary, uncertain = qualify(raw.get('summary'), entries, f'{name}.summary')
+        summary, uncertain, annotated = qualify(raw.get('summary'), entries, f'{name}.summary')
+        notes.extend(annotated)
         if uncertain:
             uncertain_sections.add(name)
         summary = _clip(summary, 160) if evidence else ''
@@ -660,6 +699,7 @@ def normalize(data: dict, numbered: dict) -> dict:
         out["confidence"] = _confidence(raw.get("confidence"), evidence)
         # Reviewed with the section: a gap the evidence already answers is dropped before this point.
         out["gaps"] = [_clip(strip_inline_codes(g), 120) for g in raw.get("gaps") or [] if isinstance(g, str) and g.strip()][:3]
+        section_notes[name] = list({(n['code'], n['span']): n for n in notes}.values())
         return out, raw, evidence
 
     position, raw, evidence = section("position", ("for", "against"))
@@ -713,20 +753,20 @@ def normalize(data: dict, numbered: dict) -> dict:
     operations = rings['operations']
     if _operating_direction_conflicts(operations):
         operations.update(verdict='unclear', confidence='low',
-                          summary='经营方向表述不一致，暂无法判断整体经营趋势。')
+                          summary='经营方向表述不一致，本栏未形成结论。')
         consistency_checks.append({'path': 'operations.summary',
                                    'reason': 'summary_verdict_conflict', 'action': 'neutralized'})
     cited = sorted({r["code"] for part in (position, technology, industry, *rings.values()) for v in part.values()
                     if isinstance(v, list) for p in v if isinstance(p, dict) for r in p.get("refs", [])},
                    key=lambda c: (c[0], int(c[1:]) if c[1:].isdigit() else 0))
-    headline, _ = qualify(data.get('headline'), {code: numbered[code] for code in cited}, 'headline')
+    headline, _, _ = qualify(data.get('headline'), {code: numbered[code] for code in cited}, 'headline')
     headline, headline_checks = _period_headline(headline)
     consistency_checks.extend(headline_checks)
     bad_headline = _undated_zero_income(headline)
     gaps = [_clip(t, 120) for t in (data.get("gaps") or []) if isinstance(t, str) and t.strip()][:8]
     if temporal_sections or bad_headline:
         gaps = ["零收入表述缺少报告期，未用于当前判断；需区分历史收入与后续销售、收入确认。", *gaps][:8]
-    if any(c['action'] == 'uncertain' for c in qualifier_checks):
+    if any(c['action'] in ('uncertain', 'annotated') for c in qualifier_checks):
         gaps = ["部分收入确认或订单表述缺少同口径依据，已标为待核实；不等于业务尚未发生。", *gaps][:8]
     if any(c['reason'] == 'financial_period_missing' for c in consistency_checks):
         gaps = ['标题已省略缺少报告期的财务概括；分期依据保留，不据报道日期推定当前表现。', *gaps][:8]
@@ -749,6 +789,23 @@ def normalize(data: dict, numbered: dict) -> dict:
         gaps = ['逐期收入数字与连续趋势结论矛盾，未采用该判断；需核对各年期间、单位及升降。', *gaps][:8]
     if any(i['code'] == 'financial_comparison_period_mismatch' for i in scope_issues):
         gaps = ['财务比较期间不一致，未采用同期比较；保留原始期间，待同口径依据后再判断。', *gaps][:8]
+    # Presentation contract, computed last so every earlier mutation is reflected: who produced
+    # the verdict, why it was changed, and whether the page has anything to show.
+    display_keys = {'position': 'verdict', 'technology': 'maturity', 'industry': 'verdict',
+                    'operations': 'verdict', 'chain': 'verdict'}
+    for name, part in sections.items():
+        key = display_keys[name]
+        model_value = (data.get(name) or {}).get(key) if isinstance(data.get(name), dict) else None
+        codes = sorted({c['reason'] for c in (*qualifier_checks, *consistency_checks)
+                        if str(c.get('path', '')).startswith(name + '.')
+                        and c.get('action') in ('uncertain', 'annotated', 'omitted', 'neutralized')})
+        part['reason_codes'] = codes
+        part['annotations'] = section_notes.get(name, [])
+        part['evidence_counts'] = _evidence_counts(part, name)
+        part['verdict_source'] = ('unavailable' if not part['evidence_counts']['sources']
+                                  else 'model' if part.get(key) == model_value else 'policy')
+        part['state'] = ('undetermined' if part.get(key) in (None, '', 'unclear')
+                         else 'judged_annotated' if codes else 'judged')
     return {"headline": '' if bad_headline or temporal_sections or rejected_sections or scope_issues else headline, "position": position, "technology": technology, "industry": industry,
             "operations": rings["operations"], "chain": rings["chain"],
             "gaps": gaps, "qualifier_checks": qualifier_checks, "consistency_checks": consistency_checks,

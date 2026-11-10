@@ -64,14 +64,15 @@ export function Points({ title, points, tone, empty }: { title: string; points: 
 }
 
 /** A labelled 1-D scale with an animated marker; "unclear" leaves the track empty. */
-export function Scale({ scale, value, labels }: { scale: ScaleKey; value: string; labels: Record<string, string> }) {
+export function Scale({ scale, value, labels, state }: { scale: ScaleKey; value: string; labels: Record<string, string>; state?: string }) {
   const steps = SCALES[scale] as readonly string[];
   const index = steps.indexOf(value);
   const tone = verdictTone(scale, value);
+  const emptyNote = state === 'undetermined' ? '未定：本栏未形成结论' : state === 'absent' ? '尚无内容' : '尚无当前判断';
   return <div className={`jd-scale ${index < 0 ? "unclear" : ""}`} role="group" aria-label={labels[value] ?? value}>
     <div className="jd-scale-track">
       {steps.map((s, i) => <ChartHint key={s} title="判断档位" value={labels[s] ?? s}
-        meta={i === index ? "● 当前判断" : index < 0 ? "尚无当前判断" : `当前判断：${labels[value] ?? value}`}
+        meta={i === index ? "● 当前判断" : index < 0 ? emptyNote : `当前判断：${labels[value] ?? value}`}
         note={`${SCALE_NOTES[scale]}这是定性档位，不是分数或百分比。`}><span className={i === index ? `on ${tone}` : ""} /></ChartHint>)}
       {index >= 0 && <motion.i className={`jd-scale-marker ${tone}`} initial={{ left: "50%", opacity: 0 }}
         animate={{ left: `${(index + .5) / steps.length * 100}%`, opacity: 1 }} transition={{ duration: .7, ease: EASE }} />}
@@ -80,21 +81,63 @@ export function Scale({ scale, value, labels }: { scale: ScaleKey; value: string
   </div>;
 }
 
+/** Why a section shows what it shows. Never a substitute for the model's own words. */
+const STATUS_TEXT: Record<string, string> = {
+  judged_annotated: '部分表述未通过核验，已在文中标注',
+  undetermined: '本栏未形成结论',
+  stale: '本轮未更新，显示历史版本',
+  absent: '尚无内容，材料未到达',
+};
+const REASON_TEXT: Record<string, string> = {
+  recognition_not_supported: '收入确认未核实',
+  order_scope_ambiguous: '订单口径待核实',
+  summary_verdict_downgraded: '结论已降级',
+  summary_verdict_conflict: '方向表述冲突',
+  section_without_supported_items: '无有效依据',
+  never_published: '从未发布',
+  sources_withdrawn: '依据已撤回',
+  financial_period_missing: '财务概括缺报告期',
+};
+
+export function StatusLine({ state, reasons }: { state?: string; reasons?: string[] }) {
+  const text = state ? STATUS_TEXT[state] : '';
+  if (!text) return null;
+  const detail = (reasons ?? []).map((r) => REASON_TEXT[r]).filter(Boolean).slice(0, 2);
+  return <p className="jd-status">{text}{detail.length ? `（${detail.join('、')}）` : ''}</p>;
+}
+
+/** Keeps the model's sentence and marks the span that could not be verified in place. */
+export function AnnotatedSummary({ text, notes, className = "jd-summary" }: {
+  text: string; notes?: { span: string; code: string; original?: string }[]; className?: string;
+}) {
+  const note = (notes ?? []).find((n) => n.span && text.includes(n.span));
+  if (!note) return <p className={className}>{text}</p>;
+  const head = text.slice(0, text.indexOf(note.span));
+  const tail = text.slice(text.indexOf(note.span) + note.span.length);
+  return <p className={className}>{head}
+    <mark className="jd-annot" title={`原文为「${note.original || note.span}」，未找到同口径依据，已改为中性表述`}>{note.span}</mark>
+    {tail}</p>;
+}
+
 function ChangeIf({ items }: { items: string[] }) {
   if (!items.length) return null;
   return <div className="jd-points"><h4>什么信息会改变判断</h4><ul>{items.map((t, i) => <li key={i}>{t}</li>)}</ul></div>;
 }
 
 /** Shared body: scale on top, for/against side by side, then what would change it. */
-export function JudgmentBody({ scale, verdict, labels, summary, pro, con, proTitle = "支持这个判断", conTitle = "相反的依据", changeIf = [], children, compact = false }: {
+export function JudgmentBody({ scale, verdict, labels, summary, pro, con, proTitle = "支持这个判断", conTitle = "相反的依据", changeIf = [], state, reasons, annotations, children, compact = false }: {
   scale: ScaleKey; verdict: string; labels: Record<string, string>; summary?: string;
-  pro: InsightPoint[]; con: InsightPoint[]; proTitle?: string; conTitle?: string; changeIf?: string[]; children?: ReactNode; compact?: boolean;
+  pro: InsightPoint[]; con: InsightPoint[]; proTitle?: string; conTitle?: string; changeIf?: string[];
+  state?: string; reasons?: string[]; annotations?: { span: string; code: string; original?: string }[];
+  children?: ReactNode; compact?: boolean;
 }) {
+  const status = <StatusLine state={state} reasons={reasons} />;
   return <div className={`jd-body${compact ? ' jd-body-compact' : ''}`}>
-    <div className={`jd-overview${summary || children ? ' jd-overview-split' : ''}`}>
-    <Scale scale={scale} value={verdict} labels={labels} />
-    {(summary || children) && <div className="jd-reading">
-    {summary && <p className="jd-summary">{summary}</p>}
+    <div className={`jd-overview${summary || children || state ? ' jd-overview-split' : ''}`}>
+    <Scale scale={scale} value={verdict} labels={labels} state={state} />
+    {(summary || children || state) && <div className="jd-reading">
+    {summary && <AnnotatedSummary text={summary} notes={annotations} />}
+    {status}
     {children}
     </div>}
     </div>
@@ -118,12 +161,14 @@ function Provenance({ view }: { view: InsightView }) {
   return <span className="jd-meta">{record?.origin?.producer ? `${record.origin.producer} 写回` : "AI"} 交叉分析 · 依据 {record.total} 条 · {new Date(record.generated_at).toLocaleDateString("zh-CN")}{record.status === "stale" || record.dependency?.status === "stale" ? " · 依据已变化，保留旧版待更新" : ""}</span>;
 }
 
+/** Remaining lead time and the events that shorten it. Names alone are not a comparison. */
 /** 竞争对手: where the company stands against its peers. */
 export function PositionJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const p = view?.record?.analysis.position;
   if (!view?.record || !p) return null;
   return <Block card title="竞争位置判断" note={<Provenance view={view} />} action={<Confidence value={p.confidence} />}>
-    <JudgmentBody compact={compact} scale="position" verdict={p.verdict} labels={view.labels.position} pro={p.for} con={p.against} changeIf={p.change_if}>
+    <JudgmentBody compact={compact} scale="position" verdict={p.verdict} labels={view.labels.position} pro={p.for} con={p.against} changeIf={p.change_if}
+      state={p.state} reasons={p.reason_codes} annotations={p.annotations}>
       {p.peers.length > 0 && <p className="jd-peers"><span>对比对象</span>{p.peers.map((n) => <b key={n}>{n}</b>)}</p>}
     </JudgmentBody>
   </Block>;
@@ -134,7 +179,8 @@ export function ChainJudgment({view}:{view:InsightView}) {
   const d=view.record?.analysis.chain;
   if(!d)return null;
   return <Block card title="产业链影响判断" note={<Provenance view={view}/>} action={<Confidence value={d.confidence}/>}>
-    <JudgmentBody compact scale="chain" verdict={d.verdict} labels={view.labels.chain} summary={d.summary} pro={d.for} con={d.against} changeIf={d.change_if}/>
+    <JudgmentBody compact scale="chain" verdict={d.verdict} labels={view.labels.chain} summary={d.summary} pro={d.for} con={d.against} changeIf={d.change_if}
+      state={d.state} reasons={d.reason_codes} annotations={d.annotations}/>
   </Block>;
 }
 
@@ -143,7 +189,8 @@ export function IndustryJudgment({ view, compact = false }: { view: InsightView 
   if (!view?.record || !d) return null;
   return <Block card title="行业发展判断" note={<Provenance view={view} />} action={<Confidence value={d.confidence} />}>
     <JudgmentBody compact={compact} scale="industry" verdict={d.verdict} labels={view.labels.industry} summary={d.summary}
-      pro={d.drivers} con={d.headwinds} proTitle="驱动" conTitle="阻力" />
+      pro={d.drivers} con={d.headwinds} proTitle="驱动" conTitle="阻力"
+      state={d.state} reasons={d.reason_codes} annotations={d.annotations} />
   </Block>;
 }
 

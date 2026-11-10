@@ -258,15 +258,23 @@ export interface InsightRef {
 }
 export interface InsightPoint { text: string; refs: InsightRef[] }
 export type Confidence = "high" | "medium" | "low";
+/** Presentation contract shared by every judgment section: who decided, why it changed, and what the page can show. */
+export interface InsightDisplay {
+  verdict_source?: 'model' | 'policy' | 'unavailable';
+  reason_codes?: string[];
+  annotations?: { span: string; code: string; original?: string }[];
+  evidence_counts?: { support: number; oppose: number; sources: number };
+  state?: 'judged' | 'judged_annotated' | 'undetermined' | 'stale' | 'absent';
+}
 export interface InsightAnalysis {
   headline: string;
-  position: { verdict: string; confidence: Confidence; summary: string; peers: string[]; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] };
-  technology: { route: string; maturity: string; consensus: string; confidence: Confidence; summary: string;
+  position: InsightDisplay & { verdict: string; confidence: Confidence; summary: string; peers: string[]; for: InsightPoint[]; against: InsightPoint[]; change_if: string[] };
+  technology: InsightDisplay & { route: string; maturity: string; consensus: string; confidence: Confidence; summary: string;
     academic: InsightPoint[]; industry: InsightPoint[]; risks: InsightPoint[] };
-  industry: { verdict: string; confidence: Confidence; summary: string; drivers: InsightPoint[]; headwinds: InsightPoint[] };
+  industry: InsightDisplay & { verdict: string; confidence: Confidence; summary: string; drivers: InsightPoint[]; headwinds: InsightPoint[] };
   /** 公司本体 and 产业链 judgments; absent on analyses made before they were added. */
-  operations?: RingJudgment;
-  chain?: RingJudgment;
+  operations?: InsightDisplay & RingJudgment;
+  chain?: InsightDisplay & RingJudgment;
   gaps: string[];
   cited: InsightRef[];
 }

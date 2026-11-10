@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { useSearchParams } from 'react-router-dom';
 import { api, type InsightPoint, type InsightView, type ProjectDetail, type RaceView, type TrackCell, type TrackView } from "./api";
 import { Skeleton } from "./frame";
-import { Confidence, Points, Scale, TechMap, verdictTone, type ScaleKey } from "./judgment";
+import { AnnotatedSummary, Confidence, Points, Scale, StatusLine, TechMap, verdictTone, type ScaleKey } from "./judgment";
 import { EASE } from "./motion";
 import { formatAmount, useAsync } from "./ui";
 import { financeSeries, periodKind } from "./financeAnalysis";
@@ -36,7 +36,8 @@ const QUESTIONS: Question[] = [
     proTitle: "驱动", conTitle: "阻力", goto: "industry", more: "行业环境" },
 ];
 
-interface Judged { verdict: string; summary: string; confidence?: "high" | "medium" | "low"; change_if: string[]; pros: InsightPoint[]; cons: InsightPoint[] }
+interface Judged { verdict: string; summary: string; confidence?: "high" | "medium" | "low"; change_if: string[]; pros: InsightPoint[]; cons: InsightPoint[];
+  state?: string; reasons?: string[]; annotations?: { span: string; code: string; original?: string }[] }
 
 function judged(view: InsightView | null, q: Question): Judged | null {
   const part = view?.record?.analysis?.[q.key] as Record<string, unknown> | undefined;
@@ -46,7 +47,14 @@ function judged(view: InsightView | null, q: Question): Judged | null {
     verdict: String(q.key === "technology" ? part.maturity : part.verdict), summary: String(part.summary),
     confidence: part.confidence as Judged["confidence"], change_if: (part.change_if as string[] | undefined) ?? [],
     pros: q.key === "technology" ? [...list("academic"), ...list("industry")] : list(q.pro), cons: q.con.flatMap(list),
+    state: part.state as string | undefined, reasons: part.reason_codes as string[] | undefined,
+    annotations: part.annotations as Judged["annotations"],
   };
+}
+
+/** Content state of one section, independent of whether it has text to read. */
+function sectionState(view: InsightView | null, q: Question): string | undefined {
+  return (view?.record?.analysis?.[q.key] as Record<string, unknown> | undefined)?.state as string | undefined;
 }
 
 export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
@@ -116,9 +124,13 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
       {!analysis && !running && !error && onStart && canGenerate && view?.model_ready && <p className="rj-empty">
         <button className="link small" onClick={onStart}>开始 AI 交叉分析 →</button></p>}
       {q && !j && <section role="tabpanel" className="qa-panel" aria-label={q.label}>
-        {selectSummary(detail, summarySubject[q.key])
-          ? <><PageSummary key={q.key} detail={detail} subject={summarySubject[q.key]}/><p className="muted small">已整理信息，综合判断尚未形成。</p></>
-          : <p role="status" className="muted">{error ? '判断暂时无法读取，请稍后刷新。' : stateText[view?.section_states?.[q.key] ?? ''] || (running ? '正在分析本栏材料，完成后自动显示。' : '本栏尚未形成判断。')}</p>}
+        {sectionState(view, q) === 'absent'
+          ? <p role="status" className="muted">尚无内容：本栏材料尚未到达。</p>
+          : sectionState(view, q) === 'undetermined'
+            ? <p role="status" className="muted">本栏未形成结论：没有通过核验的依据。</p>
+            : selectSummary(detail, summarySubject[q.key])
+              ? <><PageSummary key={q.key} detail={detail} subject={summarySubject[q.key]}/><p className="muted small">已整理信息，综合判断尚未形成。</p></>
+              : <p role="status" className="muted">{error ? '判断暂时无法读取，请稍后刷新。' : stateText[view?.section_states?.[q.key] ?? ''] || (running ? '正在分析本栏材料，完成后自动显示。' : '本栏尚未形成判断。')}</p>}
         {q.goto && <button className="link small" onClick={()=>goto(q.goto!)}>查看{q.more} →</button>}
       </section>}
       {q && j && <motion.div key={q.key} role="tabpanel" className={`qa-panel qa-panel-${q.key}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
@@ -128,8 +140,9 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
           <aside className="qa-card" aria-label="结论">
             <span className="qa-ask">{q.ask}</span>
             <strong className={`qa-verdict ${verdictTone(q.scale, j.verdict)}`}>{labelsFor(q)[j.verdict] ?? j.verdict}</strong>
-            <Scale scale={q.scale} value={j.verdict} labels={labelsFor(q)} />
-            <p className="qa-summary">{j.summary}</p>
+            <Scale scale={q.scale} value={j.verdict} labels={labelsFor(q)} state={j.state} />
+            <AnnotatedSummary text={j.summary} notes={j.annotations} className="qa-summary" />
+            <StatusLine state={j.state} reasons={j.reasons} />
             <dl className="qa-facts">
               <div><dt>把握</dt><dd><Confidence value={j.confidence} /></dd></div>
               <div><dt>依据</dt><dd>支持 {j.pros.length} · 相反 {j.cons.length}</dd></div>

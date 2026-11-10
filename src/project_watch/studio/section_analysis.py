@@ -488,20 +488,34 @@ def project(store, pid, baseline):
                               generated_at=record['generated_at'], status=status)
             if permitted:
                 analysis[name] = deepcopy(record['analysis'])
+                if status != 'current':
+                    analysis[name]['state'] = 'stale'
                 citations(analysis[name], record['numbered'])
                 _strip_codes(analysis[name])
             else:
-                analysis[name] = records[0]['empty_analysis'][name]
+                analysis[name] = dict(records[0]['empty_analysis'][name])
+                analysis[name].update(state='absent', verdict_source='unavailable',
+                                      reason_codes=['sources_withdrawn'])
         # Mixed-version sections do not gain a newly generated global headline. Gaps come from the
         # published sections only; an older whole-analysis record's gaps belong to another snapshot.
         analysis['headline'] = ''
         analysis['gaps'] = list(dict.fromkeys(g for name in SECTIONS if name in meta
                                               for g in (analysis.get(name) or {}).get('gaps') or []))
         for name in SECTIONS:
-            if name not in meta and baseline and baseline.get('analysis', {}).get(name):
+            if name in meta:
+                # State was already decided per record above; a withdrawn section stays absent.
+                continue
+            if baseline and baseline.get('analysis', {}).get(name):
                 analysis[name] = deepcopy(analysis[name])
                 citations(analysis[name], baseline.get('numbered', {}))
                 meta[name] = dict(status='retained', generated_at=baseline.get('generated_at'), version_id=baseline.get('id'))
+                analysis[name]['state'] = 'stale'
+            else:
+                # Nothing was ever published for this section. Say so explicitly: the empty
+                # template is indistinguishable from a model that chose "undetermined".
+                analysis[name] = dict(analysis.get(name) or records[0]['empty_analysis'][name])
+                analysis[name].update(state='absent', verdict_source='unavailable',
+                                      reason_codes=['never_published'])
         analysis['cited'] = list(references.values())
         result.update(analysis=analysis, section_versions=meta, generated_at=max(r['generated_at'] for r in records),
                       total=len(references), counts=source_counts, model='saved-material-analysis',
