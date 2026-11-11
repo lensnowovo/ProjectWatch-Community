@@ -131,12 +131,17 @@ def test_silent_socket_can_be_cancelled_without_a_retry(tmp_path, monkeypatch, s
         if stop == 'explicit':
             assert cancel_patient_requests() == 1
         else:
+            # The job was taken away (the watchdog held it). An expired lease alone
+            # no longer abandons a sent request: it may still answer after sleep.
             with closing(store._connect()) as db, db:
-                db.execute("UPDATE studio_jobs SET lease_until='2000-01-01' WHERE id=?", (job['id'],))
+                db.execute("UPDATE studio_jobs SET status='failed',lease_token='',lease_until=NULL WHERE id=?",
+                           (job['id'],))
         thread.join(5)
         assert not thread.is_alive()
         assert errors == ['connection_failed']
         if stop == 'lost_owner':
+            with closing(store._connect()) as db, db:
+                db.execute("UPDATE studio_jobs SET status='queued',retry_after=NULL WHERE id=?", (job['id'],))
             execution = JobExecution(store, store.claim())
         with pytest.raises(HttpError, match='unknown_not_resent'):
             execution.call('model', 'silent', lambda: pytest.fail('resent cancelled request'), timeout=None)

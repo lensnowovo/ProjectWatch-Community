@@ -76,9 +76,13 @@ def _round(store, db, collect):
     analysis = _analysis_for(db, collect['id'])
     sections = None
     if analysis:
-        publication = JobExecution(store, {'id': analysis}).read_checkpoint(analyze_job.PUBLICATION) or {}
-        outcomes = publication.get('sections') or {}
-        considered = {k: o for k, o in outcomes.items() if o.get('status') not in ('missing', 'unchanged')}
+        execution = JobExecution(store, {'id': analysis})
+        publication = execution.read_checkpoint(analyze_job.PUBLICATION) or {}
+        # The frozen scope decides retired sections, whichever checkpoint wrote the outcomes.
+        retired = (execution.read_checkpoint(analyze_job.SECTION_SCOPE) or {}).get('retired', ())
+        outcomes = {k: ({'status': 'retired'} if k in retired else o)
+                    for k, o in (publication.get('sections') or {}).items()}
+        considered = {k: o for k, o in outcomes.items() if o.get('status') not in ('missing', 'unchanged', 'retired')}
         sections = {'published': len(publication.get('published') or []), 'considered': len(considered),
                     'unchanged': sorted(k for k, o in outcomes.items() if o.get('status') == 'unchanged'),
                     'dropped_points': sum(len(o.get('dropped') or []) for o in considered.values()),

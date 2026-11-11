@@ -201,3 +201,165 @@ def test_a_stale_paper_topic_sits_a_round_out(env, monkeypatch):
     assert frozen['public_plan']['resting_paper_queries'] == ['synthetic noisy topic']
     sent_topics = ' '.join(queries(sent, 'api.openalex.org'))
     assert 'synthetic antibody conjugate' in sent_topics and 'synthetic noisy topic' not in sent_topics
+
+
+def test_resume_keeps_frozen_manifest_after_scheduler_upgrade(env, monkeypatch):
+    pipeline, pid, sent, _ = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    job = pipeline.store.claim()
+    pipeline.run(job)
+    execution = JobExecution(pipeline.store, job)
+    before = execution.read_checkpoint(collect_job.STAGE)
+    calls = len(sent)
+    monkeypatch.setattr(collect_job, 'build_collection_plan',
+                        lambda **kwargs: pytest.fail('saved round must not be replanned'))
+    pipeline.run(job)
+    assert execution.read_checkpoint(collect_job.STAGE) == before
+    assert len(sent) == calls
+
+
+def test_resume_rejects_manifest_bound_to_different_inputs(env):
+    pipeline, pid, _sent, _ = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    job = pipeline.store.claim()
+    pipeline.run(job)
+    execution = JobExecution(pipeline.store, job)
+    saved = execution.read_checkpoint(collect_job.STAGE)
+    saved['plan']['binding'] = 'wrong-binding'
+    execution.checkpoint_chunked(collect_job.STAGE, saved)
+    with pytest.raises(ValueError, match='frozen inputs'):
+        pipeline.run(job)
+
+
+def test_a_blocked_news_feed_fails_only_its_own_source(env):
+    pipeline, pid, sent, _ = env
+    original = pipeline.http_factory(None).transport
+
+    def send(method, url, headers, body, timeout):
+        if urlsplit(url).hostname == 'www.bing.com':  # an HTML challenge page instead of RSS
+            sent.append(url)
+            return Response(200, {}, b'<html><body>verify you are human</body></html>')
+        return original(method, url, headers, body, timeout)
+    pipeline.http_factory = lambda _: Http(send)
+    execution = run_collect(pipeline, pid)
+    result = execution.read_checkpoint(collect_job.RESULT)
+    assert result['status'] == 'partial'
+    assert any(r['source'] == 'search' and r['reason'] == 'invalid_feed' for r in result['not_collected'])
+    assert research_sources(pipeline.store, pid, 'patent')['total'] == 3  # the other sources still ran
+
+
+def test_a_round_that_raises_still_waits_for_its_cadence(env, monkeypatch):
+    from project_watch.studio import signals
+
+    pipeline, pid, sent, _ = env
+    # The crash comes after the paid and public requests of this round were sent.
+    monkeypatch.setattr(collect_job, 'read_bodies', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('synthetic crash')))
+    started = now()
+    pipeline.store.enqueue(pid, 'collect', input_version='scheduled:' + now())
+    job = pipeline.store.claim()
+    with pytest.raises(RuntimeError):
+        pipeline.run(job)
+    pipeline.store.finish(job['id'], error='内部错误：RuntimeError', lease_token=job['lease_token'])
+    assert sent and pipeline.store.get_state('external_attempt:' + pid) >= started
+    # The scheduler does not start a replacement round with a fresh request journal.
+    assert pid not in signals.due_external(pipeline.store, pipeline.monitor, 24)
+
+
+def _offline(pipeline, sent, hosts=None):
+    from project_watch.studio.http import HttpError
+
+    original = pipeline.http_factory(None).transport
+
+    def send(method, url, headers, body, timeout):
+        if hosts is None or urlsplit(url).hostname in hosts:
+            sent.append(url)
+            raise HttpError('connection_not_sent', transport_phase='connect_or_headers', failure_kind='transport_error')
+        return original(method, url, headers, body, timeout)
+    pipeline.http_factory = lambda _: Http(send)
+    return original
+
+
+def test_an_offline_round_waits_in_the_same_job_and_finishes_when_back_online(env):
+    from project_watch.studio.http import HttpError
+
+    pipeline, pid, sent, _ = env
+    original = _offline(pipeline, sent)
+    pipeline.store.enqueue(pid, 'collect', input_version='scheduled:' + now())
+    job = pipeline.store.claim()
+    with pytest.raises(HttpError, match='connection_not_sent'):
+        pipeline.run(job)
+    assert pipeline.store.defer_recoverable(job, 'connection_not_sent')  # as the worker does
+    with pipeline.store._connect() as db:
+        row = db.execute('SELECT status,retry_after FROM studio_jobs WHERE id=?', (job['id'],)).fetchone()
+        assert row['status'] == 'queued' and row['retry_after'] > now()
+        assert not db.execute("SELECT 1 FROM studio_job_calls WHERE job_id=? AND status NOT IN ('not_sent')",
+                              (job['id'],)).fetchone()  # nothing was transmitted or counted
+        assert not db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND kind='analyze'", (pid,)).fetchone()
+    # Back online: the same job resumes on its frozen plan, not a new round a cycle later.
+    pipeline.http_factory = lambda _: Http(original)
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_provider_backoff SET retry_after='2000-01-01'")
+        db.execute("UPDATE studio_jobs SET retry_after=NULL WHERE id=?", (job['id'],))
+    resumed = pipeline.store.claim()
+    assert resumed['id'] == job['id']
+    pipeline.run(resumed)
+    result = JobExecution(pipeline.store, resumed).read_checkpoint(collect_job.RESULT)
+    assert result['status'] in ('complete', 'partial') and not result['outcomes'].get('failed')
+    assert research_sources(pipeline.store, pid, 'patent')['total'] == 3
+    with pipeline.store._connect() as db:
+        assert db.execute("SELECT input_version FROM studio_jobs WHERE project_id=? AND kind='analyze'",
+                          (pid,)).fetchone()[0] == 'collect:' + job['id']
+
+
+def test_one_unreachable_provider_does_not_hold_back_the_rest(env):
+    pipeline, pid, sent, _ = env
+    _offline(pipeline, sent, hosts={'api.openalex.org'})
+    execution = run_collect(pipeline, pid)
+    result = execution.read_checkpoint(collect_job.RESULT)
+    assert result['status'] == 'partial'
+    reasons = {r['reason'] for r in result['not_collected'] if r['source'].startswith('openalex')}
+    assert reasons and reasons <= {'connection_not_sent', 'provider_backoff'}
+    assert research_sources(pipeline.store, pid, 'patent')['total'] == 3
+    with pipeline.store._connect() as db:
+        assert db.execute("SELECT 1 FROM studio_jobs WHERE project_id=? AND kind='analyze'", (pid,)).fetchone()
+
+
+def test_a_pass_that_only_meets_connection_backoffs_still_waits(env):
+    """Another project's round (or this job after a yield) left only backoffs to meet."""
+    from project_watch.studio import spine
+    from project_watch.studio.http import HttpError
+
+    pipeline, pid, sent, _ = env
+    _offline(pipeline, sent)
+    pipeline.store.enqueue(pid, 'collect', input_version='scheduled:' + now())
+    job = pipeline.store.claim()
+    with pytest.raises(HttpError):
+        pipeline.run(job)
+    assert pipeline.store.defer_recoverable(job, 'connection_not_sent')
+    with pipeline.store._connect() as db:
+        assert db.execute('SELECT stage FROM studio_jobs WHERE id=?', (job['id'],)).fetchone()[0].startswith('网络连接未建立')
+    attempts = len(sent)
+    # The owner's 更新 resumes the waiting round now and clears only connection backoffs.
+    assert spine.request_round(pipeline.store, pid, 'manual')['id'] == job['id']
+    with pipeline.store._connect() as db:
+        assert db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (job['id'],)).fetchone()[0] is None
+        assert not db.execute('SELECT 1 FROM studio_provider_backoff WHERE status=0').fetchone()
+        # Re-create the shared backoffs another project's offline round would leave behind.
+        db.execute("INSERT INTO studio_provider_backoff SELECT DISTINCT provider,'2999-01-01',0 FROM studio_job_calls")
+    again = pipeline.store.claim()
+    assert again['id'] == job['id']
+    with pytest.raises(HttpError, match='connection_not_sent'):
+        pipeline.run(again)  # every unit met a backoff; still offline, not a failed round
+    assert len(sent) == attempts  # backoffs sent nothing
+
+
+def test_a_long_outage_settles_the_round_as_before(env, monkeypatch):
+    from project_watch.studio import collection_runner
+
+    pipeline, pid, sent, _ = env
+    _offline(pipeline, sent)
+    monkeypatch.setattr(collection_runner, 'OFFLINE_WAIT_HOURS', -1)
+    execution = run_collect(pipeline, pid)
+    result = execution.read_checkpoint(collect_job.RESULT)
+    assert result['status'] == 'failed'
+    assert {r['reason'] for r in result['not_collected']} <= {'connection_not_sent', 'provider_backoff'}

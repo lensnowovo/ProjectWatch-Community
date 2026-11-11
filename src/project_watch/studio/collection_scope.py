@@ -147,6 +147,8 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
         if sponsors or terms or scoped_sources & {'clinical_sponsor', 'clinical_term', 'cn_regulatory'}:
             add('cn_regulatory', 'trial', [name], historical=True)
 
+    # The lifecycle scheduler owns cadence. Include every due relation, without
+    # a per-round quota or an extra rotation that wakes not-yet-due objects.
     for watch in watches:
         if watch.get('visibility') != 'public' or watch.get('status') == 'retired':
             continue

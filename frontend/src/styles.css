@@ -3184,9 +3184,27 @@ g[role="button"]:hover > .bar { fill: color-mix(in srgb, var(--brass) 70%, var(-
   .jd-body-compact .jd-overview-split { grid-template-columns: minmax(0, 1fr); gap: var(--s4); }
 }
 .jd-summary { margin: 0; font-size: 15px; line-height: 1.75; color: var(--ink-2); max-width: 52em; }
+/* Neutralised span: kept in the sentence, marked so it is not read as a verified fact. */
+.jd-annot { background: none; color: inherit; border-bottom: 1px dashed var(--brass); padding-bottom: 1px; cursor: help; }
+.jd-annot:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; border-radius: 2px; }
+.jd-status { margin: 6px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.jd-competition { margin-top: var(--s4); display: grid; gap: var(--s4); min-width: 0; overflow-wrap: anywhere; }
+.jd-window { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 15px; line-height: 1.75; color: var(--ink-2); }
+.jd-window span:first-child { font-size: 12px; color: var(--muted); }
+.jd-window-basis { flex-basis: 100%; color: var(--ink-2); font-size: 15px; }
+.jd-signals h4 { margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.jd-signals ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.jd-signals li { display: grid; gap: 4px; font-size: 15px; line-height: 1.75; color: var(--ink-2); }
+.jd-signals li b { font-weight: 600; color: var(--ink); }
+.jd-signals .jd-impact { color: var(--muted); }
 .jd-meta { font-size: 12px; color: var(--muted); }
 .jd-label { font-size: 12px; color: var(--muted); }
-.jd-conf { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); }
+.jd-conf { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.jd-card > .tf-block-head { flex-wrap: wrap; }
+.jd-card > .tf-block-head > .tf-action { flex-shrink: 0; }
+@media (max-width: 640px) {
+  .jd-card > .tf-block-head > .tf-note { order: 3; flex-basis: 100%; }
+}
 .jd-conf i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
 .jd-conf i.on { background: var(--brass); }
 .jd-conf i:last-of-type { margin-right: 4px; }
@@ -3956,3 +3974,13 @@ a.jd-ref:hover, button.jd-ref:hover { color: var(--brass); border-color: var(--b
 .fa-chart { width: 100%; min-width: 0; margin-top: var(--s2); }
 .fa-bars { width: 100%; height: auto; display: block; }
 .qa-tiles .rj-tile.empty:not(:disabled){cursor:pointer}
+
+.qa-company-progress { background:var(--paper); border:1px solid var(--line); border-radius:var(--card-r,12px); padding:var(--s5) var(--s6); }
+.qa-company-progress .page-reading { margin:0; padding:0; border:0; }
+.qa-tiles .rj-tile-summary { align-self:start; max-height:4.8em; }
+
+/* Reference folds already carry the card title. */
+.ref-card > .card > .card-head > h3 { display:none; }
+.ref-card > .card > .card-head:not(:has(> :not(h3))) { display:none; }
+.qa-company-changes { margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--line); }
+.qa-company-changes > h3 { margin: 0 0 var(--s3); font-size: 15px; }

@@ -493,3 +493,18 @@ def test_review_permission_failure_is_not_a_page_model_failure():
     reviewer = _reviewer(None, None, None, revoked)
     with pytest.raises(RuntimeError, match='permission or snapshot changed'):
         reviewer.prepare({'fields': {'trials.sentences.0.summary': 'claim'}, 'analysis': {'trials': {'refs': ['S1']}}, 'evidence': {'S1': {'context': 'evidence'}}, 'page_contract': 'contract'})
+
+def test_new_jobs_skip_the_retired_page_but_started_ones_keep_their_list(host):
+    from project_watch.studio.http import Response
+
+    research, _, _ = host
+    execution = research.execution
+    fresh = pages._default_targets(execution, internal=False)
+    assert fresh == tuple(p for p in pages.PUBLIC_CONTRACTS if p != 'operations')  # order is part of the request
+    assert pages._default_targets(execution, internal=True) == tuple(pages.INTERNAL_CONTRACTS)
+    # A job that already sent a request before saving its list keeps the original, full list.
+    execution.call('model', 'synthetic-earlier-draft', lambda: Response(200, {}, b'{}'))
+    assert pages._default_targets(execution, internal=False) == tuple(pages.PUBLIC_CONTRACTS)
+    # A saved list always wins.
+    execution.checkpoint(pages.PROTOCOL + ':targets', ['trials', 'operations'])
+    assert pages._default_targets(execution, internal=False) == ('trials', 'operations')

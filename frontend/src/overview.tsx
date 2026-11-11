@@ -1,3 +1,4 @@
+import { INTERNAL_INFORMATION_VISIBLE } from "./internalInformation";
 import { QuestionsCard } from "./monitor";
 import { PositionLine } from "./race";
 import { useState, type ReactNode } from "react";
@@ -236,7 +237,7 @@ export function CompanyPortrait({ detail }: { detail: ProjectDetail }) {
         {(cutoff || source) && <span className="muted small">{[cutoff && `资料截至 ${cutoff}`, source].filter(Boolean).join(" · ")}</span>}
       </div>
       {intro ? <p className="basic-intro portrait-intro">{intro}</p>
-        : <p className="portrait-intro muted">还没有公司介绍。上传 BP 或年报，或补充公开档案。</p>}
+        : <p className="portrait-intro muted">公司介绍将在公开资料整理后显示。</p>}
       {summary && <div className="portrait-summary-wrap">
         <p className={`portrait-summary ${more ? "open" : ""}`}>{summary}</p>
         {summary.length > 140 && <button className="link small" onClick={() => setMore((v) => !v)}>{more ? "收起" : "阅读全文"}</button>}
@@ -296,7 +297,7 @@ export function CompanyBasics({ detail, onRefreshDossier, refreshing, part = "al
   if (part === "highlights") return highlights.length ? <ol className="profile-highlights" aria-label="亮点">
     {highlights.slice(0, 3).map((h, i) => <li key={i}><span className="hl-no">{String(i + 1).padStart(2, "0")}</span><p>{h.text} <RefChips refs={h.refs} compact /></p></li>)}
   </ol> : null;
-  if (part === "main") return nothing ? <p className="muted small">上传 BP 或补充公开档案。</p>
+  if (part === "main") return nothing ? <p className="muted small">公开档案整理后显示。</p>
     : <div className="basic-main">{mainRows.map((r) => <BasicRow key={r.title} {...r} limit={4} />)}</div>;
   if (part === "side") return nothing ? null : <>{sideRows.map((r) => <BasicRow key={r.title} {...r} limit={3} />)}</>;
   if (part === "milestones") return <MilestoneLine detail={detail} />;
@@ -323,7 +324,7 @@ export function CompanyBasics({ detail, onRefreshDossier, refreshing, part = "al
         {highlights.slice(0, 3).map((h, i) => <li key={i}><span className="hl-no">{String(i + 1).padStart(2, "0")}</span><p>{h.text}</p><RefChips refs={h.refs} /></li>)}
       </ol>}
       {nothing ? (
-        <p className="muted small">上传 BP 或补充公开档案。</p>
+        <p className="muted small">公开档案整理后显示。</p>
       ) : (
         <div className="basic-editorial">
           <div className="basic-main">{mainRows.map((r) => <BasicRow key={r.title} {...r} limit={4} />)}</div>
@@ -473,7 +474,7 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
       <PageSummary detail={detail} subject="brief" fallback={brief?.summary?.trim() && brief.dependency?.status !== "stale"
         ? {text:brief.summary, refs:[], date:brief.updated_at} : undefined} />
 
-      {missingOCR.length > 0 && (
+      {INTERNAL_INFORMATION_VISIBLE && missingOCR.length > 0 && (
         <div className="overview-attention">
           <div><strong>{missingOCR.length} 份资料未完整识别</strong><p>未识别页面不参与分析，已读内容保留。</p></div>
           <button className="btn" onClick={() => goto("documents")}>处理资料 →</button>
@@ -483,18 +484,13 @@ export function CurrentBrief({ detail, goto, onReload, aside }: {
       {deep.loading && !deep.data
         ? <div className="rj-tiles qa-tiles">{[1, 2, 3, 4, 5].map((n) => <div key={n} className="rj-tile empty"><Skeleton lines={2} /></div>)}</div>
         : <QuestionAnalysis detail={detail} view={deep.data ?? null} error={deep.error} goto={goto}
-          onStart={() => api.refresh(project.id, "insight").then(() => deep.reload(), () => deep.reload())} />}
+          onStart={() => api.refresh(project.id, "insight").then(() => deep.reload(), () => deep.reload())}
+          changes={<><TopChanges changes={changes} loading={feed.loading && !feed.data} projectId={project.id}
+            projectName={project.short_name || project.name} /><ErrorNote error={feed.error} /></>} />}
 
       <Columns
-        main={<Block title="本期最重要的变化" note="近 60 天 · 内部与公开信息"
-          action={<button className="link small" onClick={() => goto("external")}>全部公司动态 →</button>}>
-          <TopChanges changes={changes} loading={feed.loading && !feed.data} projectId={project.id} projectName={project.short_name || project.name} />
-          <ErrorNote error={feed.error} />
-        </Block>}
-        side={<>
-          {watch.length > 0 && <Block title="接下来关注"><ul className="side-list">{watch.slice(0, 3).map((w, i) => <li key={i}>{w.text}</li>)}</ul></Block>}
-          {aside}
-        </>} />
+        main={aside}
+        side={watch.length > 0 && <Block title="接下来关注"><ul className="side-list">{watch.slice(0, 3).map((w, i) => <li key={i}>{w.text}</li>)}</ul></Block>} />
 
       <Reference items={[
         { key: "evidence", title: "判断依据", note: record ? `引用 ${record.analysis.cited.length} 条` : undefined,

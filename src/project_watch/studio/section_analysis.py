@@ -23,20 +23,31 @@ def blocked_outcome(exc):
     return dict(status='blocked', issues=[code])
 # Classification labels are judgments, not quotable facts; the consistency review covers them.
 LABELS = frozenset({'verdict', 'confidence', 'maturity', 'consensus'})
+# Validated against the section itself (a peer must be a listed competitor), not against a quote.
+STRUCTURAL = frozenset({'peer'})
+# A window is one number plus the sentence that justifies it: an unsupported basis drops the
+# whole value instead of failing the section that carries it.
+WINDOWS = frozenset({'competition_window'})
 # General industry outline (chain.outline): stated as AI industry knowledge, never quote-checked.
 OUTLINE = 'outline'
 
 
 def _reviewed(path: str) -> bool:
     parts = path.split('.')
-    return parts[-1] not in LABELS and OUTLINE not in parts
+    return parts[-1] not in LABELS and parts[-1] not in STRUCTURAL and OUTLINE not in parts
 # Evidence lists: each item stands on its own refs and can be dropped without the section.
-ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds', 'peers', 'change_if', 'gaps'})
+ITEMS = frozenset({'for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds', 'peers', 'change_if', 'gaps',
+                   'competition_signals'})
 
 
 def _item(path):
     parts = path.split('.')
     return (parts[1], int(parts[2])) if len(parts) >= 3 and parts[1] in ITEMS and parts[2].isdigit() else None
+
+
+def _window(path):
+    parts = path.split('.')
+    return parts[1] if len(parts) >= 2 and parts[1] in WINDOWS else None
 
 
 def _inherent(conflict):
@@ -48,7 +59,7 @@ def _inherent(conflict):
 
 def trim(part, issues, *, keep_blocked=False):
     """Drop the list items an issue names; any issue on the summary or route blocks the section."""
-    drop, blocking = set(), []
+    drop, windows, blocking = set(), set(), []
     for issue in issues:
         paths = issue.get('fields') or [issue.get('field')] if isinstance(issue, dict) else [None]
         for path in paths:
@@ -56,6 +67,9 @@ def trim(part, issues, *, keep_blocked=False):
                 blocking.append(issue)
             elif _item(path):
                 drop.add(_item(path))
+            elif _window(path):
+                # Losing the basis loses the number with it; the section stands on its evidence.
+                windows.add(_window(path))
             elif _reviewed(path):
                 blocking.append(issue)
     if blocking and not keep_blocked:
@@ -63,8 +77,13 @@ def trim(part, issues, *, keep_blocked=False):
     trimmed, dropped = deepcopy(part), []
     for key in {k for k, _ in drop}:
         values = trimmed.get(key) or []
-        dropped.extend(v.get('text') if isinstance(v, dict) else v for i, v in enumerate(values) if (key, i) in drop)
+        dropped.extend((v.get('text') or v.get('event') or v.get('peer')) if isinstance(v, dict) else v
+                       for i, v in enumerate(values) if (key, i) in drop)
         trimmed[key] = [v for i, v in enumerate(values) if (key, i) not in drop]
+    for key in windows:
+        basis = (trimmed.pop(key, None) or {}).get('basis')
+        if basis:
+            dropped.append(basis)
     if dropped:
         trimmed['confidence'] = 'low'
     return trimmed, dropped, blocking
@@ -160,6 +179,34 @@ def _checked(execution, reviewer, guard, batch, refs, sources, *, split=True):
         return [dict(code='invalid_review', field=fields[0] if len(fields) == 1 else None, fields=fields)], [key]
 
 
+def _sanitize(part, sources):
+    """Drop cited codes that do not exist, and the items left with none.
+
+    A single invented code used to reject the whole section. Here it costs the item that
+    named it: everything else in the section was cited from material that exists.
+    """
+    if not isinstance(part, dict):
+        return part, 0
+    cleaned, lost = deepcopy(part), 0
+    for key in ITEMS & set(cleaned):
+        values = cleaned.get(key)
+        if not isinstance(values, list):
+            continue
+        kept = []
+        for value in values:
+            if not isinstance(value, dict) or 'refs' not in value:
+                kept.append(value)
+                continue
+            codes = [c for c in value.get('refs') or [] if isinstance(c, str) and c in sources]
+            if len(codes) != len(value.get('refs') or []):
+                lost += 1
+            if not codes:
+                continue  # an uncited item is not evidence for anything
+            kept.append({**value, 'refs': codes})
+        cleaned[key] = kept
+    return cleaned, lost
+
+
 def evaluate(execution, raw, sources, reviewer, guard, retained=None):
     """Review fixed fields and cross-section dependencies; unsupported items are dropped.
 
@@ -204,6 +251,7 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
                 valid[name] = raw[name] = unit['raw']
             continue
         try:
+            part, _uncited = _sanitize(part, sources)
             refs = _refs(part, sources)
             if not refs:
                 raise ValueError('section has no evidence')
@@ -488,20 +536,34 @@ def project(store, pid, baseline):
                               generated_at=record['generated_at'], status=status)
             if permitted:
                 analysis[name] = deepcopy(record['analysis'])
+                if status != 'current':
+                    analysis[name]['state'] = 'stale'
                 citations(analysis[name], record['numbered'])
                 _strip_codes(analysis[name])
             else:
-                analysis[name] = records[0]['empty_analysis'][name]
+                analysis[name] = dict(records[0]['empty_analysis'][name])
+                analysis[name].update(state='absent', verdict_source='unavailable',
+                                      reason_codes=['sources_withdrawn'])
         # Mixed-version sections do not gain a newly generated global headline. Gaps come from the
         # published sections only; an older whole-analysis record's gaps belong to another snapshot.
         analysis['headline'] = ''
         analysis['gaps'] = list(dict.fromkeys(g for name in SECTIONS if name in meta
                                               for g in (analysis.get(name) or {}).get('gaps') or []))
         for name in SECTIONS:
-            if name not in meta and baseline and baseline.get('analysis', {}).get(name):
+            if name in meta:
+                # State was already decided per record above; a withdrawn section stays absent.
+                continue
+            if baseline and baseline.get('analysis', {}).get(name):
                 analysis[name] = deepcopy(analysis[name])
                 citations(analysis[name], baseline.get('numbered', {}))
                 meta[name] = dict(status='retained', generated_at=baseline.get('generated_at'), version_id=baseline.get('id'))
+                analysis[name]['state'] = 'stale'
+            else:
+                # Nothing was ever published for this section. Say so explicitly: the empty
+                # template is indistinguishable from a model that chose "undetermined".
+                analysis[name] = dict(analysis.get(name) or records[0]['empty_analysis'][name])
+                analysis[name].update(state='absent', verdict_source='unavailable',
+                                      reason_codes=['never_published'])
         analysis['cited'] = list(references.values())
         result.update(analysis=analysis, section_versions=meta, generated_at=max(r['generated_at'] for r in records),
                       total=len(references), counts=source_counts, model='saved-material-analysis',

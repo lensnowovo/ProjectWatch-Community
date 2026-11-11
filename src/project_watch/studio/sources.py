@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
+from project_watch.feeds import FeedError
 from project_watch.studio import publication_dates
 from project_watch.studio.http import Http, HttpError
 from project_watch.studio.settings import RegistryConfig, SearchConfig
@@ -335,10 +336,12 @@ class Collectors:
         for source in sources:
             try:
                 items.extend(source())
-            except (HttpError, ValueError) as exc:
-                # A held provider already refused definitively (quota/key); another
-                # source may still answer. Unknown outcomes and budgets still stop.
-                if isinstance(exc, HttpError) and exc.code in ('request_outcome_unknown', 'request_budget'):
+            except (HttpError, FeedError, ValueError) as exc:
+                # A held provider already refused definitively (quota/key), or a feed
+                # answered without usable items; another source may still answer.
+                # Unknown outcomes and budgets still stop.
+                if isinstance(exc, HttpError) and exc.code in ('request_outcome_unknown', 'request_budget',
+                                                                'project_paused', 'project_not_consented'):
                     raise
                 errors.append(exc)
         if errors and not items:

@@ -53,11 +53,18 @@ SYSTEM = """你是一级市场投资研究员。根据给定的编号素材，�
   summary 的整体方向须与该板块 verdict 一致；无法判断时写明缺口，不同时声称“整体向好/承压/平稳”。
 - 缺口写在对应板块里："gaps": ["本板块缺少的关键信息"]，每板块不超过 3 条。只写素材里确实没有的信息；
   素材中已有的数据（例如已披露的半年报数字）不能写成“未披露”。
+- 竞品：竞争的判断只写能落到具体公司上的事。"competition_signals" 每条写「谁做了什么 → 对我们意味着什么」，
+  只有事件而说不出影响的，不要写进来；最多 3 条，竞品名须出现在 peers 里，且须有出处。
+  "competition_window.months" 只有在「本公司预计完成某节点的时间」与「竞品完成该节点的时间」都能从素材确定时才填，
+  且 basis 里要写出这两个时间（例如“我们 2027 年获批，竞品 2025 年已获批”）；否则 months 写 null，
+  只在 basis 用一句话说明依据（例如“3 家同类已进入注册临床”）。宁可只给定性，不要编造月数。
 
 输出 JSON：
 {"headline": "一句话总判断（≤60字）",
  "position": {"verdict": "leading|ahead|on_par|behind|lagging|unclear", "confidence": "high|medium|low",
    "summary": "≤80字", "peers": ["对比的公司名"],
+   "competition_window": {"months": null, "basis": "≤60字，说明按什么算"},
+   "competition_signals": [{"peer": "竞品名", "event": "≤50字，含时间", "impact": "≤60字，对我们意味着什么", "refs": ["C2"]}],
    "for": [{"text": "支持该判断的依据", "refs": ["N1"]}], "against": [{"text": "相反的依据", "refs": ["C2"]}],
    "change_if": ["什么新信息会改变判断"]},
  "technology": {"route": "押注的技术路线（≤30字）", "maturity": "frontier|advanced|mainstream|mature|dated|unclear",
@@ -271,12 +278,17 @@ def gather(pipeline, project_id: str, llm=None) -> dict:
         peers = [p["name"] for p in peers_for(project, store.get_plan(project_id),
                                               pipeline.relationships.view(project_id, include_internal=False),
                                               public_objects=pipeline.objects.page(project_id, include_internal=False, current_aliases_only=True))]
+        peers_failed = False
     except Exception:  # Peer discovery is optional context; the analysis still runs without it.
-        peers = []
+        # A failed read is not an empty list. Saying "尚未确认" here told the model there
+        # were no known competitors and invited it to invent some.
+        peers, peers_failed = [], True
 
+    peer_note = ('（名单读取失败，本次未提供；不要据此推断竞争格局）' if peers_failed
+                 else '、'.join(peers) if peers else '（尚未确认，请从素材中识别并说明依据）')
     lines = [_source_line(code, entry) for code, entry in numbered.items()]
     text = (f"被监控公司：{project.get('legal_name') or project.get('name')}（{project.get('industry') or '行业未注明'}，{project.get('stage') or '阶段未注明'}）\n"
-            f"已知竞争对手：{'、'.join(peers) if peers else '（尚未确认，请从素材中识别并说明依据）'}\n"
+            f"已知竞争对手：{peer_note}\n"
             f"素材统计：" + "，".join(f"{SOURCE_LABEL[p]} {n}" for p, n in counts(numbered).items()) + "\n\n" + "\n".join(lines))
     # Include provenance and identity, not just prose. A corrected source or a
     # newly resolved peer must invalidate the old judgment as well.
@@ -308,6 +320,68 @@ def _points(values, numbered: dict, limit: int = 6) -> list[dict]:
         if refs:  # A judgment without a valid source is not kept.
             out.append({"text": _clip(strip_inline_codes(value["text"]), 240), "refs": refs[:4]})
     return out[:limit]
+
+
+_LIST_KEYS = ('for', 'against', 'academic', 'industry', 'risks', 'drivers', 'headwinds')
+
+
+def _evidence_counts(part: dict, name: str) -> dict:
+    """Support/oppose counts and distinct sources; zeros are shown, not omitted."""
+    if name == 'technology':
+        support = len(part.get('academic') or []) + len(part.get('industry') or [])
+        oppose = len(part.get('risks') or [])
+    elif name == 'industry':
+        support, oppose = len(part.get('drivers') or []), len(part.get('headwinds') or [])
+    else:
+        support, oppose = len(part.get('for') or []), len(part.get('against') or [])
+    # Competition signals are neither support nor opposition, but their citations are
+    # sources this section rests on, so they belong in the source count.
+    refs = {r.get('code') for key in (*_LIST_KEYS, 'competition_signals')
+            for item in (part.get(key) or [])
+            if isinstance(item, dict) for r in item.get('refs') or []}
+    return {'support': support, 'oppose': oppose, 'sources': len(refs)}
+
+
+def _competition(raw: dict, numbered: dict) -> dict:
+    """Competitor signals, not a competitor directory.
+
+    Each entry must say what it changes for us and be grounded in material that names it; a
+    name on its own is not research. `competition_status` separates "there was nothing to say"
+    from "the model skipped it", the failure mode that silently emptied `peers`.
+    """
+    out: dict = {}
+    window = raw.get('competition_window')
+    if isinstance(window, dict):
+        basis = _clip(strip_inline_codes(window.get('basis') or ''), 80)
+        # Legacy model-provided month counts are not independently verified. Keep the
+        # reviewed qualitative basis until structured, comparable endpoints exist.
+        # Do not change the generation prompt/request identity of ongoing jobs.
+        if basis:
+            out['competition_window'] = {'basis': basis}
+    signals = []
+    listed = raw.get('competition_signals')
+    for item in listed if isinstance(listed, list) else []:
+        if not isinstance(item, dict):
+            continue
+        peer = _clip(strip_inline_codes(item.get('peer') or ''), 30)
+        event = _clip(strip_inline_codes(item.get('event') or ''), 60)
+        impact = _clip(strip_inline_codes(item.get('impact') or ''), 80)
+        codes = [str(code).strip().upper() for code in item.get('refs') or [] if str(code).strip()]
+        refs = [r for r in (_ref(code, numbered) for code in codes) if r]
+        # The peer must appear in this entry's own sources. Membership in `peers` is not enough:
+        # that list is model output too, so it would let a name borrow another company's citation.
+        grounded = any(peer and peer in str((numbered.get(code) or {}).get('context')
+                                            or (numbered.get(code) or {}).get('text') or '')
+                       for code in codes)
+        if not (peer and event and impact and refs and grounded):
+            continue
+        signals.append({'peer': peer, 'event': event, 'impact': impact, 'refs': refs[:3]})
+    if signals:
+        out['competition_signals'] = signals[:3]
+    present = 'competition_signals' in raw or 'competition_window' in raw
+    out['competition_status'] = ('produced' if (out.get('competition_window') or out.get('competition_signals'))
+                                 else 'empty' if present else 'omitted')
+    return out
 
 
 def _confidence(value, points: list[dict]) -> str:
@@ -363,8 +437,14 @@ def _qualifier_text(text: str, entries: dict) -> tuple[str, list[dict]]:
                 if entry.get('context_kind') == '原文摘录' or entry.get('kind') == 'internal'
                 for s in re.split(_CLAUSE_BREAK, _source_prose(entry)))
             if not supported:
+                # Neutralised in place, not discarded. The clause asserts a negative accounting
+                # fact that no source supports, so it cannot stand as written; but dropping it used
+                # to hold the whole section's verdict hostage to one unverified caveat.
+                original = _RECOGNITION.search(clause)
                 clause = _RECOGNITION.sub('收入确认情况待核实', clause)
-                issues.append({'reason': 'recognition_not_supported', 'action': 'uncertain'})
+                issues.append({'reason': 'recognition_not_supported', 'action': 'annotated',
+                               'span': '收入确认情况待核实', 'original': original.group()[:60],
+                               'leading': index == 0})
         # Already qualified mixed/intent orders are not collapsed into firm orders.
         matches = list(_ORDERS.finditer(clause))
         for match in reversed(matches):
@@ -621,27 +701,42 @@ def normalize(data: dict, numbered: dict) -> dict:
     uncertain_sections = set()
     rejected_sections = set()
     dropped_sections = set()
+    section_notes: dict[str, list] = {}
 
     def qualify(text, entries, path):
         corrected, checks = _qualifier_text(str(text or ''), entries)
+        # A neutralised clause is kept only where it is a caveat. At the head of a summary, or
+        # anywhere outside one, it is the premise the direction rests on: the section still falls
+        # with it, as before. This is what keeps "由于没有确认收入，公司承压" from surviving.
+        checks = [{**c, 'action': 'uncertain'}
+                  if c.get('action') == 'annotated' and (not path.endswith('.summary') or c.get('leading'))
+                  else c for c in checks]
         qualifier_checks.extend({'path': path, **check} for check in checks)
-        return corrected, {c['reason'] for c in checks if c['action'] == 'uncertain'}
+        return (corrected,
+                {c['reason'] for c in checks if c['action'] == 'uncertain'},
+                [{'span': c['span'], 'code': c['reason'], 'original': c.get('original', '')}
+                 for c in checks if c['action'] == 'annotated' and c.get('span')])
 
     def section(name: str, lists: tuple[str, ...]) -> dict:
         raw = data.get(name) if isinstance(data.get(name), dict) else {}
         out = {key: _points(raw.get(key), numbered) for key in lists}
+        notes: list[dict] = []
         for key in lists:
             valid = [p for p in out[key] if not _undated_zero_income(p['text'])]
             if len(valid) != len(out[key]):
                 temporal_sections.add(name)
             out[key] = []
             for index, point in enumerate(valid):
-                text, uncertain = qualify(point['text'], {r['code']: numbered[r['code']] for r in point['refs']},
-                                          f'{name}.{key}.{index}')
+                text, uncertain, annotated = qualify(
+                    point['text'], {r['code']: numbered[r['code']] for r in point['refs']},
+                    f'{name}.{key}.{index}')
+                notes.extend(annotated)
                 if uncertain:
-                    # The unsafe point is dropped; the section falls with it only if the summary rests on it.
+                    # The unsafe point is dropped; the section falls with it only if the summary
+                    # rests on it — that is, only when it appears before any contrast marker.
                     dropped_sections.add(name)
-                    if any(_PREMISE[reason].search(str(raw.get('summary') or '')) for reason in uncertain
+                    premise = re.split(r'(?:但|然而|不过|；|;)', str(raw.get('summary') or ''))[0]
+                    if any(_PREMISE[reason].search(premise) for reason in uncertain
                            if reason in _PREMISE):
                         uncertain_sections.add(name)
                         rejected_sections.add(name)
@@ -649,7 +744,8 @@ def normalize(data: dict, numbered: dict) -> dict:
                     out[key].append({**point, 'text': text})
         evidence = [p for key in lists for p in out[key]]
         entries = {r['code']: numbered[r['code']] for p in evidence for r in p['refs']}
-        summary, uncertain = qualify(raw.get('summary'), entries, f'{name}.summary')
+        summary, uncertain, annotated = qualify(raw.get('summary'), entries, f'{name}.summary')
+        notes.extend(annotated)
         if uncertain:
             uncertain_sections.add(name)
         summary = _clip(summary, 160) if evidence else ''
@@ -660,12 +756,14 @@ def normalize(data: dict, numbered: dict) -> dict:
         out["confidence"] = _confidence(raw.get("confidence"), evidence)
         # Reviewed with the section: a gap the evidence already answers is dropped before this point.
         out["gaps"] = [_clip(strip_inline_codes(g), 120) for g in raw.get("gaps") or [] if isinstance(g, str) and g.strip()][:3]
+        section_notes[name] = list({(n['code'], n['span']): n for n in notes}.values())
         return out, raw, evidence
 
     position, raw, evidence = section("position", ("for", "against"))
     position["verdict"] = raw.get("verdict") if raw.get("verdict") in VERDICTS["position"] and evidence else "unclear"
     position["peers"] = [_clip(p, 30) for p in (raw.get("peers") or []) if isinstance(p, str) and p.strip()][:8]
     position["change_if"] = [_clip(t, 120) for t in (raw.get("change_if") or []) if isinstance(t, str) and t.strip()][:4]
+    position.update(_competition(raw, numbered))
 
     technology, raw, evidence = section("technology", ("academic", "industry", "risks"))
     technology["route"] = _clip(raw.get("route"), 60)
@@ -713,20 +811,20 @@ def normalize(data: dict, numbered: dict) -> dict:
     operations = rings['operations']
     if _operating_direction_conflicts(operations):
         operations.update(verdict='unclear', confidence='low',
-                          summary='经营方向表述不一致，暂无法判断整体经营趋势。')
+                          summary='经营方向表述不一致，本栏未形成结论。')
         consistency_checks.append({'path': 'operations.summary',
                                    'reason': 'summary_verdict_conflict', 'action': 'neutralized'})
     cited = sorted({r["code"] for part in (position, technology, industry, *rings.values()) for v in part.values()
                     if isinstance(v, list) for p in v if isinstance(p, dict) for r in p.get("refs", [])},
                    key=lambda c: (c[0], int(c[1:]) if c[1:].isdigit() else 0))
-    headline, _ = qualify(data.get('headline'), {code: numbered[code] for code in cited}, 'headline')
+    headline, _, _ = qualify(data.get('headline'), {code: numbered[code] for code in cited}, 'headline')
     headline, headline_checks = _period_headline(headline)
     consistency_checks.extend(headline_checks)
     bad_headline = _undated_zero_income(headline)
     gaps = [_clip(t, 120) for t in (data.get("gaps") or []) if isinstance(t, str) and t.strip()][:8]
     if temporal_sections or bad_headline:
         gaps = ["零收入表述缺少报告期，未用于当前判断；需区分历史收入与后续销售、收入确认。", *gaps][:8]
-    if any(c['action'] == 'uncertain' for c in qualifier_checks):
+    if any(c['action'] in ('uncertain', 'annotated') for c in qualifier_checks):
         gaps = ["部分收入确认或订单表述缺少同口径依据，已标为待核实；不等于业务尚未发生。", *gaps][:8]
     if any(c['reason'] == 'financial_period_missing' for c in consistency_checks):
         gaps = ['标题已省略缺少报告期的财务概括；分期依据保留，不据报道日期推定当前表现。', *gaps][:8]
@@ -749,6 +847,23 @@ def normalize(data: dict, numbered: dict) -> dict:
         gaps = ['逐期收入数字与连续趋势结论矛盾，未采用该判断；需核对各年期间、单位及升降。', *gaps][:8]
     if any(i['code'] == 'financial_comparison_period_mismatch' for i in scope_issues):
         gaps = ['财务比较期间不一致，未采用同期比较；保留原始期间，待同口径依据后再判断。', *gaps][:8]
+    # Presentation contract, computed last so every earlier mutation is reflected: who produced
+    # the verdict, why it was changed, and whether the page has anything to show.
+    display_keys = {'position': 'verdict', 'technology': 'maturity', 'industry': 'verdict',
+                    'operations': 'verdict', 'chain': 'verdict'}
+    for name, part in sections.items():
+        key = display_keys[name]
+        model_value = (data.get(name) or {}).get(key) if isinstance(data.get(name), dict) else None
+        codes = sorted({c['reason'] for c in (*qualifier_checks, *consistency_checks)
+                        if str(c.get('path', '')).startswith(name + '.')
+                        and c.get('action') in ('uncertain', 'annotated', 'omitted', 'neutralized')})
+        part['reason_codes'] = codes
+        part['annotations'] = section_notes.get(name, [])
+        part['evidence_counts'] = _evidence_counts(part, name)
+        part['verdict_source'] = ('unavailable' if not part['evidence_counts']['sources']
+                                  else 'model' if part.get(key) == model_value else 'policy')
+        part['state'] = ('undetermined' if part.get(key) in (None, '', 'unclear')
+                         else 'judged_annotated' if codes else 'judged')
     return {"headline": '' if bad_headline or temporal_sections or rejected_sections or scope_issues else headline, "position": position, "technology": technology, "industry": industry,
             "operations": rings["operations"], "chain": rings["chain"],
             "gaps": gaps, "qualifier_checks": qualifier_checks, "consistency_checks": consistency_checks,

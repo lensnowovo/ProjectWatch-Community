@@ -3,11 +3,9 @@ import { useState, type ReactNode } from "react";
 import { useSearchParams } from 'react-router-dom';
 import { api, type InsightPoint, type InsightView, type ProjectDetail, type RaceView, type TrackCell, type TrackView } from "./api";
 import { Skeleton } from "./frame";
-import { Confidence, Points, Scale, TechMap, verdictTone, type ScaleKey } from "./judgment";
+import { AnnotatedSummary, Confidence, Points, Scale, StatusLine, TechMap, verdictTone, type ScaleKey } from "./judgment";
 import { EASE } from "./motion";
-import { formatAmount, useAsync } from "./ui";
-import { financeSeries, periodKind } from "./financeAnalysis";
-import { comparePeriods } from "./metrics";
+import { useAsync } from "./ui";
 import { ChartHint } from "./chartHint";
 import { SignalListDrawer } from "./signalList";
 import { raceRevision, useRace } from './raceData';
@@ -21,11 +19,11 @@ import { TrackSignalRows } from './TrackSignalRows';
  * made for that question beside its conclusion card, with every cited point available on demand.
  */
 type Key = "operations" | "position" | "technology" | "chain" | "industry";
-type Tab = "competition" | "industry" | "numbers" | "overview" | "tech-progress" | "chain";
+type Tab = "external" | "competition" | "industry" | "numbers" | "overview" | "tech-progress" | "chain";
 interface Question { key: Key; label: string; ask: string; scale: ScaleKey; pro: string; con: string[]; proTitle: string; conTitle: string; goto?: Tab; more?: string }
 const QUESTIONS: Question[] = [
-  { key: "operations", label: "公司本体", ask: "公司自己的经营与资金撑得住吗？", scale: "operations", pro: "for", con: ["against"],
-    proTitle: "支持这个判断", conTitle: "相反的依据", goto: "numbers", more: "经营情况" },
+  { key: "operations", label: "公司进展", ask: "公司近期推进到了哪里？", scale: "operations", pro: "for", con: ["against"],
+    proTitle: "支持这个判断", conTitle: "相反的依据", goto: "external", more: "公司动态" },
   { key: "position", label: "竞争位置", ask: "和同路线对手比，领先还是落后？", scale: "position", pro: "for", con: ["against"],
     proTitle: "支持这个判断", conTitle: "相反的依据", goto: "competition", more: "竞争对手" },
   { key: "technology", label: "技术路线", ask: "押注的技术路线是前沿还是趋于落后？", scale: "maturity", pro: "academic", con: ["risks"],
@@ -36,7 +34,8 @@ const QUESTIONS: Question[] = [
     proTitle: "驱动", conTitle: "阻力", goto: "industry", more: "行业环境" },
 ];
 
-interface Judged { verdict: string; summary: string; confidence?: "high" | "medium" | "low"; change_if: string[]; pros: InsightPoint[]; cons: InsightPoint[] }
+interface Judged { verdict: string; summary: string; confidence?: "high" | "medium" | "low"; change_if: string[]; pros: InsightPoint[]; cons: InsightPoint[];
+  state?: string; reasons?: string[]; annotations?: { span: string; code: string; original?: string }[] }
 
 function judged(view: InsightView | null, q: Question): Judged | null {
   const part = view?.record?.analysis?.[q.key] as Record<string, unknown> | undefined;
@@ -46,14 +45,16 @@ function judged(view: InsightView | null, q: Question): Judged | null {
     verdict: String(q.key === "technology" ? part.maturity : part.verdict), summary: String(part.summary),
     confidence: part.confidence as Judged["confidence"], change_if: (part.change_if as string[] | undefined) ?? [],
     pros: q.key === "technology" ? [...list("academic"), ...list("industry")] : list(q.pro), cons: q.con.flatMap(list),
+    state: part.state as string | undefined, reasons: part.reason_codes as string[] | undefined,
+    annotations: part.annotations as Judged["annotations"],
   };
 }
 
-export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
-  detail: ProjectDetail; view: InsightView | null; error: unknown; onStart?: () => void; goto: (tab: Tab) => void;
+/** `changes`: the period's most important company events, read under the 公司进展 narrative they support. */
+export function QuestionAnalysis({ detail, view, error, onStart, goto, changes }: {
+  detail: ProjectDetail; view: InsightView | null; error: unknown; onStart?: () => void; goto: (tab: Tab) => void; changes?: ReactNode;
 }) {
   const analysis = view?.record?.analysis;
-  const first = QUESTIONS.find((q) => judged(view, q))?.key ?? null;
   const [params, setParams] = useSearchParams();
   const chosen = params.get('question') as Key | null;
   const all = params.get('evidence') === 'open';
@@ -63,7 +64,8 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
     return next;
   }, { replace: true, preventScrollReset: true });
   const selected = QUESTIONS.find(q => q.key === chosen);
-  const active = selected?.key ?? first ?? "operations";
+  // 公司进展 is a reading, not a verdict: open on it so the period's key events come first.
+  const active = selected?.key ?? "operations";
   const running = !!view?.job && ["queued", "running"].includes(view.job.status);
   const analysisJob = detail.jobs?.find(j => j.id === view?.job?.id);
   const analysisState = analysisJob ? jobWorkState(detail, analysisJob) : view?.job ? jobWorkState(detail, {
@@ -71,7 +73,7 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   }) : "idle";
   const q = QUESTIONS.find((x) => x.key === active);
   const j = q ? judged(view, q) : null;
-  const summarySubject: Record<Key, SummarySubject> = {operations:'operations',position:'competition',technology:'technology',chain:'chain',industry:'industry'};
+  const summarySubject: Record<Key, SummarySubject> = {operations:'external',position:'competition',technology:'technology',chain:'chain',industry:'industry'};
 
   const stateText: Record<string, string> = {
     insufficient: '现有证据不足以支持本栏结论', missing_draft: '本轮未形成可复核的判断',
@@ -83,6 +85,7 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
   const canGenerate = view?.generation_available === true;
   if (view?.generation_available === false && !analysis && !QUESTIONS.some(x => selectSummary(detail, summarySubject[x.key]))) return <section className="qa" aria-label="判断记录">
     <p className="muted small">暂无判断记录。可由外部 Agent 写入，或启用分析扩展。</p>
+    {changes && <div className="qa-company-changes"><h3>近 60 天重要变化</h3>{changes}</div>}
   </section>;
   return (
     <section className="qa" aria-label="按问题看判断">
@@ -91,22 +94,22 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
         {analysis && <span className="muted small">当前显示上次结果</span>}
       </div>}
       {view?.section_states && Object.keys(view.section_states).length > 0 && <p className="muted small" role="status">
-        本轮已发布 {Object.values(view.section_states).filter(state => state === 'published').length}/5 项判断
+        本轮已发布 {Object.entries(view.section_states).filter(([key,state]) => key !== 'operations' && state === 'published').length}/4 项判断
       </p>}
       <div className="rj-tiles qa-tiles" role="tablist" aria-label="选择问题">
         {QUESTIONS.map((x, i) => {
-          const v = judged(view, x);
+          const v = x.key === "operations" ? null : judged(view, x);
           const tileCopy = selectSummary(detail, summarySubject[x.key]);
           return <button key={x.key} role="tab" aria-selected={active === x.key}
-            className={`rj-tile${active === x.key ? " on" : ""}${v ? "" : " empty"}`} onClick={() => setParams(previous => {
+            className={`rj-tile${active === x.key ? " on" : ""}${v || (x.key === "operations" && tileCopy) ? "" : " empty"}`} onClick={() => setParams(previous => {
               const next = new URLSearchParams(previous); next.set('question', x.key); next.delete('evidence'); return next;
             }, { replace: true, preventScrollReset: true })}>
             <span className="rj-tile-head"><span className="rj-tile-label"><span className="qa-no">0{i + 1}</span>{x.label}</span>
-              <span className={`rj-verdict ${v ? verdictTone(x.scale, v.verdict) : ""}`}>{v ? labelsFor(x)[v.verdict] ?? v.verdict : "—"}</span></span>
-            <span className="rj-tile-summary">{v ? v.summary : tileCopy?.text || (error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : view?.evidence_gaps?.[x.key] || (stateText[view?.section_states?.[x.key] ?? ''] ?? (analysis ? "本轮未发布本栏判断" : "还没有 AI 交叉分析")))}</span>
+              {x.key !== "operations" && <span className={`rj-verdict ${v ? verdictTone(x.scale, v.verdict) : ""}`}>{v ? labelsFor(x)[v.verdict] ?? v.verdict : "—"}</span>}</span>
+            <span className="rj-tile-summary">{v ? v.summary : tileCopy?.text || (x.key === "operations" ? "公司进展摘要整理后显示" : error ? "判断暂时无法读取" : !canGenerate ? "暂无判断记录" : view?.evidence_gaps?.[x.key] || (stateText[view?.section_states?.[x.key] ?? ''] ?? (analysis ? "本轮未发布本栏判断" : "还没有 AI 交叉分析")))}</span>
             <span className="rj-tile-foot">{v ? `支持 ${v.pros.length} · 相反 ${v.cons.length}` : ""}
               {v && view?.section_states?.[x.key] && !['published','retained'].includes(view.section_states[x.key]) && <small>{stateText[view.section_states[x.key]]} · 显示上次判断</small>}
-              {view?.record?.section_versions?.[x.key] && <small> · {view.record.section_versions[x.key].generated_at?.slice(0, 10)}
+              {x.key !== "operations" && view?.record?.section_versions?.[x.key] && <small> · {view.record.section_versions[x.key].generated_at?.slice(0, 10)}
                 {view.record.section_versions[x.key].status !== 'current' ? ' · 待更新' : ''}</small>}
             </span>
             <i className="rj-tile-glow" aria-hidden="true" />
@@ -115,21 +118,27 @@ export function QuestionAnalysis({ detail, view, error, onStart, goto }: {
       </div>
       {!analysis && !running && !error && onStart && canGenerate && view?.model_ready && <p className="rj-empty">
         <button className="link small" onClick={onStart}>开始 AI 交叉分析 →</button></p>}
-      {q && !j && <section role="tabpanel" className="qa-panel" aria-label={q.label}>
+      {q?.key === "operations" && <motion.section key="company-progress" role="tabpanel" aria-label="公司进展" className="qa-panel qa-company-progress" initial={{opacity:0,y:6}} animate={{opacity:1,y:0}} transition={{duration:.28,ease:EASE}}>
+        <PageSummary detail={detail} subject="external" />
+        {changes && <div className="qa-company-changes"><h3>近 60 天重要变化</h3>{changes}</div>}
+        <div className="qa-actions"><button className="link small" onClick={() => goto("external")}>查看公司动态 →</button></div>
+      </motion.section>}
+      {q && q.key !== "operations" && !j && <section role="tabpanel" className="qa-panel" aria-label={q.label}>
         {selectSummary(detail, summarySubject[q.key])
           ? <><PageSummary key={q.key} detail={detail} subject={summarySubject[q.key]}/><p className="muted small">已整理信息，综合判断尚未形成。</p></>
           : <p role="status" className="muted">{error ? '判断暂时无法读取，请稍后刷新。' : stateText[view?.section_states?.[q.key] ?? ''] || (running ? '正在分析本栏材料，完成后自动显示。' : '本栏尚未形成判断。')}</p>}
         {q.goto && <button className="link small" onClick={()=>goto(q.goto!)}>查看{q.more} →</button>}
       </section>}
-      {q && j && <motion.div key={q.key} role="tabpanel" className={`qa-panel qa-panel-${q.key}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+      {q && q.key !== "operations" && j && <motion.div key={q.key} role="tabpanel" className={`qa-panel qa-panel-${q.key}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
         transition={{ duration: .28, ease: EASE }}>
         <div className="qa-main">
           <div className="qa-visual"><QuestionVisual q={q.key} detail={detail} view={view!} /></div>
           <aside className="qa-card" aria-label="结论">
             <span className="qa-ask">{q.ask}</span>
             <strong className={`qa-verdict ${verdictTone(q.scale, j.verdict)}`}>{labelsFor(q)[j.verdict] ?? j.verdict}</strong>
-            <Scale scale={q.scale} value={j.verdict} labels={labelsFor(q)} />
-            <p className="qa-summary">{j.summary}</p>
+            <Scale scale={q.scale} value={j.verdict} labels={labelsFor(q)} state={j.state} />
+            <AnnotatedSummary text={j.summary} notes={j.annotations} className="qa-summary" />
+            <StatusLine state={j.state} reasons={j.reasons} />
             <dl className="qa-facts">
               <div><dt>把握</dt><dd><Confidence value={j.confidence} /></dd></div>
               <div><dt>依据</dt><dd>支持 {j.pros.length} · 相反 {j.cons.length}</dd></div>
@@ -160,7 +169,6 @@ function QuestionVisual({ q, detail, view }: { q: Key; detail: ProjectDetail; vi
   }
   if (q === "position") return <PeerStages projectId={detail.project.id} revision={raceRevision(detail)} view={view} />;
   if (q === "technology") return <Technology view={view} />;
-  if (q === "operations") return <Operations detail={detail} />;
   if (q === "chain") return <Chain detail={detail} />;
   return <Track projectId={detail.project.id} revision={detail.project.last_external_at ?? ""} />;
 }
@@ -172,72 +180,6 @@ function Visual({ title, note, children, reading }: { title: string; note?: Reac
     <div className="qa-figure-body">{children}</div>
     {!!reading?.length && <ul className="qa-reading">{reading.map((r, i) => <li key={i}>{r}</li>)}</ul>}
   </figure>;
-}
-
-// ------------------------------------------------------------------ 公司本体
-
-const money = (v: number, unit: string) => {
-  const a = unit === "元" ? formatAmount(v / 10000, "万元") : formatAmount(v, unit);
-  return `${a.value} ${a.unit}`.trim();
-};
-
-function Operations({ detail }: { detail: ProjectDetail }) {
-  const all = financeSeries(detail);
-  const pick = (...names: string[]) => all.find((s) => names.includes(s.name));
-  const candidates = [
-    { key: "rev", label: "营业收入", s: pick("营业收入", "营业总收入") },
-    { key: "rd", label: "研发投入", s: pick("研发投入", "研发费用") },
-    { key: "np", label: "净利润", s: pick("净利润") },
-  ].filter((x) => x.s && x.s.points.some((p) => p.basis === "actual"));
-  // A shared axis requires a shared unit and currency. Do not visually compare unlike amounts.
-  const series = candidates.filter((x) => x.s!.unit === candidates[0]?.s?.unit && x.s!.currency === candidates[0]?.s?.currency);
-  const available = [...new Set(series.flatMap((x) => x.s!.points.filter((p) => p.basis === "actual").map((p) => p.period)))].sort(comparePeriods);
-  const periods = available.filter((p) => periodKind(p) === periodKind(available[available.length - 1])).slice(-5);
-  const k = detail.finance?.key_numbers;
-  const months = k?.runway?.months != null ? Math.floor(k.runway.months) : null;
-  if (!periods.length && !k?.cash) return <Visual title="经营与资金"><p className="muted small">还没有可比的财务数字；上传财务资料后显示。</p></Visual>;
-  const val = (x: (typeof series)[number], p: string) => x.s!.points.find((pt) => pt.period === p && pt.basis === "actual")?.value;
-  const max = Math.max(1, ...series.flatMap((x) => periods.map((p) => Math.abs(val(x, p) ?? 0))));
-  const unit = series[0]?.s?.unit ?? "元";
-  const np = series.find((x) => x.key === "np"), rev = series.find((x) => x.key === "rev");
-  const lastP = periods[periods.length - 1], firstP = periods[0];
-  const reading: string[] = [];
-  if (rev && lastP && val(rev, lastP) !== undefined) reading.push(`${lastP} 收入 ${money(val(rev, lastP)!, unit)}${firstP !== lastP && val(rev, firstP) !== undefined ? `，${firstP} 为 ${money(val(rev, firstP)!, unit)}` : ""}。`);
-  if (np) {
-    const npPeriods = periods.filter((p) => val(np, p) !== undefined);
-    const npPeriod = npPeriods[npPeriods.length - 1];
-    if (npPeriod && val(np, npPeriod)! < 0) reading.push(`${npPeriod} 净亏损 ${money(-val(np, npPeriod)!, unit)}。`);
-  }
-  if (k?.cash && months != null) reading.push(`账上现金 ${formatAmount(k.cash.value, k.cash.unit).value} ${formatAmount(k.cash.value, k.cash.unit).unit}，按近期消耗约可支撑 ${months} 个月。`);
-  const H = 150;
-  return <Visual title="经营与资金" note={periods.length ? `${firstP}–${lastP} · 实际数字` : "按最近一期财务资料"} reading={reading}>
-    <div className="qa-ops2">
-      {periods.length > 0 && <div className="qa-groups" role="group" aria-label={series.map((x) => `${x.label}：${periods.map((p) => `${p} ${val(x, p) !== undefined ? money(val(x, p)!, unit) : "未披露"}`).join("，")}`).join("；")}>
-        <div className="qa-groups-plot" style={{ height: H }}>
-          <i className="qa-groups-zero" />
-          {periods.map((p, pi) => <div key={p} className="qa-group">
-            {series.map((x, si) => { const v = val(x, p); if (v === undefined) return <span key={x.key} className="qa-gbar none" />;
-              const h = Math.abs(v) / max * (H / 2 - 4);
-              return <ChartHint key={x.key} title={x.label} value={money(v,unit)} meta={`${p} · 实际 · ${x.s!.currency || "币种未标注"}`}
-                note={v < 0 ? "横线下方为负值；柱高表示金额绝对值。" : "柱高表示金额，与同图同单位的其他期间对照。"}><motion.span className={`qa-gbar ${x.key}${v < 0 ? " neg" : ""}`}
-                initial={{ height: 0 }} animate={{ height: Math.max(h, 1.5) }} transition={{ delay: pi * .06 + si * .03, duration: .5, ease: EASE }} /></ChartHint>; })}
-            <small>{p}</small>
-          </div>)}
-        </div>
-        <div className="qa-legend">{series.map((x) => <span key={x.key}><i className={`qa-gbar ${x.key}`} />{x.label}</span>)}</div>
-      </div>}
-      <div className="qa-ops-side">
-        {k?.cash && <div><span>账上现金</span><b className="num-display">{formatAmount(k.cash.value, k.cash.unit).value}</b><small>{formatAmount(k.cash.value, k.cash.unit).unit} · {k.cash.period}</small></div>}
-        {months != null && <div className="qa-runway">
-          <span>现金跑道</span><b className="num-display">{months}<small> 个月</small></b>
-          <ChartHint title="现金跑道" value={`约 ${months} 个月`} meta="按现有现金与近期消耗测算" note="刻度上限为36个月，超过部分不继续延长；不是确定的资金到期日。"><div className="qa-runway-track">{[12, 24].map((m) => <i key={m} style={{ left: `${m / 36 * 100}%` }} />)}
-            <motion.span className={months < 12 ? "short" : ""} initial={{ width: 0 }} animate={{ width: `${Math.min(months, 36) / 36 * 100}%` }} transition={{ duration: .8, ease: EASE }} /></div></ChartHint>
-          <small>0 · 12 · 24 · 36 个月</small>
-        </div>}
-        {k?.revenue_growth != null && <div><span>收入同比</span><b className={`num-display ${k.revenue_growth >= 0 ? "up" : "down"}`}>{k.revenue_growth >= 0 ? "+" : ""}{k.revenue_growth}%</b></div>}
-      </div>
-    </div>
-  </Visual>;
 }
 
 // ------------------------------------------------------------------ 竞争位置

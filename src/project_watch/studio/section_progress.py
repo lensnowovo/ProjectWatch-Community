@@ -5,6 +5,8 @@ from project_watch.studio.execution import JobExecution
 
 def outcome_state(outcome):
     status = outcome.get('status')
+    if status == 'retired':
+        return 'retired'  # no longer drafted; not a failure and not kept for lack of material
     if status in ('approved', 'unchanged'):
         return {'approved': 'published', 'unchanged': 'retained'}[status]
     if 'request_outcome_unknown' in outcome.get('issues', ()):
@@ -19,6 +21,7 @@ def outcome_state(outcome):
 def states(db, job):
     if not job:
         return {}, {}
+    from project_watch.studio import analyze_job
     from project_watch.studio.analyze_job import PUBLICATION, RESULT
     execution = JobExecution(None, job)
     publication = execution.read_checkpoint(PUBLICATION, db=db) or {}
@@ -33,7 +36,13 @@ def states(db, job):
                 else 'unknown' if uncertain else 'no_material' if result.get('sections') == 'no_material'
                 else 'waiting_model' if result.get('status') == 'waiting_for_model' else 'unfinished')
     sections, evidence_gaps = {}, {}
+    # Whichever checkpoint is read (final publication, in-progress delivery or a partial
+    # result), a section this job retired reads as retired, never as kept or unknown.
+    retired = set((execution.read_checkpoint(analyze_job.SECTION_SCOPE, db=db) or {}).get('retired', ()))
     for name in section_analysis.SECTIONS:
+        if name in retired:
+            sections[name] = 'retired'
+            continue
         outcome = publication.get('sections', {}).get(name)
         receipt = execution.read_checkpoint('analyze_section_outcome_v1:' + name, db=db)
         if not outcome:

@@ -1451,7 +1451,8 @@ class StudioStore:
         from project_watch.studio.dispatch import retry_delay
         from project_watch.studio.model_errors import ACCOUNT_ERRORS, MESSAGES
         status = 402 if reason in ACCOUNT_ERRORS else 429
-        stage = MESSAGES[reason] if reason in ACCOUNT_ERRORS else '稍后自动继续'
+        stage = (MESSAGES[reason] if reason in ACCOUNT_ERRORS or reason == 'connection_not_sent'
+                 else '稍后自动继续')
         due = (datetime.now(UTC) + timedelta(seconds=retry_delay(status, max(0, job['attempts'] - 1)))).isoformat()
         with closing(self._connect()) as db, db:
             backoff = db.execute("SELECT max(b.retry_after) FROM studio_provider_backoff b JOIN studio_job_calls c "

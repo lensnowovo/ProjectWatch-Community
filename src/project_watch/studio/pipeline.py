@@ -2535,15 +2535,29 @@ class StudioWorker:
         self._current_job = job['id']
         heartbeat_stop = threading.Event()
         def heartbeat():
+            failing_since = None
             while not heartbeat_stop.wait(self.heartbeat_seconds):
                 try:
                     outcome = tick(self.pipeline.store, job)
                 except Exception:
+                    # A busy database is transient: keep renewing, or the lease lapses
+                    # under a healthy job. Only a lasting failure is reported as a stall.
                     _log.exception('studio watchdog unavailable')
-                    self._stalled_job = job['id']
-                    break
+                    failing_since = failing_since or time.monotonic()
+                    if time.monotonic() - failing_since >= 90:
+                        self._stalled_job = job['id']
+                    continue
+                failing_since = None
                 if outcome != 'alive':
-                    self._stalled_job = job['id']
+                    # After sleep the lease is gone but the sent request may still answer;
+                    # waiting for it is not a stall, and a restart would discard the reply.
+                    from project_watch.studio.execution import waiting_on_request
+                    try:
+                        waiting = outcome == 'lost' and waiting_on_request(self.pipeline.store, job['id'])
+                    except Exception:
+                        waiting = False
+                    if not waiting:
+                        self._stalled_job = job['id']
                     break
         heartbeat_thread = threading.Thread(target=heartbeat, name="studio-job-lease", daemon=True)
         heartbeat_thread.start()

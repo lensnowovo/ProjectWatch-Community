@@ -440,7 +440,7 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
                 <select value={form.hours} onChange={(e) => set("hours", Number(e.target.value))}>
                   {Object.entries(HOURS_LABEL).map(([h, label]) => <option key={h} value={h}>{label}</option>)}
                 </select>
-                <small className="muted">活跃期最快每 6 小时，平静期放缓；较慢设置不加速。实际频率见“资料库 → 监控节奏”。</small>
+                <small className="muted">活跃期最快每 6 小时，平静期放缓；较慢设置不加速。实际频率见项目的“监控范围 → 监控节奏”。</small>
               </label>
               <label className="field">
                 <span>代理地址（可选）</span>

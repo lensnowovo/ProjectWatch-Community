@@ -18,7 +18,7 @@ export function ProjectActivity({ detail }: { detail: ProjectDetail }) {
     {work.additional > 0 && <span className="muted small">另有 {work.additional} 项{work.parsingAlongside ? " · 资料正在识别" : ""}</span>}
     <a className="op-detail" href={`/tasks?project=${detail.project.id}`}>查看运行状态 →</a>
     {work.progressAt && <span className="op-time muted small">最近进展 {relTime(work.progressAt)}</span>}
-    <TaskActivity detail={detail} />
+    {(isMoving(work.state) || needsAttention(work.state)) && <TaskActivity detail={detail} />}
   </div>;
 }
 

@@ -1,0 +1,14 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {BrowserRouter} from 'react-router-dom';
+import {QuestionAnalysis} from '../src/questionAnalysis';
+import {PositionJudgment, ChainJudgment, IndustryJudgment} from '../src/judgment';
+import {api, type ProjectDetail, type InsightView} from '../src/api';
+import '../src/styles.css';
+window.fetch=async()=>{throw Error('Isolated preview: network blocked')};
+for(const key of Object.keys(api)) (api as any)[key]=async()=>{throw Error('No live calls')};
+const sample = {summary:'产品已进入客户验证，交付能力持续完善。收入确认情况待核实，订单口径待核实。', confidence:'medium', for:[{text:'新产品完成第一阶段验证。',refs:[]}],against:[],change_if:[], state:'judged_annotated',annotations:[{span:'收入确认情况待核实',code:'recognition_not_supported'},{span:'订单口径待核实',code:'order_scope_ambiguous'}]};
+const position = {...sample,verdict:'on_par',peers:['合成同行甲','合成同行乙'],competition_window:{months:null,basis:'双方处于客户验证阶段，量产进度将影响后续竞争位置。'},competition_signals:[{peer:'合成同行甲',event:'新产品完成小批量交付。',impact:'客户验证与量产交付成为下一阶段比较重点。',refs:[]}]};
+const view={record:{generated_at:'2026-11-11',total:4,analysis:{position,operations:{...sample,verdict:'steady'},chain:{...sample,verdict:'favorable'},industry:{...sample,verdict:'growing',drivers:[],headwinds:[]},technology:{summary:'',state:'absent'}}},labels:{operations:{steady:'平稳'},position:{on_par:'相当'},chain:{favorable:'有利'},industry:{growing:'增长'},maturity:{}},job:null,generation_available:true,model_ready:false} as unknown as InsightView;
+const detail={project:{id:'synthetic'},jobs:[],capabilities:{insight_projections:false},page_summaries:{external:{text:'合成公司已完成新产品的客户验证，并启动小批量交付，业务正从研发验证转向商业化落地。近期融资为产线建设提供了资金支持，后续重点是交付规模和复购订单的兑现。',date:'2026-11-11',refs:[],details:[{text:'合成示例：客户验证完成，订单与确认收入分开披露。',refs:[]}]},technology:{text:'合成公司的新技术已完成实验室验证，正在推进工程化。下一阶段重点是稳定性与规模化成本。',refs:[],date:'2026-11-11'}}} as unknown as ProjectDetail;
+createRoot(document.getElementById('root')!).render(<BrowserRouter><main style={{padding:'clamp(16px, 3vw, 40px)',maxWidth:1400,margin:'auto'}}><h1>当前判断 · 合成预览</h1><QuestionAnalysis detail={detail} view={view} error={null} goto={()=>{}}/><PositionJudgment view={view}/><ChainJudgment view={view}/><IndustryJudgment view={view}/></main></BrowserRouter>);

@@ -106,7 +106,10 @@ def test_one_update_reaches_sections_events_and_report(env):
     work(pipeline, 'collect')
     analysis = work(pipeline, 'analyze')
     result = analysis.read_checkpoint(analyze_job.RESULT)
-    assert result['status'] == 'partial' and set(result['published']) == {'operations', 'chain'}
+    # 公司本体 is retired for new analyses: never drafted, never reported as kept for lack of material.
+    assert result['status'] == 'partial' and set(result['published']) == {'chain'}
+    publication = analysis.read_checkpoint(analyze_job.PUBLICATION)
+    assert 'operations' not in publication['targets'] and publication['sections']['operations']['status'] == 'retired'
     report = work(pipeline, 'report')
     assert report.read_checkpoint('report_result_v1')['status'] == 'complete'
     # Papers and patents are reviewed and labelled; the company's own are marked as such.
@@ -114,7 +117,8 @@ def test_one_update_reaches_sections_events_and_report(env):
     assert rows and all(r['processing_status'] == 'organized' for r in rows)
     assert {r['extra'].get('research_relation') for r in rows} >= {'subject'}
     view = insight.load(pipeline.store, pid)
-    assert view['analysis']['operations']['summary'] == section()['summary']
+    assert view['analysis']['chain']['summary'] == section()['summary']
+    assert not view['analysis']['operations']['summary']  # retired: nothing new is published
     # Analysis never collected: no provider request was made by the analyze job.
     with pipeline.store._connect() as db:
         kinds = {r[0] for r in db.execute('SELECT DISTINCT kind FROM studio_job_calls WHERE job_id=?', (analysis.job['id'],))}
@@ -254,7 +258,7 @@ def test_a_round_reports_its_own_quality(env):
     quality = spine_api.round_view(pipeline.store, pid)['quality']
     current = quality['current']
     assert current['items'] > 0 and current['screened'] == current['items']
-    assert current['sections']['published'] == 2 and current['sections']['unchanged'] == []  # a first round redoes all
+    assert current['sections']['published'] == 1 and current['sections']['unchanged'] == []  # a first round redoes all
     assert current['unclear_requests'] == 0 and quality['previous'] is None
     yields = round_quality.unit_yield(pipeline.store, current['collect_job_id'])
     assert sum(u['collected'] for u in yields) >= current['items'] and all(u['source'] and 'query' in u for u in yields)
@@ -307,7 +311,7 @@ def test_an_automatic_round_redoes_only_the_sections_its_new_material_touches(en
     drafts = _state['drafts']
     second = work(pipeline, 'analyze')
     outcomes = second.read_checkpoint(analyze_job.PUBLICATION)['sections']
-    assert outcomes['operations']['status'] == 'unchanged' and outcomes['chain']['status'] == 'unchanged'
+    assert outcomes['operations']['status'] == 'retired' and outcomes['chain']['status'] == 'unchanged'
     assert _state['drafts'] in (drafts, drafts + 1)  # only never-published sections may be drafted
 
 
@@ -401,3 +405,77 @@ def test_rate_limit_resumes_same_analysis_after_worker_restart(env, monkeypatch)
     with closing(pipeline.store._connect()) as db:
         assert db.execute('select status from studio_jobs where id=?',(job['id'],)).fetchone()[0]=='done'
         assert db.execute("select count(*) from studio_job_calls where status='unknown' and job_id=?", (job['id'],)).fetchone()[0]==1
+
+def test_an_analysis_that_started_before_the_retirement_keeps_its_section_list(env):
+    """A shorter list is a different request; an analysis already under way must not switch."""
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    job = pipeline.store.claim(lane='round')
+    assert job['kind'] == 'analyze'
+    JobExecution(pipeline.store, job).checkpoint(analyze_job.PROTOCOL, {'version': 2})  # began before the upgrade
+    pipeline.run(job)
+    pipeline.store.finish(job['id'], lease_token=job['lease_token'])
+    execution = JobExecution(pipeline.store, job)
+    assert execution.read_checkpoint(analyze_job.SECTION_SCOPE) == {'retired': []}
+    assert 'operations' in execution.read_checkpoint(analyze_job.PUBLICATION)['targets']
+
+
+def _redo(pipeline, pid, collect_id):
+    with pipeline.store._connect() as db, db:
+        db.execute("UPDATE studio_jobs SET status='done' WHERE project_id=? AND status='queued' AND kind='report'", (pid,))
+    pipeline.store.enqueue(pid, 'analyze', input_version=dispatch.REDO_PREFIX + collect_id)
+    return work(pipeline, 'analyze')
+
+
+def test_a_redo_inherits_the_original_list_of_its_collection_batch(env):
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    first = work(pipeline, 'analyze')
+    with pipeline.store._connect() as db, db:  # as if the first analysis predates the retirement
+        db.execute("DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
+                   (first.job['id'], analyze_job.SECTION_SCOPE))
+    redo = _redo(pipeline, pid, collect.job['id'])
+    assert redo.read_checkpoint(analyze_job.SECTION_SCOPE) == {'retired': []}
+    assert 'operations' in redo.read_checkpoint(analyze_job.PUBLICATION)['targets']
+
+
+def test_a_redo_of_a_retired_batch_stays_retired(env):
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    work(pipeline, 'analyze')
+    redo = _redo(pipeline, pid, collect.job['id'])
+    assert redo.read_checkpoint(analyze_job.SECTION_SCOPE) == {'retired': ['operations']}
+    assert 'operations' not in redo.read_checkpoint(analyze_job.PUBLICATION)['targets']
+
+
+def test_progress_reads_a_retired_section_as_retired_from_any_checkpoint(env):
+    """A partial run leaves only the in-progress delivery record, which lists it as unchanged."""
+    from project_watch.studio import section_progress, spine_api
+    from project_watch.studio.judgment_delivery import CURRENT
+
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    analysis = work(pipeline, 'analyze')
+    with pipeline.store._connect() as db, db:
+        db.execute('DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage=?',
+                   (analysis.job['id'], analyze_job.PUBLICATION))
+        stale = {'status': 'partial', 'published': [], 'sections': {'operations': {'status': 'unchanged'}}}
+        db.execute("INSERT OR REPLACE INTO studio_job_checkpoints VALUES (?,?,?)",
+                   (analysis.job['id'], CURRENT, json.dumps(stale)))
+        job = dict(db.execute('SELECT * FROM studio_jobs WHERE id=?', (analysis.job['id'],)).fetchone())
+        states, _ = section_progress.states(db, job)
+    assert states['operations'] == 'retired'
+    with pipeline.store._connect() as db, db:  # a final record written before the retired mark
+        db.execute("INSERT OR REPLACE INTO studio_job_checkpoints VALUES (?,?,?)",
+                   (analysis.job['id'], analyze_job.PUBLICATION, json.dumps(stale)))
+    sections = spine_api.round_view(pipeline.store, pid)['quality']['current']['sections']
+    assert 'operations' not in sections['unchanged']
+
+
+def test_a_retired_section_reads_as_retired_not_as_a_failure():
+    from project_watch.studio.section_progress import outcome_state
+    assert outcome_state({'status': 'retired', 'reason': 'section no longer drafted'}) == 'retired'

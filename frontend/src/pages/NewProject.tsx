@@ -1,3 +1,4 @@
+import { INTERNAL_INFORMATION_VISIBLE } from "../internalInformation";
 import { entityIssue } from "../entityValidation";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
@@ -131,14 +132,14 @@ export default function NewProjectPage() {
         <motion.section key="s1" className="card card-pad" initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.32, ease: EASE }}>
           <h1 className="display-sm">添加项目</h1>
-          <p className="muted">输入公司名，或拖入 BP。</p>
+          <p className="muted">输入公司名称，开始跟踪公开动态。</p>
           <label className="field field-lg">
             <span>公司名称</span>
             <input autoFocus value={name} placeholder="例如：宁德时代 / 某某生物科技有限公司"
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && (name.trim() || drafts.length) && resolve()} />
           </label>
-          <div
+          {INTERNAL_INFORMATION_VISIBLE && <div
             className={`dropzone ${dragging ? "drag" : ""}`}
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
@@ -154,8 +155,8 @@ export default function NewProjectPage() {
                 <span className="muted">PDF / Word / PPT / Excel / TXT · 可选</span>
               </>
             )}
-          </div>
-          {drafts.length > 0 && (
+          </div>}
+          {INTERNAL_INFORMATION_VISIBLE && drafts.length > 0 && (
             <ul className="file-list">
               {drafts.map((d) => (
                 <li key={d.draft_id}>

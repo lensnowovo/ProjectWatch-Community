@@ -28,6 +28,8 @@ secrets.*
 __pycache__/
 *.py[cod]
 *.egg-info/
+# Assistant workspace state (local notes and caches) is not project source.
+.workbuddy/
 .venv/
 .venv-*/
 .wheel-venv/

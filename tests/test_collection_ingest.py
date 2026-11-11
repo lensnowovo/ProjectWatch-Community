@@ -32,9 +32,13 @@ def test_source_only_cannot_resurrect_withdrawn_snapshot(host):
     ref = ingest(unit, [trial()])['evidence_refs'][0]
     research.pipeline.evidence.dependencies.withdraw(research.project_id, ref['evidence_version_id'],
                                                      'Synthetic withdrawal', actor='test')
-    with pytest.raises(HttpError, match='source_only_withdrawn_item'):
-        CollectionIngest(research.execution, admit_materials=False)(
-            unit | {'id': 'new-metadata'}, [trial('COMPLETED')])
+    versions = len(rows(research, 'studio_evidence_versions'))
+    result = CollectionIngest(research.execution, admit_materials=False)(
+        unit | {'id': 'new-metadata'}, [trial('COMPLETED')])
+    # The refusal is scoped to that record: recorded, not fatal to the rest of the query.
+    assert result['skipped'] == ['source_only_withdrawn_item']
+    assert result['saved_count'] == 0
+    assert len(rows(research, 'studio_evidence_versions')) == versions
 
 
 def rows(research, table):

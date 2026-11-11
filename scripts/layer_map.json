@@ -229,7 +229,6 @@
     "project_watch.studio.collection_runner": "Core",
     "project_watch.studio.collection_sources": "Core",
     "project_watch.studio.collection_pages": "Core",
-    "project_watch.studio.collection_sites": "Core",
     "project_watch.studio.collection_ingest": "Core",
     "project_watch.studio.collection_history": "Core",
     "project_watch.studio.collection_continuation": "Core",

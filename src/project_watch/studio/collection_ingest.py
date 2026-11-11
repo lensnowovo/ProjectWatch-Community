@@ -16,6 +16,12 @@ from project_watch.studio.monitoring_contracts import EvidenceInput, EvidencePar
 from project_watch.studio.sources import item_key
 from project_watch.studio.store import now
 
+# A source-only grant may re-discover a record it is not allowed to replace. Skipping that one
+# record keeps the rest of the query; the alternative lost every new item in the same response.
+# Each of these is raised before any write, so the surrounding transaction stays usable.
+SKIPPABLE = frozenset({'source_only_admitted_item', 'source_only_withdrawn_item',
+                       'ambiguous_collection_identity'})
+
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS studio_collection_sources (
         project_id TEXT NOT NULL REFERENCES projects(id), identity TEXT NOT NULL,
@@ -116,19 +122,25 @@ class CollectionIngest:
         # a newer snapshot. Query/window dates are not publication dates.
         observed = min(times, key=_time) if times else unit['window_end']
         _time(observed)
-        refs = []
+        refs, skipped = [], []
         with self.store.write_scope(self.execution._guard), closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             self.execution._guard(db)
             if context:
                 validate(self.store, self.project_id, context, db=db)
             for item, identity, text, structured in prepared:
-                refs.append(self._save(db, unit, item, identity, text, structured, observed))
+                try:
+                    refs.append(self._save(db, unit, item, identity, text, structured, observed))
+                except HttpError as exc:
+                    if exc.code not in SKIPPABLE:
+                        raise
+                    skipped.append(exc.code)
         # Database evidence and observations are atomic; replay after this write
         # returns the same original disposition, not a second added/updated item.
         counts = {name + '_count': sum(r['operation'] == name for r in refs)
                   for name in ('added', 'updated', 'reused', 'historical')}
-        return dict(saved_count=len(refs), evidence_refs=refs, **counts)
+        return dict(saved_count=len(refs), evidence_refs=refs, skipped_count=len(skipped),
+                    skipped=skipped, **counts)
 
     def _save(self, db, unit, item, identity, text, structured, observed):
         source = db.execute('SELECT * FROM studio_collection_sources WHERE project_id=? AND identity=?',
@@ -180,7 +192,9 @@ class CollectionIngest:
         operation = ('historical' if historical else 'reused' if source and source['evidence_version_id'] == record['id']
                      else 'updated' if existing else 'added')
         if existing is None:
-            category = {'chain': 'company', 'technology': 'industry'}.get(unit['category'], unit['category'])
+            # A chain report stays a chain report. Renaming it to 'company' here is why the
+            # 产业链 page could never count its own material: the rows existed under another name.
+            category = {'technology': 'industry'}.get(unit['category'], unit['category'])
             if category == 'trial' and item.get('kind') == 'policy':
                 category = 'policy'  # a regulator's news or notice page is not a trial record
             db.execute('INSERT INTO studio_items (id,project_id,key,category,title,url,source,snippet,published_at,'

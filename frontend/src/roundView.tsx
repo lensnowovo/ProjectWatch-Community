@@ -45,7 +45,9 @@ export function RoundProgress({ projectId, onReload }: { projectId: string; onRe
   const unreviewed = analysed ? (Object.keys(CATEGORY) as (keyof typeof CATEGORY)[])
     .reduce((sum, key) => sum + (data.materials_unreviewed?.[key] ?? 0), 0) : 0;
   const finished = data.report?.finished_at ?? data.analyze?.finished_at ?? data.collect?.finished_at;
-  return <section className="round-view" aria-label="最近一次更新">
+  if (!data.collect) return null;  // never collected: the work state above already says so
+  const failed = [data.collect, data.analyze].some(stage => stage?.status === "failed");
+  const body = <>
     <dl>
       <div><dt>收录</dt><dd>{collectLine(data.collect)}{counts.length > 0 && <span className="muted"> · {analysed ? "已确认" : "已收录"} {counts.join(" · ")}</span>}
         {unreviewed > 0 && <span className="muted"> · 另 {unreviewed} 条待核实</span>}</dd></div>
@@ -56,7 +58,17 @@ export function RoundProgress({ projectId, onReload }: { projectId: string; onRe
       {data.analyze.result.coverage.excluded.length > 0 && ` · ${data.analyze.result.coverage.excluded.length} 份未纳入（待核实、不相关、无正文或无权限）`}</p>}
     {data.can_reanalyze && <Reanalyze projectId={projectId} onQueued={() => { reload(); onReload(); }} />}
     {data.quality && <QualityReport quality={data.quality} />}
-  </section>;
+  </>;
+  // A running round or one that needs the owner stays open; a settled round folds into one line.
+  if (data.running || data.can_reanalyze || failed)
+    return <section className="round-view" aria-label="最近一次更新">{body}</section>;
+  const warnings = (data.quality?.warnings.length ?? 0) + (data.quality?.stale_queries.length ?? 0);
+  const partial = data.collect.result && data.collect.result.status !== "complete";
+  return <details className="round-view-fold">
+    <summary className="small"><span className="muted">最近一次更新 · {data.analyze ? analyzeLine(data.analyze, data.collect) : collectLine(data.collect)}
+      {partial && " · 部分来源暂不可用"}</span>{warnings > 0 && <span className="round-view-warn"> · {warnings} 项需注意</span>}</summary>
+    <section className="round-view">{body}</section>
+  </details>;
 }
 
 const pct = (v: number | null | undefined) => v == null ? "—" : `${Math.round(v * 100)}%`;

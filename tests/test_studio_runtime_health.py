@@ -271,3 +271,142 @@ def test_worker_heartbeat_really_fences_hung_dispatch(tmp_path, monkeypatch):
         thread.join(5)
     assert pipeline.store.jobs(pid)[0]['status'] == 'running'  # late finish fenced
     assert not worker.health()['restart_required']
+
+
+def test_reply_after_sleep_is_kept_and_replayed_not_resent(tmp_path):
+    """The computer slept past the lease; on wake another lane requeued the job first."""
+    store, _, job = setup(tmp_path)
+    execution = JobExecution(store, job)
+    owned = []
+
+    def transport():
+        owned.append(execution._owns_transport(_started_key(store, job)))
+        expire_owner(store, job)
+        assert store.claim('round') is None  # the other lane wakes first and requeues the expired job
+        assert row(store, job)['status'] == 'queued'
+        owned.append(execution._owns_transport(_started_key(store, job)))
+        return Response(200, {}, b'{"usage":{"prompt_tokens":11,"completion_tokens":3}}')
+
+    with pytest.raises(RuntimeError, match='lease'):
+        execution.call('model', 'paid', transport, timeout=None)
+    assert owned == [True, True]  # sleeping past the lease does not abandon the request
+    with closing(store._connect()) as db:
+        saved = db.execute('SELECT status,input_tokens,output_tokens FROM studio_job_calls').fetchone()
+    assert tuple(saved) == ('completed', 11, 3)
+    resumed = store.claim()
+    assert resumed['id'] == job['id']
+    replay = JobExecution(store, resumed).call('model', 'paid', lambda: pytest.fail('paid request resent'))
+    assert replay.body.startswith(b'{"usage"')
+
+
+def test_explicit_stop_and_watchdog_hold_still_end_the_wait(tmp_path):
+    store, _, job = setup(tmp_path)
+    stopped = False
+    execution = JobExecution(store, job, cancel_requested=lambda: stopped)
+    checks = []
+
+    def transport():
+        key = _started_key(store, job)
+        checks.append(execution._owns_transport(key))
+        with closing(store._connect()) as db, db:
+            db.execute("UPDATE studio_job_calls SET deadline_at='2000-01-01' WHERE job_id=?", (job['id'],))
+        assert tick(store, job) == 'held'
+        checks.append(execution._owns_transport(key))
+        return Response(200, {}, b'{}')
+
+    with pytest.raises(RuntimeError, match='lease'):
+        execution.call('model', 'late', transport, timeout=3600)
+    assert checks == [True, False]
+    with closing(store._connect()) as db:  # held as unknown: a late reply does not settle it
+        assert db.execute('SELECT status FROM studio_job_calls').fetchone()[0] == 'started'
+    (tmp_path / 'second').mkdir()
+    store2, _, job2 = setup(tmp_path / 'second')
+    stopper = JobExecution(store2, job2, cancel_requested=lambda: stopped)
+
+    def stopped_transport():
+        nonlocal stopped
+        stopped = True
+        checks.append(stopper._owns_transport(_started_key(store2, job2)))
+        return Response(200, {}, b'{}')
+    from project_watch.studio.http import HttpError
+    with pytest.raises(HttpError, match='request_cancelled'):
+        stopper.call('model', 'stop', stopped_transport, timeout=None)
+    assert checks[-1] is False
+    with closing(store2._connect()) as db:  # a stop prevents new work, not saving a received reply
+        assert db.execute('SELECT status FROM studio_job_calls').fetchone()[0] == 'completed'
+
+
+def test_heartbeat_keeps_renewing_through_a_transient_database_error(tmp_path, monkeypatch):
+    from project_watch.studio import runtime_health
+    from project_watch.studio.app import create_studio_app
+    from project_watch.studio.pipeline import StudioWorker
+
+    pipeline = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    pid = pipeline.repository.create_project('Synthetic Busy').id
+    pipeline.store.upsert_project(pid, {}, consent=True)
+    pipeline.store.enqueue(pid, 'public_profile')
+    worker = StudioWorker(pipeline, heartbeat_seconds=.01)
+    monkeypatch.setattr(worker, 'schedule', lambda: None)
+    real_tick, calls, renewed = runtime_health.tick, [], threading.Event()
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError('synthetic database is locked')
+        if len(calls) >= 3:
+            renewed.set()
+        return real_tick(*args, **kwargs)
+    monkeypatch.setattr(runtime_health, 'tick', flaky)
+    seen = {}
+
+    def run(job):
+        renewed.wait(5)
+        seen.update(stalled=worker._stalled_job, lease=row(pipeline.store, job)['lease_until'],
+                    claimed=job['lease_until'])
+    monkeypatch.setattr(pipeline, 'run', run)
+    worker.step()
+    assert renewed.is_set() and seen['stalled'] is None
+    assert seen['lease'] > seen['claimed']  # renewed after the failed check
+
+
+def test_waiting_for_a_sent_request_after_sleep_is_not_a_stall(tmp_path, monkeypatch):
+    """A supervisor restarts a stalled worker; that would discard the reply still on its way."""
+    from project_watch.studio.app import create_studio_app
+    from project_watch.studio.execution import JobExecution as Execution
+    from project_watch.studio.pipeline import StudioWorker
+
+    pipeline = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    pid = pipeline.repository.create_project('Synthetic Sleep').id
+    pipeline.store.upsert_project(pid, {}, consent=True)
+    pipeline.store.enqueue(pid, 'public_profile')
+    worker = StudioWorker(pipeline, heartbeat_seconds=.01)
+    monkeypatch.setattr(worker, 'schedule', lambda: None)
+    seen = {}
+
+    def run(job):
+        def transport():
+            expire_owner(pipeline.store, job)  # slept past the lease
+            for _ in range(200):
+                if seen.get('lost'):
+                    break
+                threading.Event().wait(.01)
+            seen['stalled'] = worker._stalled_job
+            return Response(200, {}, b'{}')
+        Execution(pipeline.store, job).call('model', 'asleep', transport, timeout=None)
+    from project_watch.studio import runtime_health
+    real_tick = runtime_health.tick
+
+    def watched(*args, **kwargs):
+        outcome = real_tick(*args, **kwargs)
+        seen['lost'] = seen.get('lost') or outcome == 'lost'
+        return outcome
+    monkeypatch.setattr(runtime_health, 'tick', watched)
+    monkeypatch.setattr(pipeline, 'run', run)
+    worker.step()
+    assert seen['lost'] and seen['stalled'] is None
+
+
+def _started_key(store, job):
+    with closing(store._connect()) as db:
+        return db.execute("SELECT call_key FROM studio_job_calls WHERE job_id=? AND status='started'",
+                          (job['id'],)).fetchone()[0]

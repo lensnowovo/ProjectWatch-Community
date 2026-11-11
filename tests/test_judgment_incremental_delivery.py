@@ -280,7 +280,8 @@ def test_unknown_page_stays_fenced_across_changed_draft_and_publication_yield(ho
     changed = part()
     changed['summary'] = '合成材料正在招募。'
     drafts = iter([{'operations': part(), 'chain': part()}, {'operations': changed, 'chain': part()}])
-    respond = lambda *args, **kwargs: deepcopy(next(drafts))
+    def respond(*args, **kwargs):
+        return deepcopy(next(drafts))
     with pytest.raises(JobYield):
         run(research, selected, sources, respond, ['operations', 'chain'])
     result = run(research, selected, sources, respond, ['operations', 'chain'])
