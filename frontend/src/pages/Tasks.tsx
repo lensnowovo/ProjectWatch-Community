@@ -8,6 +8,7 @@ import { Page } from "../motion";
 import PageHeader from "../PageHeader";
 import { ErrorNote, errorMessage, relTime, useAsync } from "../ui";
 import { Seg } from "../widgets";
+import { INTERNAL_INFORMATION_VISIBLE } from "../internalInformation";
 
 /** 任务看板: only what is being processed stays open; finished work folds into the history. */
 const STEP_STATE: Record<string, string> = { done: "完成", running: "进行中", waiting: "等待", failed: "失败", blocked: "受阻", partial: "部分完成" };
@@ -156,7 +157,7 @@ export function DocumentRow({ d }: { d: TaskDocument }) {
   return <li className="doc-row">
     <div className="doc-name">
       <strong className="truncate" title={d.name}>{d.name}</strong>
-      <span className="muted small"><Link to={`/projects/${d.project_id}?tab=documents`}>{d.project_name}</Link> · 上传于 {relTime(d.created_at)}</span>
+      <span className="muted small"><Link to={`/projects/${d.project_id}${INTERNAL_INFORMATION_VISIBLE ? '?tab=documents' : ''}`}>{d.project_name}</Link> · 上传于 {relTime(d.created_at)}</span>
     </div>
     <ol className="doc-steps" aria-label={`${d.name} 处理进度`}>
       {d.steps.map((s) => <li key={s.key} className={`step-${s.state}`} title={s.note || STEP_STATE[s.state]}>

@@ -342,11 +342,6 @@ def _evidence_counts(part: dict, name: str) -> dict:
     return {'support': support, 'oppose': oppose, 'sources': len(refs)}
 
 
-def _dated(basis: str) -> int:
-    """Distinct date-like tokens: a month count needs both ends dated, not one."""
-    return len({*re.findall(r'20\d{2}\s*年?|(?<!\d)(?:0?[1-9]|1[0-2])\s*月', basis)})
-
-
 def _competition(raw: dict, numbered: dict) -> dict:
     """Competitor signals, not a competitor directory.
 
@@ -358,15 +353,11 @@ def _competition(raw: dict, numbered: dict) -> dict:
     window = raw.get('competition_window')
     if isinstance(window, dict):
         basis = _clip(strip_inline_codes(window.get('basis') or ''), 80)
-        months = window.get('months')
-        if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= 60:
-            months = None
-        # A number the basis cannot date is a fabricated number, so it is dropped and the
-        # qualitative reading stands. Two dated ends are the minimum a remaining lead time needs.
-        if months and _dated(basis) < 2:
-            months = None
+        # Legacy model-provided month counts are not independently verified. Keep the
+        # reviewed qualitative basis until structured, comparable endpoints exist.
+        # Do not change the generation prompt/request identity of ongoing jobs.
         if basis:
-            out['competition_window'] = ({'months': months} if months else {}) | {'basis': basis}
+            out['competition_window'] = {'basis': basis}
     signals = []
     listed = raw.get('competition_signals')
     for item in listed if isinstance(listed, list) else []:

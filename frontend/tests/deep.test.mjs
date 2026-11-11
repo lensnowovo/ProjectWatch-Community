@@ -61,7 +61,7 @@ test("each judgment sits in the tab about its subject", () => {
   assert.match(overview, /<QuestionAnalysis detail=\{detail\}/);
   assert.match(qa, /role="tab" aria-selected=\{active === x\.key\}/);
   assert.match(qa, /role="tabpanel" className=\{`qa-panel qa-panel-/);
-  for (const ask of ["公司自己的经营与资金撑得住吗？", "和同路线对手比，领先还是落后？", "押注的技术路线是前沿还是趋于落后？", "赛道在扩张还是降温？"])
+  for (const ask of ["公司近期推进到了哪里？", "和同路线对手比，领先还是落后？", "押注的技术路线是前沿还是趋于落后？", "赛道在扩张还是降温？"])
     assert.match(qa, new RegExp(ask));
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.rj-tiles \{[^}]*align-items: stretch/);

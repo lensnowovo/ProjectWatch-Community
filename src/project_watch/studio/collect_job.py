@@ -14,9 +14,9 @@ from datetime import date
 
 from project_watch.studio import collection_targets, query_names
 from project_watch.studio.collection_ingest import CollectionIngest
-from project_watch.studio.collection_ledger import SUPPLEMENT_PREFIX, CollectionLedger
+from project_watch.studio.collection_ledger import STAGE, SUPPLEMENT_PREFIX, CollectionLedger
 from project_watch.studio.collection_plan import make_plan
-from project_watch.studio.collection_runner import run_collection
+from project_watch.studio.collection_runner import run_collection, settle_not_sent
 from project_watch.studio.collection_scope import build_collection_plan
 from project_watch.studio.collection_sources import CollectionSources
 from project_watch.studio.store import digest, now
@@ -259,15 +259,26 @@ def _record_health(pipeline, pid, rows):
 
 
 def run(pipeline, execution, *, mode='refresh'):
-    frozen = freeze(pipeline, execution, mode=mode)
     pid = execution.job['project_id']
+    # Stamp the attempt before any work: a round that ends in an exception must still
+    # wait for its cadence. A failed job's own 30-minute hold cannot stop the scheduler,
+    # whose next round carries a new input version and a fresh request journal.
+    pipeline.store.set_state('external_attempt:' + pid, now())
+    frozen = freeze(pipeline, execution, mode=mode)
     _, _, _, collectors = pipeline.tools()
     sources = CollectionSources(execution, collectors)
     capabilities = sources.capabilities() | {'site': 'not_integrated'}
-    plan = build_collection_plan(round_id=execution.job['id'], project=frozen['project'], binding=digest(frozen),
-                                 public_plan=frozen['public_plan'], watches=frozen['watches'],
-                                 capabilities=capabilities, at=frozen['at'], mode=frozen['mode'],
-                                 due_watch_ids=frozen['due_ids'], source_decisions=frozen['source_decisions'])
+    saved = execution.read_checkpoint(STAGE)
+    if saved is not None:
+        # An upgrade must not replace an in-flight round's frozen query manifest.
+        plan = saved['plan']
+        if (plan['binding'] != digest(frozen) or plan['mode'] != frozen['mode']):
+            raise ValueError('collection plan does not match frozen inputs')
+    else:
+        plan = build_collection_plan(round_id=execution.job['id'], project=frozen['project'], binding=digest(frozen),
+                                     public_plan=frozen['public_plan'], watches=frozen['watches'],
+                                     capabilities=capabilities, at=frozen['at'], mode=frozen['mode'],
+                                     due_watch_ids=frozen['due_ids'], source_decisions=frozen['source_decisions'])
     ingest = CollectionIngest(execution, admit_materials=False)
     collected = []
 
@@ -278,7 +289,7 @@ def run(pipeline, execution, *, mode='refresh'):
         return saved
     guard = _guard(pipeline, execution)
     ledger = CollectionLedger(execution, plan)
-    coverage = run_collection(ledger, collect=sources.collect, ingest=keep, guard=guard)
+    coverage = settle_not_sent(ledger, run_collection(ledger, collect=sources.collect, ingest=keep, guard=guard))
     numbers = execution.read_checkpoint(PATENTS + ':numbers')
     if numbers is None:
         numbers = _patent_followups(execution, collected)
@@ -290,8 +301,9 @@ def run(pipeline, execution, *, mode='refresh'):
                       for n in numbers]
         extra_plan = make_plan(round_id=execution.job['id'], project_id=pid, binding=digest(frozen),
                                mode=frozen['mode'], candidates=candidates, at=frozen['at'])
-        extra = run_collection(CollectionLedger(execution, extra_plan, stage=PATENTS), collect=sources.collect,
-                               ingest=ingest, guard=guard)
+        extra_ledger = CollectionLedger(execution, extra_plan, stage=PATENTS)
+        extra = settle_not_sent(extra_ledger, run_collection(extra_ledger, collect=sources.collect,
+                                                             ingest=ingest, guard=guard), offline_retry=False)
     bodies = execution.read_checkpoint(BODIES)
     if bodies is None:
         bodies = read_bodies(pipeline, execution, collectors)
@@ -308,8 +320,8 @@ def run(pipeline, execution, *, mode='refresh'):
                                  and r['outcome'] not in ('success', 'not_due')])
     execution.checkpoint(RESULT, result)
     _record_health(pipeline, pid, rows)
-    # The scheduler's cadence counts attempts, so a failing source never loops;
-    # only a round that collected something counts as observed.
+    # Stamped again at the end: a long round that failed waits a full cadence after it.
+    # Only a round that collected something counts as observed.
     pipeline.store.set_state('external_attempt:' + pid, now())
     if status != 'failed':
         pipeline.store.touch(pid, 'last_external_at')

@@ -92,8 +92,8 @@ def test_existing_peers_keep_their_own_target_and_queries():
 
 @pytest.mark.parametrize('mode,relation,required', [
     ('first', 'supplier', True), ('refresh', 'supplier', True),
-    # Chain relations rotate into ordinary rounds; other relations keep their cadence.
-    ('incremental', 'supplier', True), ('incremental', 'competitor', False)])
+    # All relations retain the unified scheduler cadence in ordinary rounds.
+    ('incremental', 'supplier', False), ('incremental', 'competitor', False)])
 def test_saved_relation_cadence_preserved_and_refresh_checked(mode, relation, required):
     w = watch(relation_type=relation)
     before = deepcopy(w)

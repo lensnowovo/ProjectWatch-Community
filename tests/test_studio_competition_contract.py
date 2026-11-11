@@ -40,7 +40,7 @@ def test_signals_and_window_survive_normalization():
     assert [(s['peer'], s['event'], s['impact'], [r['code'] for r in s['refs']]) for s in p['competition_signals']] == [
         ('山海医疗', '2026年9月获Ⅲ类证', '国内首家获批被追平', ['C1']),
         ('阶梯医疗', '2026年8月完成B轮5亿', '融资节奏快于本公司', ['C2'])]
-    assert p['competition_window'] == {'months': 12, 'basis': DATED}
+    assert p['competition_window'] == {'basis': DATED}
     assert p['verdict'] == 'ahead'
 
 
@@ -155,3 +155,9 @@ def test_a_failed_peer_read_is_not_reported_as_no_competitors(tmp_path, monkeypa
     text = gen.gather(pipeline, project.id)['text']
     assert '名单读取失败' in text
     assert '尚未确认' not in text
+
+
+def test_unverified_month_count_is_never_published():
+    for basis in ('本公司2026年9月获批', '本公司2027年获批，竞品2025年已获批'):
+        p = normalize(None, {'months': 59, 'basis': basis})
+        assert p['competition_window'] == {'basis': basis}

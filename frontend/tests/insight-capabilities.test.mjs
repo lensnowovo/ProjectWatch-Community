@@ -13,7 +13,8 @@ const component = new Module(entry);
 component.paths = require.resolve.paths('react');
 component._compile(require('esbuild').buildSync({ entryPoints: [entry], bundle: true, write: false,
   platform: 'node', format: 'cjs', packages: 'external', loader: { '.css': 'empty' } }).outputFiles[0].text, entry);
-const render = view => renderToStaticMarkup(React.createElement(StaticRouter, null,
+// The page opens on 公司进展; a saved verdict is read under its own question.
+const render = (view, question = 'position') => renderToStaticMarkup(React.createElement(StaticRouter, { location: '/?question=' + question },
   React.createElement(component.exports.QuestionAnalysis, {
     detail: { project: { id: 'synthetic' }, capabilities: { insight_generation: false, insight_projections: false } },
     view, error: null, onStart() {}, goto() {},

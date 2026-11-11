@@ -64,13 +64,14 @@ before review.
 closed: one already-triaged duplicate no longer rolls back the rest of a query
 (the refusal is counted in `skipped`), `chain` keeps its own category instead of
 being rewritten to `company`, `AFFECTS['chain']` invalidates only the chain page,
-`SOURCE_KINDS` records chain and technology failures, and ordinary rounds rotate
-up to two chain relations instead of reserving them for first/refresh.
+`SOURCE_KINDS` records chain and technology failures, and ordinary rounds include
+every due chain relation instead of reserving them for first/refresh.
 
-The rotation only works because `cadence` and `last_run_at` now reach the plan
-(`WATCH_FIELDS`); without them every round re-picked the two lowest ids. It also
-skips event-driven and query-less relations and does not spend a slot on one
-that is already due this round. `chain` is labelled 产业链 in the interface so the
+An interim two-per-round rotation was removed on 2026-11-11 because it woke
+relations that were not yet due. The lifecycle scheduler owns cadence: incremental
+rounds take every due relation, first and manual refresh rounds cover all of them,
+and event-driven relations still wait for a trigger. `cadence` and `last_run_at`
+remain in `WATCH_FIELDS`. `chain` is labelled 产业链 in the interface so the
 material is not shown under a raw English category name.
 
 Data note: historical rows written before this change remain under
@@ -79,3 +80,39 @@ backfilled — the original category cannot be recovered. New chain rounds write
 `category = 'chain'`, so counts per category are comparable only within the same
 period. `technology` still maps to `industry` because it feeds that page.
 
+**Post-implementation review.** The source drawer now lets only its newest request
+publish, so a slow reply cannot pair a new title with an older source's text.
+Every occurrence of a neutralised clause is annotated, competition citations
+count toward the section's source total, and a failed peer-directory read says
+`名单读取失败` instead of inviting the model to invent competitors. The unwired
+official-site collector and its runtime registration were removed.
+
+Validation: the frontend passed 345 tests and TypeScript checking. The wheel
+built successfully and imported from a clean Python 3.12 environment. Backend
+full-regression results are recorded separately below; a focused subset is not
+a claim that the whole suite passed.
+
+**2026-11-11 — scope follow-ups.** At the maintainer's request, new analyses no longer
+draft the 公司本体 (`operations`) judgment, which the interface stopped showing. This
+supersedes the earlier note in `docs/plans/2026-11-11-company-progress.md` that task
+scheduling would not change. The section list is frozen per job; analyses that started
+before the change, and redos of a batch whose analysis used the five-section list, keep
+it. Published `operations` versions are retained. Other fixes in the same pass: a failed
+collect round now stamps its attempt time and cannot loop; a blocked news feed fails only
+its source; an offline round waits in the same job (bounded to 24 hours) instead of failing
+for a full cadence; a complete model reply that arrives after the lease lapsed (sleep) is
+saved and replayed rather than left unknown. Public monitoring controls moved from the
+hidden 资料与版本 page to 监控范围. The project header folds a settled round to one line,
+and 当前判断 shows the period's key changes under 公司进展 instead of a separate block.
+
+New public page-summary jobs also stop drafting the unused `operations` page; a job
+that already saved or sent its page list keeps it.
+
+Validation: full backend regression 4843 passed, 18 skipped, 1 failed. The failure is
+`test_existing_agent_mode.py::test_bridge_mcp_schema_has_scope_contract`, which needs the
+optional `mcp` extra that the test environment lacks; neither it nor the bridge changed.
+The earlier 90-second timeout in `test_core_without_insight.py` did not recur. Node suites
+passed (78 root, 359 frontend) with TypeScript and Ruff checks. A wheel built from this
+tree installed into a fresh venv and passed `tests/installed_wheel_smoke.py --full-journey`
+(installed bytes match the wheel, 0 live calls); the smoke needed the dev extra's `httpx`
+because current Starlette's test client is not a runtime dependency. No real-model run.

@@ -23,6 +23,10 @@ PROTOCOL = 'analyze_protocol_v2'
 REVIEW_PROTOCOL = 'analysis_review_sources_v1'
 BATCH_CHARS = 32000
 PUBLICATION = 'analyze_publication_v1'
+SECTION_SCOPE = 'analyze_section_scope_v1'
+# Sections no longer shown (公司本体 was replaced by the 公司进展 reading on 2026-11-11).
+# New analyses skip them; analyses that already started keep their original request list.
+RETIRED_SECTIONS = ('operations',)
 FOLLOW = 'analyze_follow_through_v1'
 MAX_MATERIALS, MAX_CHARS = 40, 4000
 IMPORTANCE_RANK = {'major': 0, 'notable': 1, 'routine': 2}
@@ -262,6 +266,7 @@ def sections(pipeline, execution, llm, context, affected=None):
     if saved:
         return saved
     pid = execution.job['project_id']
+    retired = set((execution.read_checkpoint(SECTION_SCOPE) or {}).get('retired', ()))
 
     def guard():
         with closing(execution.store._connect()) as db:
@@ -276,21 +281,34 @@ def sections(pipeline, execution, llm, context, affected=None):
         return dict(status='no_material', reason='no_relevant_material', coverage=selected['coverage'])
     sources = section_analysis.numbered(selected)
     retained = section_analysis.retained_sections(execution.store, pid, selected)
-    targets = [s for s in section_analysis.SECTIONS if affected is None or s in affected or s not in retained]
+    # A retired section is neither drafted nor kept as a cross-check peer: it is no longer maintained.
+    retained = {name: record for name, record in retained.items() if name not in retired}
+    targets = [s for s in section_analysis.SECTIONS
+               if s not in retired and (affected is None or s in affected or s not in retained)]
     if not targets:
-        publication = dict(status='completed', targets=[], published=[],
+        publication = _mark_retired(dict(status='completed', targets=[], published=[],
                            sections={s: dict(status='unchanged', reason='no new relevant material for this section')
-                                     for s in section_analysis.SECTIONS})
+                                     for s in section_analysis.SECTIONS}), retired)
         execution.checkpoint_chunked(PUBLICATION, publication)
         return publication
     project = pipeline.store.get_project(pid) or {}
     company = {k: project.get(k) for k in ('name', 'legal_name', 'short_name', 'industry', 'description')}
     from project_watch.studio.judgment_delivery import deliver_batches, enabled
     if enabled(execution):
-        return deliver_batches(pipeline, execution, llm, company, sources, selected, targets, retained, guard)
-    draft = draft_batches(execution, llm, generator.SYSTEM + GUIDANCE, company, sources, selected, targets)
-    publication = publish_draft(pipeline, execution, llm, draft, sources, selected, targets, retained, guard)
+        publication = _mark_retired(
+            deliver_batches(pipeline, execution, llm, company, sources, selected, targets, retained, guard), retired)
+    else:
+        draft = draft_batches(execution, llm, generator.SYSTEM + GUIDANCE, company, sources, selected, targets)
+        publication = _mark_retired(
+            publish_draft(pipeline, execution, llm, draft, sources, selected, targets, retained, guard), retired)
     execution.checkpoint_chunked(PUBLICATION, publication)
+    return publication
+
+
+def _mark_retired(publication, retired):
+    """A retired section was not skipped for lack of material; say so, so no view counts it as kept."""
+    for name in retired:
+        publication.setdefault('sections', {})[name] = dict(status='retired', reason='section no longer drafted')
     return publication
 
 
@@ -591,6 +609,30 @@ def freeze_review_protocol(execution, batch, *, fresh):
     execution.checkpoint(REVIEW_PROTOCOL, {'version': version})
 
 
+def freeze_section_scope(execution, batch, *, fresh):
+    """Decide once per job which sections it drafts; never change an analysis already under way.
+
+    A job that started before this rule, or whose collection batch already has an analysis
+    on the original list, keeps every section: a shorter list is a different request, and
+    must not become a way around an earlier unknown one.
+    """
+    if execution.read_checkpoint(SECTION_SCOPE) is not None:
+        return
+    from project_watch.studio.execution import JobExecution
+    retired = list(RETIRED_SECTIONS) if fresh else []
+    if retired and batch:
+        with closing(execution.store._connect()) as db:
+            for row in db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='analyze' "
+                                  "AND input_version IN (?,?) AND id<>?",
+                                  (execution.job['project_id'], 'collect:' + batch, 'redo:' + batch,
+                                   execution.job['id'])).fetchall():
+                sibling = JobExecution(execution.store, {'id': row[0]}).read_checkpoint(SECTION_SCOPE, db=db)
+                if not (sibling or {}).get('retired'):
+                    retired = []
+                    break
+    execution.checkpoint(SECTION_SCOPE, {'retired': retired})
+
+
 def run(pipeline, execution):
     from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
     from project_watch.studio.step_outcomes import attempt
@@ -620,6 +662,7 @@ def run(pipeline, execution):
             raise ValueError('existing analysis state retained; unsafe to change request protocol')
         execution.checkpoint(PROTOCOL, {'version': 2})
     freeze_review_protocol(execution, batch, fresh=fresh)
+    freeze_section_scope(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
     # A frozen request may block judgment delivery, not independent round cleanup.
     # Keep the failure under the same boundary that owns section publication.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api, type ProjectDetail, type MonitoringPlanView, type PlanChange, type PlanItem, type PlanModule, type PlanSection, type PlanTemplate } from "./api";
 import { PlanModuleView } from "./planModules";
 import { Figure, Reference, TabSkeleton, VerdictBand } from "./frame";
@@ -26,11 +26,17 @@ const HOP_LABEL: Record<string, string> = { "0": "公司自身", "1": "直接相
 type Latest = NonNullable<MonitoringPlanView["latest"]>[string];
 
 /** The project's plan read top to bottom: what we watch, what is new, where it is thin, what needs a decision. */
-export function PlanView({ projectId, company = "", detail }: { projectId: string; company?: string; detail: ProjectDetail }) {
+type ReferenceItem = { key: string; title: string; note?: string; body: ReactNode };
+
+/** `reference` adds the project's collection receipts and source controls to the folded reference list. */
+export function PlanView({ projectId, company = "", detail, reference = [] }: {
+  projectId: string; company?: string; detail: ProjectDetail; reference?: ReferenceItem[];
+}) {
   const { data, error, loading, reload } = useAsync<MonitoringPlanView>(() => api.monitoringPlan(projectId), [projectId, workRevision(detail), detail.collection_report?.observed_at]);
   const [showSummary, setShowSummary] = useState(false);
   if (loading && !data) return <TabSkeleton label="读取监控方案" />;
-  if (!data) return <ErrorNote error={error} />;
+  // Collection controls stay reachable when the plan itself cannot be read.
+  if (!data) return <><ErrorNote error={error} /><Reference items={reference} /></>;
   const live = data.items.filter((i) => i.status !== "retired");
   const relations = live.filter((i) => i.scope_kind === "relation");
   const remaining = live.filter(i => (i.scope_category ?? (i.scope_kind || 'direction')) === 'direction');
@@ -105,6 +111,7 @@ export function PlanView({ projectId, company = "", detail }: { projectId: strin
         { key: "source-choices", title: "来源选择", body: <CollectionSources key={projectId} projectId={projectId} /> },
         { key: "routine", title: "常规采集", note: `${channels.on} 个来源每轮自动${channels.off ? ` · ${channels.off} 个未开启` : ""}`,
           body: <RoutineChannels framework={data.framework} coverage={data.coverage ?? {}} /> },
+        ...reference,
         { key: "changes", title: "方案变更", note: open.length ? `${open.length} 项 · 可撤销` : undefined,
           body: open.length ? <ChangeLog changes={open.slice(0, 30)} labels={data.labels} onChanged={reload} /> : null },
         { key: "closed", title: "已关闭的关注点", note: closed.length ? `${closed.length} 个 · 判断历史保留` : undefined,

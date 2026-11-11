@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { Fragment, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { Confidence, InsightAnalysis, InsightPoint, InsightRef, InsightView } from "./api";
 import { Block } from "./frame";
 import { EASE } from "./motion";
@@ -86,7 +86,7 @@ const STATUS_TEXT: Record<string, string> = {
   judged_annotated: '部分表述未通过核验，已在文中标注',
   undetermined: '本栏未形成结论',
   stale: '本轮未更新，显示历史版本',
-  absent: '尚无内容，材料未到达',
+  absent: '尚未形成判断',
 };
 const REASON_TEXT: Record<string, string> = {
   recognition_not_supported: '收入确认未核实',
@@ -110,15 +110,21 @@ export function StatusLine({ state, reasons }: { state?: string; reasons?: strin
 export function AnnotatedSummary({ text, notes, className = "jd-summary" }: {
   text: string; notes?: { span: string; code: string; original?: string }[]; className?: string;
 }) {
-  const note = (notes ?? []).find((n) => n.span && text.includes(n.span));
-  if (!note) return <p className={className}>{text}</p>;
-  // Every occurrence, not just the first: the same neutralised clause can appear twice
-  // in one summary, and an unmarked second one would read as verified.
-  const parts = text.split(note.span);
-  return <p className={className}>{parts.map((part, i) => <Fragment key={i}>{part}
-    {i < parts.length - 1 && <mark className="jd-annot"
-      title={`原文为「${note.original || note.span}」，未找到同口径依据，已改为中性表述`}>{note.span}</mark>}
-  </Fragment>)}</p>;
+  const matching = (notes ?? []).filter(n => n.span && text.includes(n.span));
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const next = matching.map(note => ({ note, at: text.indexOf(note.span, cursor) }))
+      .filter(item => item.at >= 0).sort((a, b) => a.at - b.at || b.note.span.length - a.note.span.length)[0];
+    if (!next) { parts.push(text.slice(cursor)); break; }
+    parts.push(text.slice(cursor, next.at));
+    parts.push(<ChartHint key={next.at} title="核验标注" value={next.note.span}
+      note={`原文为「${next.note.original || next.note.span}」，未找到同口径依据，已改为中性表述`}>
+      <mark className="jd-annot">{next.note.span}</mark>
+    </ChartHint>);
+    cursor = next.at + next.note.span.length;
+  }
+  return <p className={className}>{parts}</p>;
 }
 
 function ChangeIf({ items }: { items: string[] }) {
@@ -175,7 +181,7 @@ export function CompetitionReading({ position }: { position: InsightAnalysis["po
   }
   return <div className="jd-competition">
     {window && <p className="jd-window"><span>窗口期</span>
-      <b>{window.months ? `约 ${window.months} 个月` : '正在收窄'}</b>
+      {window.months != null && <b>约 {window.months} 个月</b>}
       <span className="jd-window-basis">{window.basis}</span></p>}
     {signals.length > 0 && <div className="jd-signals">
       <h4>竞争信号</h4>
@@ -190,8 +196,8 @@ export function CompetitionReading({ position }: { position: InsightAnalysis["po
 export function PositionJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const p = view?.record?.analysis.position;
   if (!view?.record || !p) return null;
-  return <Block card title="竞争位置判断" note={<Provenance view={view} />} action={<Confidence value={p.confidence} />}>
-    <JudgmentBody compact={compact} scale="position" verdict={p.verdict} labels={view.labels.position} pro={p.for} con={p.against} changeIf={p.change_if}
+  return <Block card className="jd-card" title="竞争位置判断" note={<Provenance view={view} />} action={<Confidence value={p.confidence} />}>
+    <JudgmentBody compact={compact} scale="position" verdict={p.verdict} labels={view.labels.position} summary={p.summary} pro={p.for} con={p.against} changeIf={p.change_if}
       state={p.state} reasons={p.reason_codes} annotations={p.annotations}>
       <CompetitionReading position={p} />
       {p.peers.length > 0 && <p className="jd-peers"><span>对比对象</span>{p.peers.map((n) => <b key={n}>{n}</b>)}</p>}
@@ -203,7 +209,7 @@ export function PositionJudgment({ view, compact = false }: { view: InsightView 
 export function ChainJudgment({view}:{view:InsightView}) {
   const d=view.record?.analysis.chain;
   if(!d)return null;
-  return <Block card title="产业链影响判断" note={<Provenance view={view}/>} action={<Confidence value={d.confidence}/>}>
+  return <Block card className="jd-card" title="产业链影响判断" note={<Provenance view={view}/>} action={<Confidence value={d.confidence}/>}>
     <JudgmentBody compact scale="chain" verdict={d.verdict} labels={view.labels.chain} summary={d.summary} pro={d.for} con={d.against} changeIf={d.change_if}
       state={d.state} reasons={d.reason_codes} annotations={d.annotations}/>
   </Block>;
@@ -212,7 +218,7 @@ export function ChainJudgment({view}:{view:InsightView}) {
 export function IndustryJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const d = view?.record?.analysis.industry;
   if (!view?.record || !d) return null;
-  return <Block card title="行业发展判断" note={<Provenance view={view} />} action={<Confidence value={d.confidence} />}>
+  return <Block card className="jd-card" title="行业发展判断" note={<Provenance view={view} />} action={<Confidence value={d.confidence} />}>
     <JudgmentBody compact={compact} scale="industry" verdict={d.verdict} labels={view.labels.industry} summary={d.summary}
       pro={d.drivers} con={d.headwinds} proTitle="驱动" conTitle="阻力"
       state={d.state} reasons={d.reason_codes} annotations={d.annotations} />
@@ -223,13 +229,14 @@ export function IndustryJudgment({ view, compact = false }: { view: InsightView 
 export function TechnologyJudgment({ view, compact = false }: { view: InsightView | null; compact?: boolean }) {
   const t = view?.record?.analysis.technology;
   if (!view?.record || !t) return null;
-  return <Block card title="技术方向判断" note={<Provenance view={view} />} action={<Confidence value={t.confidence} />}>
+  return <Block card className="jd-card" title="技术方向判断" note={<Provenance view={view} />} action={<Confidence value={t.confidence} />}>
     <div className="jd-tech">
       <div className="jd-tech-copy">
         <span className="jd-label">押注的技术路线</span>
         <strong className="jd-route">{t.route || "未识别"}</strong>
         <div className="jd-badges"><b>成熟度：{view.labels.maturity[t.maturity] ?? t.maturity}</b><b>共识：{view.labels.consensus[t.consensus] ?? t.consensus}</b></div>
-        {t.summary && <p className="jd-summary">{t.summary}</p>}
+        {t.summary && <AnnotatedSummary text={t.summary} notes={t.annotations} />}
+        <StatusLine state={t.state} reasons={t.reason_codes} />
       </div>
       <TechMap maturity={t.maturity} consensus={t.consensus} labels={view.labels} />
     </div>

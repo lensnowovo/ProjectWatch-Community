@@ -1,3 +1,4 @@
+import { INTERNAL_INFORMATION_VISIBLE, visibleProjectTab } from "../internalInformation";
 import { AnimatePresence, motion } from "motion/react";
 import { collectionChannelExecution, collectionExecutionLabel } from "../externalCollection";
 import { DiscoveredSources } from "../DiscoveredSources";
@@ -6,7 +7,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
 import { CompetitionView, IndustryView, NewsView } from "../landscape";
 import { MetricsView } from "../metrics";
-import { Columns, Figure, Reference, Skeleton, TabSkeleton, VerdictBand } from "../frame";
+import { Figure, Skeleton, TabSkeleton, VerdictBand } from "../frame";
 import { RulesCard, SiteWatchCard } from "../monitor";
 import { CadenceCard } from "../signals";
 import { UploadDialog } from "../upload";
@@ -46,6 +47,7 @@ const SECTIONS: { id: Section; label: string; pages: { id: Tab; label: string }[
     { id: "fin", label: "财务分析" }, { id: "risks", label: "风险与核对" }, { id: "documents", label: "资料与版本" }] },
   { id: "scope", label: "监控范围", pages: [{ id: "plan", label: "监控方案" }] },
 ];
+const VISIBLE_SECTIONS = SECTIONS.filter(s => s.id !== "internal" || INTERNAL_INFORMATION_VISIBLE);
 const sectionOf = (t: Tab) => SECTIONS.find((s) => s.pages.some((p) => p.id === t)) ?? SECTIONS[0];
 
 
@@ -60,7 +62,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
   const { data: loaded, error, loading, reload } = useAsync(() => api.project(id), [id]);
   const data = useMemo(() => loaded?.project.id === id ? { ...loaded, status_stale: !!error } : null, [loaded, error, id]);
   const defaultTab = data?.capabilities?.insight_generation === true ? "brief" : "overview";
-  const tab: Tab = raw && SECTIONS.some((s) => s.pages.some((p) => p.id === raw)) ? raw : defaultTab;
+  const tab: Tab = raw && VISIBLE_SECTIONS.some((s) => s.pages.some((p) => p.id === raw)) ? raw : defaultTab;
   const dossierMotion = useDossierMotion(data, tab === 'overview');
   const busy = data?.jobs.some((j) => j.status === "queued" || j.status === "running")
     || data?.documents.some((d) => d.status === "queued" || d.status === "processing")
@@ -81,7 +83,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
   const commercialRevision = data.jobs.map(j => `${j.id}:${j.status}`).join("|");
   const setTab = (t: Tab) => setParams(previous => {
     const next = new URLSearchParams(previous);
-    if (t === defaultTab) next.delete('tab'); else next.set('tab', t);
+    const target = visibleProjectTab(t, defaultTab);
+    if (target === defaultTab) next.delete('tab'); else next.set('tab', target);
     return next;
   });
   const section = sectionOf(tab);
@@ -94,7 +97,7 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
       <Header detail={data} goto={setTab} onReload={() => { reload(); onChanged(); }} onRemoved={onChanged} status={<Progress detail={data} onReload={reload} />} />
       <div className="tabs-row">
       <nav className="tabs" aria-label="项目内容">
-        {SECTIONS.map((sec, i) => (
+        {VISIBLE_SECTIONS.map((sec, i) => (
           <button key={sec.id} className={section.id === sec.id ? "on" : ""} aria-current={section.id === sec.id ? "page" : undefined}
             onClick={() => section.id !== sec.id && setTab(sec.pages[0].id)}>
             {section.id === sec.id && <motion.span layoutId="tab-underline" className="tab-underline" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
@@ -120,7 +123,8 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
           exit={{ opacity: 0, transition: { duration: 0.1 } }}>
           {["overview","external","trials","papers","patents","competition","chain","ops","business","numbers","fin","risks"].includes(tab) && <PageSummary key={`${id}:${tab}`} detail={data} subject={tab as SummarySubject} />}
           {tab === "overview" && <CompanyOverview detail={data} onReload={reload} dossierMotion={dossierMotion} />}
-          {tab === "plan" && <PlanView projectId={id} company={data.project.short_name || data.project.name} detail={data} />}
+          {tab === "plan" && <PlanView projectId={id} company={data.project.short_name || data.project.name} detail={data}
+            reference={monitoringReference(data)} />}
           {tab === "brief" && <CurrentBrief detail={data} goto={setTab} onReload={reload}
             aside={<Note projectId={project.id} initial={project.note ?? ""} onSaved={reload} />} />}
           {tab === "ops" && <OperationsView detail={data} go={setTab} />}
@@ -188,13 +192,13 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
         <button className="btn btn-sm" onClick={restore}>恢复关注</button>
       </div>}
       <ProjectHeader detail={detail} goto={goto} actions={removed ? null : <>
-        <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>
+        {INTERNAL_INFORMATION_VISIBLE && <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>}
         {project.execution_mode === "agent" ? <Link className="btn" to={`/agents?project=${project.id}`}>用 Agent 更新</Link> : <>
           <button className="btn" onClick={refresh} disabled={!project.activated || refreshing}>{refreshing ? '正在检查…' : '立即更新'}</button>
           <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
         </>}
       </>} status={status} />
-      <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />
+      {INTERNAL_INFORMATION_VISIBLE && <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />}
       <ErrorNote error={error} />
     </>
   );
@@ -327,7 +331,7 @@ function QueryTerms({ detail }: { detail: ProjectDetail }) {
             {plan.affiliation_names.length + plan.paper_queries.length > 0 && <><dt>论文</dt><dd>{[...plan.affiliation_names, ...plan.paper_queries].join("、")}</dd></>}
             {plan.is_biomed && <><dt>临床申办方</dt><dd>{plan.trial_sponsors.join("、") || "—"}</dd></>}
           </dl>
-          <p className="muted small">AI 生成，随资料更新；关注点与检索方向在“监控方案”里调整。</p>
+          <p className="muted small">AI 生成，随资料更新；关注点与检索方向在本页上方调整。</p>
         </section>
       )}
     </>
@@ -394,36 +398,38 @@ function Documents({ detail, onUploaded }: { detail: ProjectDetail; onUploaded: 
   );
 }
 
-/** 资料库: files and the public sources' health; long tables fold into the reference area. */
+/** 资料库: the owner's own files. Public collection receipts and controls live on 监控范围. */
 function DocumentsTab({ detail, onUploaded }: { detail: ProjectDetail; onUploaded: () => void }) {
   const docs = detail.documents;
   const pending = docs.filter((d) => d.status === "needs_ocr" || d.status === "failed").length;
   const read = docs.filter((d) => d.status === "completed" || d.fragments).length;
-  const c = detail.body_coverage;
-  const rate = c && c.total ? Math.round(((c.article + c.twin) / Math.max(1, c.total - (c.declined ?? 0))) * 100) : null;
-  const report = detail.plan?.last_report ?? {};
-  const failed = Object.values(report).filter((r) => r.errors.length && !r.checked).length;
   return (
     <div className="tab-frame documents-frame">
       <VerdictBand eyebrow="资料库" meta="原件本机保存"
-        title={docs.length ? `${read} 份内部资料已读入${pending ? `，${pending} 份需要处理` : ""}${rate !== null ? `；近 30 天报道正文读取率 ${rate}%` : ""}` : "还没有内部资料：上传 BP、年报或经营月报"}
+        title={docs.length ? `${read} 份内部资料已读入${pending ? `，${pending} 份需要处理` : ""}` : "还没有内部资料：上传 BP、年报或经营月报"}
         figures={<>
           <Figure label="内部资料" value={docs.length} unit="份" note={docs.length ? `已读入 ${read} 份` : "拖入或点击上传"} />
           <Figure label="需要处理" value={pending} unit="份" note="未识别或识别失败" tone={pending ? "warn" : undefined} />
-          <Figure label="报道正文读取率" value={rate ?? "—"} unit={rate !== null ? "%" : undefined} note="AI 依据正文判断的比例" />
-          <Figure label="上轮检索失败" value={failed} unit="项" note="见下方检索覆盖" tone={failed ? "warn" : undefined} />
         </>} />
-      <Columns
-        main={<><Documents detail={detail} onUploaded={onUploaded} /><MonitorSources detail={detail} /></>}
-        side={<MonitorCadence detail={detail} />} />
-      <Reference items={[
-        { key: "coverage", title: "检索覆盖", note: "上一轮每类来源的新增与失败", body: <Coverage detail={detail} /> },
-        { key: "body", title: "报道正文", note: rate !== null ? `读取率 ${rate}%` : undefined, body: c && c.total > 0 ? <BodyCoverageCard c={c} /> : null },
-        { key: "terms", title: "检索词", note: "系统生成", body: detail.plan ? <QueryTerms detail={detail} /> : null },
-        { key: "rules", title: "过滤规则", body: <MonitorRules detail={detail} /> },
-      ]} />
+      <Documents detail={detail} onUploaded={onUploaded} />
     </div>
   );
+}
+
+/** Public collection: last round per source, article bodies, search terms, filters, site pages, cadence. */
+export function monitoringReference(detail: ProjectDetail) {
+  const c = detail.body_coverage;
+  const rate = c && c.total ? Math.round(((c.article + c.twin) / Math.max(1, c.total - (c.declined ?? 0))) * 100) : null;
+  // The fold title already names each card, so its own heading is hidden (styles.css .ref-card).
+  const card = (body: ReactNode) => <div className="ref-card">{body}</div>;
+  return [
+    { key: "coverage", title: "上一轮结果", note: "每类来源的新增与失败", body: <Coverage detail={detail} /> },
+    { key: "body", title: "报道正文", note: rate !== null ? `读取率 ${rate}%` : undefined, body: c && c.total > 0 ? card(<BodyCoverageCard c={c} />) : null },
+    { key: "terms", title: "检索词", note: "系统生成", body: detail.plan ? <QueryTerms detail={detail} /> : null },
+    { key: "rules", title: "过滤规则", body: card(<MonitorRules detail={detail} />) },
+    { key: "site", title: "官网监测", body: card(<MonitorSources detail={detail} />) },
+    { key: "cadence", title: "监控节奏", body: card(<MonitorCadence detail={detail} />) },
+  ];
 }
 
 function DocOpen({ id, name, disabled }: { id: string; name: string; disabled: boolean }) {

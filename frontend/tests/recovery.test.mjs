@@ -19,3 +19,14 @@ test('re-analysis reuses saved material and is confirmed before any possible dup
   assert.match(round, /data\.can_reanalyze &&/);
   assert.match(round, /已收录的内容保留|已收录材料保留/);
 });
+
+test('a settled round folds to one line; running, failed or redo-able rounds stay open', () => {
+  assert.match(round, /if \(!data\.collect\) return null;/);
+  assert.match(round, /if \(data\.running \|\| data\.can_reanalyze \|\| failed\)/);
+  assert.match(round, /部分来源暂不可用/);
+  assert.match(round, /<details className="round-view-fold"/);
+  const overview = readFileSync(new URL('../src/overview.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(overview, /title="本期最重要的变化"/);
+  const operational = readFileSync(new URL('../src/Operational.tsx', import.meta.url), 'utf8');
+  assert.match(operational, /\(isMoving\(work\.state\) \|\| needsAttention\(work\.state\)\) && <TaskActivity/);
+});

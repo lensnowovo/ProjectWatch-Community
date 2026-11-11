@@ -12,7 +12,27 @@ function load(path) {
   return mod.exports;
 }
 const { createLatest } = load('../src/latestRequest.ts');
-const { AnnotatedSummary } = load('../src/judgment.tsx');
+const { AnnotatedSummary, CompetitionReading, TechnologyJudgment } = load('../src/judgment.tsx');
+
+test('technology detail keeps the same annotation and history status as judgment', () => {
+  const html = renderToStaticMarkup(React.createElement(TechnologyJudgment, {view:{record:{total:1,generated_at:'2026-11-11',analysis:{technology:{route:'合成路线',maturity:'advanced',consensus:'forming',summary:'收入待核实',annotations:[{span:'收入待核实',code:'income'}],state:'stale',academic:[],industry:[],risks:[]}}},labels:{maturity:{advanced:'先进'},consensus:{forming:'形成中'}}}}));
+  assert.match(html,/<mark/); assert.match(html,/本轮未更新，显示历史版本/);
+});
+
+test('distinct annotation spans are all focusable and retain the sentence', () => {
+  const html = renderToStaticMarkup(React.createElement(AnnotatedSummary, {
+    text: '收入待核实，订单待核实，收入待核实。',
+    notes: [{span:'收入待核实',code:'income'}, {span:'订单待核实',code:'orders'}],
+  }));
+  assert.equal((html.match(/<mark/g)||[]).length,3);
+  assert.equal((html.match(/tabindex="0"/g)||[]).length,3);
+  assert.match(html,/核验标注/);
+});
+
+test('a qualitative competition window does not invent a shrinking trend', () => {
+  const html = renderToStaticMarkup(React.createElement(CompetitionReading, {position:{competition_window:{months:null,basis:'双方仍处于验证阶段'},competition_signals:[]}}));
+  assert.match(html,/双方仍处于验证阶段/);assert.doesNotMatch(html,/正在收窄|个月/);
+});
 
 test('a slow earlier reply cannot overwrite a newer source', async () => {
   const latest = createLatest();

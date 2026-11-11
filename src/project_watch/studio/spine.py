@@ -23,6 +23,13 @@ def request_round(store, project_id, reason, *, automatic=False, db=None):
         active = conn.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind IN ('collect','analyze','report') "
                               "AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1", (project_id,)).fetchone()
         if active:
+            if (reason == 'manual' and active['kind'] == 'collect' and active['status'] == 'queued'
+                    and (active['retry_after'] or '') > now()):
+                # An owner's 更新 resumes a round waiting for the network now. Only
+                # connection backoffs are cleared: nothing was sent, so nothing can repeat.
+                conn.execute('UPDATE studio_jobs SET retry_after=NULL WHERE id=?', (active['id'],))
+                conn.execute('DELETE FROM studio_provider_backoff WHERE status=0')
+                active = conn.execute('SELECT * FROM studio_jobs WHERE id=?', (active['id'],)).fetchone()
             return dict(active)
         return store.enqueue(project_id, 'collect', automatic=automatic, input_version=f'{reason}:{now()}', db=conn)
 

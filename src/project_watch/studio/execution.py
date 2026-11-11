@@ -50,6 +50,21 @@ CREATE TABLE IF NOT EXISTS studio_provider_backoff (
 """
 
 
+def _still_open(db, job_id, call_key):
+    """The request is unfinished and its job is live or waiting to resume, not held."""
+    return db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
+                      "WHERE c.job_id=? AND c.call_key=? AND c.status='started' "
+                      "AND j.status IN ('running','queued')", (job_id, call_key)).fetchone() is not None
+
+
+def waiting_on_request(store, job_id):
+    """The job lost its lease but its own sent request is still being received."""
+    with closing(store._connect()) as db:
+        return db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
+                          "WHERE c.job_id=? AND c.status='started' AND j.status IN ('running','queued') LIMIT 1",
+                          (job_id,)).fetchone() is not None
+
+
 class JobExecution:
     def __init__(self, store, job, *, budgets=None, cancel_requested=None):
         self.store, self.job = store, job
@@ -83,12 +98,18 @@ class JobExecution:
         # Ownership still fences a superseded writer.
         self._lease_guard(db)
 
-    def _owns_transport(self):
+    def _owns_transport(self, call_key):
+        """Keep receiving while this request is still ours to finish.
+
+        A lease that expired (e.g. while the computer slept) and a job requeued for
+        recovery do not abandon a request already sent: nobody else may finish or
+        resend a ``started`` row, so cancelling it would only turn a paid answer
+        into an unknown. An explicit stop or a watchdog hold still ends the wait.
+        """
         if self.cancel_requested():
             return False
         with closing(self.store._connect()) as db:
-            return db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND status='running' "
-                "AND lease_token=? AND lease_until>?", (self.job['id'], self.job['lease_token'], now())).fetchone() is not None
+            return _still_open(db, self.job['id'], call_key)
 
     def _guard(self, db):
         if self.cancel_requested():
@@ -214,7 +235,7 @@ class JobExecution:
         started = time.monotonic()
         try:
             from project_watch.studio.http import TRANSPORT_OWNER
-            owner_token = TRANSPORT_OWNER.set(self._owns_transport)
+            owner_token = TRANSPORT_OWNER.set(lambda: self._owns_transport(key))
             try:
                 response = transport()
             finally:
@@ -268,7 +289,12 @@ class JobExecution:
             raise
         with closing(self.store._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            self._receipt_guard(db)
+            # A complete answer is recorded even if the lease lapsed meanwhile: the
+            # row is still ``started``, so no other attempt could have resent or
+            # filled it, and the resumed job replays it instead of paying again.
+            # A job the watchdog already held as unknown stays unknown.
+            if not _still_open(db, self.job['id'], key):
+                raise RuntimeError("job lease expired or replaced")
             self._progress(db)
             safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
             if response.diagnostics:
@@ -287,6 +313,8 @@ class JobExecution:
                 db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
                 db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
                     (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(response.status, attempt, response.headers))).isoformat(), response.status))
+        with closing(self.store._connect()) as db:
+            self._lease_guard(db)  # saved; a superseded owner still stops here
         if self.cancel_requested():
             raise HttpError('request_cancelled')
         return response
