@@ -91,9 +91,9 @@ def test_review_budget_stays_within_two_batches():
 
 
 def test_one_bad_signal_does_not_take_the_others_down():
-    p = normalize(SIGNALS + [{**SIGNALS[0], 'impact': ''}])
+    p = normalize([*SIGNALS, {**SIGNALS[0], 'impact': ''}])
     assert len(p['competition_signals']) == 2
-    trimmed, dropped, blocking = section_analysis.trim(
+    trimmed, _dropped, blocking = section_analysis.trim(
         p, [{'field': 'position.competition_signals.0.impact', 'reason': 'unsupported'}])
     assert trimmed is not None and not blocking
     assert [s['peer'] for s in trimmed['competition_signals']] == ['阶梯医疗']

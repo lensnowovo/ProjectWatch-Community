@@ -315,10 +315,9 @@ def _mark_retired(publication, retired):
 def publish_draft(pipeline, execution, llm, draft, sources, selected, targets, retained, guard, revision=None,
                   independent=True):
     """Review a frozen candidate and publish its approved sections, with durable per-page receipts."""
-    from project_watch.studio import section_analysis
+    from project_watch.studio import judgment_delivery, section_analysis
     from project_watch.studio.llm import ModelError
     from project_watch.studio.section_progress import outcome_state
-    from project_watch.studio import judgment_delivery
     if independent and revision and judgment_delivery.independent_pages(execution):
         return judgment_delivery.publish_pages(
             pipeline, execution, llm, draft, sources, selected, targets, retained, guard, revision)

@@ -14,7 +14,7 @@ def other_trial(n=2):
                         'source_record': {'nctId': f'NCT0000000{n}', 'overallStatus': 'RECRUITING'}})
 
 
-def test_one_admitted_duplicate_does_not_discard_the_rest(host):
+def test_one_admitted_duplicate_does_not_discard_the_rest(host):  # noqa: F811  (pytest fixture)
     """The failure that emptied whole chain queries: one re-seen record rolled back the batch."""
     research, unit, _ = host
     # The collect job grants source-only ingest, so an already-triaged record is refused.
@@ -28,13 +28,13 @@ def test_one_admitted_duplicate_does_not_discard_the_rest(host):
     assert len(rows(research, 'studio_items')) == 2
 
 
-def test_chain_report_keeps_its_category(host):
+def test_chain_report_keeps_its_category(host):  # noqa: F811  (pytest fixture)
     research, unit, ingest = host
     ingest(unit | {'id': 'chain-unit', 'category': 'chain'}, [trial()])
     assert [r['category'] for r in rows(research, 'studio_items')] == ['chain']
 
 
-def test_technology_reports_still_feed_the_industry_page(host):
+def test_technology_reports_still_feed_the_industry_page(host):  # noqa: F811  (pytest fixture)
     research, unit, ingest = host
     ingest(unit | {'id': 'tech-unit', 'category': 'technology'}, [trial()])
     assert [r['category'] for r in rows(research, 'studio_items')] == ['industry']

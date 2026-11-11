@@ -1,8 +1,7 @@
 """Presentation state and the fate of one unverified caveat. Synthetic records only."""
-import pytest
+from test_section_analysis import apply, host, part  # noqa: F401  (host is a pytest fixture)
 
 from project_watch.studio import insight_generation as gen
-from test_section_analysis import apply, host, part  # noqa: F401  (host is a pytest fixture)
 
 
 def source(body, **extra):
@@ -76,14 +75,14 @@ def test_section_without_supported_items_is_unavailable():
     assert p['evidence_counts'] == {'support': 0, 'oppose': 0, 'sources': 0}
 
 
-def test_published_section_is_judged(host):
+def test_published_section_is_judged(host):  # noqa: F811  (pytest fixture)
     result, view = apply(host, dict(operations=part()))
     assert result['published'] == ['operations']
     assert view['analysis']['operations']['state'] == 'judged'
     assert view['analysis']['operations']['verdict_source'] == 'model'
 
 
-def test_unpublished_section_is_absent_not_undetermined(host):
+def test_unpublished_section_is_absent_not_undetermined(host):  # noqa: F811  (pytest fixture)
     """The empty template must not look like a model that chose "undetermined"."""
     _, view = apply(host, dict(operations=part()))
     chain = view['analysis']['chain']
