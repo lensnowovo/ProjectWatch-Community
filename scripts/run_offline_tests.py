@@ -50,9 +50,26 @@ def network_guard(event, args):
         raise RuntimeError('Offline release tests block non-loopback connections and DNS')
 
 
+WORKER_GUARD = 'PROJECTWATCH_OFFLINE_WORKER_GUARD'
+NO_TESTS = 5  # pytest.ExitCode.NO_TESTS_COLLECTED
+
+
+def install_guard():
+    if not getattr(sys, '_projectwatch_offline_guard', False):
+        sys.addaudithook(network_guard)
+        sys._projectwatch_offline_guard = True
+
+
+# Loaded with -p in every xdist worker: workers are separate processes and do not inherit
+# the controller's audit hook, so each installs the same guard as soon as it imports this.
+if os.environ.get(WORKER_GUARD) == '1':
+    install_guard()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True, help='New directory outside source')
+    parser.add_argument('--workers', default='', help="Parallel workers ('auto' or a number); tests marked serial run afterwards")
     parser.add_argument('tests', nargs='*', default=['tests'])
     args = parser.parse_args()
     output = args.output.resolve()
@@ -60,15 +77,28 @@ def main():
         raise ValueError('Output must be new and outside source')
     output.mkdir(parents=True)
     clean = clean_environment(os.environ, output)
+    if args.workers:
+        # Workers start without -I and -X utf8: keep user site-packages out and UTF-8 mode on.
+        clean.update({WORKER_GUARD: '1', 'PYTHONNOUSERSITE': '1', 'PYTHONUTF8': '1'})
     os.environ.clear()
     os.environ.update(clean)
-    sys.addaudithook(network_guard)
+    install_guard()
     sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
     os.chdir(ROOT)
     import pytest
 
-    return pytest.main(['-q', '--tb=short', '-ra', '--junitxml=' + str(output / 'pytest.xml'),
-                        *args.tests])
+    base = ['-q', '--tb=short', '-ra']
+    if not args.workers:
+        return pytest.main([*base, '--junitxml=' + str(output / 'pytest.xml'), *args.tests])
+    parallel = pytest.main([*base, '-p', 'scripts.run_offline_tests', '-n', args.workers, '-m', 'not serial',
+                            '--junitxml=' + str(output / 'pytest.xml'), *args.tests])
+    if int(parallel) in (2, 3, 4):  # interrupted, internal or usage error: do not start the serial pass
+        return int(parallel)
+    serial = pytest.main([*base, '-m', 'serial', '--junitxml=' + str(output / 'pytest-serial.xml'), *args.tests])
+    codes = {int(parallel), int(serial)}
+    if codes == {NO_TESTS}:
+        return NO_TESTS
+    return max(codes - {NO_TESTS}, default=0)
 
 
 if __name__ == '__main__':

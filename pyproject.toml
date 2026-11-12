@@ -44,6 +44,7 @@ project_watch = ["static/*.html", "static/*.css", "static/*.js", "static/*.mjs",
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["serial: wall-clock timing test; the parallel CI runner runs it alone after the rest"]
 
 # Explicitly retain the source repository's lint contract, rather than inheriting
 # a developer machine's global Ruff settings after the split.

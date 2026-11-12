@@ -2,6 +2,8 @@ import random
 import re
 import time
 
+import pytest
+
 from project_watch.studio.comparisons import _sentences
 
 _OLD = re.compile(r'[^\n。！？!?]+(?:[。！？!?]|$)')
@@ -15,6 +17,7 @@ def test_sentence_runs_match_the_original_pattern():
         assert [m.span() for m in _sentences(text)] == [m.span() for m in _OLD.finditer(text)], repr(text)
 
 
+@pytest.mark.serial
 def test_unpunctuated_lines_stay_linear():
     text = ('无标点的长句子 ' * 4000 + '\n') * 3
     started = time.perf_counter()

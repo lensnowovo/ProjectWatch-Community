@@ -410,7 +410,7 @@ def legacy_origin(client, run, flow, expected, now):
 def python_command(domain):
     prefix = 'python -I -X utf8 scripts/run_offline_tests.py --output "$env:RUNNER_TEMP/'
     if domain == 'python':
-        return prefix + 'offline" -- tests ' + ' '.join('--ignore=' + path for path in (*FRONTEND_TESTS, *CONTRACT_TESTS))
+        return prefix + 'offline" --workers auto -- tests ' + ' '.join('--ignore=' + path for path in (*FRONTEND_TESTS, *CONTRACT_TESTS))
     return prefix + 'frontend-python" ' + ' '.join(FRONTEND_TESTS)
 
 

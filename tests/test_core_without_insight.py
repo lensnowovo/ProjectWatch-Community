@@ -99,6 +99,7 @@ with TestClient(app) as client:
 ''')
 
 
+@pytest.mark.serial
 def test_bp_incremental_history_permissions_and_restart_without_insight(tmp_path):
     isolated('''
 import runpy

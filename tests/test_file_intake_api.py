@@ -601,6 +601,7 @@ def test_worker_failure_is_a_bounded_status_and_can_retry(
     assert retried.json()["status"] == "queued"
 
 
+@pytest.mark.serial
 def test_local_lifespan_worker_processes_without_manual_click(tmp_path: Path) -> None:
     app = create_app(tmp_path / "watch.sqlite3", start_worker=True)
     with TestClient(app) as client:
