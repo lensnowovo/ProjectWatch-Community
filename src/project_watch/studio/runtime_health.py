@@ -281,6 +281,8 @@ def projection(db, job, *, worker='running', at=None):
                     update and update.get('phases', {}).get('analysis', {}).get('status') == 'partial') or (
                     page_result and page_result.get('status') == 'partial') or failures:
                 state, label = 'partial', '材料已保存，部分分析未完成'
+            if execution.read_checkpoint('input_superseded_v1', db=db):
+                state, label = 'done', '资料已更新，改由新任务按当前资料整理'
     return {'state': state, 'label': label, 'blocking_jobs': blocking_jobs, 'continuation_wait': continuation_wait,
             'phase': job_phase(db, job), 'progress_at': job['progress_at'],
             'heartbeat_at': job['heartbeat_at'], 'progress_age_seconds': seconds_since(job['progress_at'], at),

@@ -150,7 +150,6 @@ def test_saved_business_checkpoint_stops_before_new_model_request(tmp_path):
     from project_watch.studio.app import create_studio_app
     from project_watch.studio.execution import JobExecution
     from project_watch.studio.http import Http, Response
-    from project_watch.studio.llm import ModelError
 
     app = create_studio_app(tmp_path, start_worker=False)
     pipeline, store = app.state.studio_pipeline, app.state.studio_store
@@ -179,8 +178,14 @@ def test_saved_business_checkpoint_stops_before_new_model_request(tmp_path):
 
     pipeline.http_factory = lambda _: Http(transport)
     pipeline._execution_state.current = execution
-    with pytest.raises(ModelError, match='旧检查点未重发'):
-        pipeline.run_business(claimed)
+    # Stale saved inputs end the job quietly; the scheduler queues current material.
+    pipeline.run_business(claimed)
+    assert pipeline.business_profiles.get(pid) is None
+    # finish() clears the stage; the job view still names why nothing was extracted.
+    store.finish(claimed['id'], lease_token=claimed['lease_token'])
+    from project_watch.studio.runtime_health import project_jobs
+    view = next(j for j in project_jobs(store, pid) if j['id'] == claimed['id'])
+    assert view['status'] == 'done' and view['runtime']['label'] == '资料已更新，改由新任务按当前资料整理'
     assert calls == []
 
 
