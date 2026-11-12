@@ -661,6 +661,8 @@ def run(pipeline, execution):
             raise ValueError('existing analysis state retained; unsafe to change request protocol')
         execution.checkpoint(PROTOCOL, {'version': 2})
     freeze_review_protocol(execution, batch, fresh=fresh)
+    from project_watch.studio.review_source_traversal import freeze_scope
+    freeze_scope(execution)
     freeze_section_scope(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
     # A frozen request may block judgment delivery, not independent round cleanup.

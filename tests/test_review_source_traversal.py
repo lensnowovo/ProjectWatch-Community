@@ -120,16 +120,80 @@ def test_partial_support_is_not_promoted_to_a_full_summary_across_chunks():
     assert result['checks'][0]['status'] == 'insufficient'
 
 
-def test_unknown_keeps_completed_receipts_and_stops_tail():
-    journal, calls = Journal(), []
+def long_payload():
+    data = payload()
+    data['evidence'] = {f'S{i}': {'context': ('SOURCE' + str(i) + ' ') * 500, 'title': f'title {i}'} for i in range(42)}
+    return data
+
+
+def recording(calls, fail=None, code='request_outcome_unknown', invalid=None):
     def model(system, user, **kwargs):
-        calls.append(user)
-        if len(calls) == 2:
-            raise ModelError('synthetic unknown', code='request_outcome_unknown')
-        return answer(json.loads(user))
+        body = json.loads(user)
+        evidence = set(body['evidence'])
+        calls.append(evidence)
+        if evidence == fail:
+            raise ModelError('synthetic failure', code=code)
+        if evidence == invalid:
+            return {'checks': []}  # no verdict for the field
+        return answer(body)
+    return model
+
+
+def test_unknown_keeps_completed_receipts_and_stops_tail():
+    """Requests of one wave go out together; after an unknown one no further request is sent,
+    and the answers already received are kept."""
+    plan = list(r.batches('system', long_payload()))
+    assert len(plan) > 1 + r.PARALLEL  # a tail exists beyond the first two waves
+    journal, calls = Journal(), []
     with pytest.raises(ModelError):
-        r.run(journal, SimpleNamespace(json=model), 'system', payload(), lambda: None)
-    assert len(calls) == 2 and len(journal.saved) == 1
+        r.run(journal, SimpleNamespace(json=recording(calls, fail=set(plan[1]['evidence']))), 'system',
+              long_payload(), lambda: None)
+    assert len(calls) == 1 + r.PARALLEL and len(journal.saved) == r.PARALLEL
+    assert all(set(batch['evidence']) in calls for batch in plan[:1 + r.PARALLEL])
+
+
+def test_the_first_unanswered_request_goes_alone():
+    """On resume it may be the unknown one; nothing else is paid for if it cannot complete."""
+    plan = list(r.batches('system', long_payload()))
+    journal, calls = Journal(), []
+    with pytest.raises(ModelError):
+        r.run(journal, SimpleNamespace(json=recording(calls, fail=set(plan[0]['evidence']), code='unknown_not_resent')),
+              'system', long_payload(), lambda: None)
+    assert len(calls) == 1 and journal.saved == {}
+
+
+def test_an_invalid_answer_stops_the_later_waves():
+    plan = list(r.batches('system', long_payload()))
+    journal, calls = Journal(), []
+    with pytest.raises(ValueError):
+        r.run(journal, SimpleNamespace(json=recording(calls, invalid=set(plan[0]['evidence']))), 'system',
+              long_payload(), lambda: None)
+    assert len(calls) == 1  # the old sequential cost of an invalid first answer, not the whole plan
+
+
+def test_a_saved_invalid_answer_stops_a_resumed_traversal_before_any_request():
+    plan = list(r.batches('system', long_payload()))
+    journal, calls = Journal(), []
+    with pytest.raises(ValueError):
+        r.run(journal, SimpleNamespace(json=recording(calls, invalid=set(plan[0]['evidence']))), 'system',
+              long_payload(), lambda: None)
+    sent = len(calls)
+    with pytest.raises(ValueError):
+        r.run(journal, SimpleNamespace(json=recording(calls)), 'system', long_payload(), lambda: None)
+    assert len(calls) == sent
+
+
+def test_a_resumed_traversal_sends_only_the_unanswered_requests():
+    plan = list(r.batches('system', long_payload()))
+    journal, calls = Journal(), []
+    with pytest.raises(ModelError):
+        r.run(journal, SimpleNamespace(json=recording(calls, fail=set(plan[1]['evidence']), code='model_timeout')),
+              'system', long_payload(), lambda: None)
+    sent_before, saved_before = len(calls), len(journal.saved)
+    assert saved_before == r.PARALLEL
+    result = r.run(journal, SimpleNamespace(json=recording(calls)), 'system', long_payload(), lambda: None)
+    assert len(calls) - sent_before == len(plan) - saved_before  # answered requests replay from the journal
+    assert len(result['checks']) == len(payload()['fields'])
 
 
 def test_consistency_checks_tail_and_validates_fields():
