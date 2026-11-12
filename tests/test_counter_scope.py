@@ -1,7 +1,6 @@
 """Relevant counterevidence scope, shared page traversals and concurrent requests; synthetic, offline."""
 import json
 import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -120,13 +119,17 @@ def test_scope_is_decided_once_and_a_job_that_already_sent_keeps_the_full_corpus
 
 
 def test_independent_review_requests_overlap_up_to_the_parallel_limit():
-    lock, active, peak = threading.Lock(), [0], [0]
+    # Waits for overlap instead of a fixed sleep, so a loaded machine cannot
+    # make the requests miss each other.
+    cond, active, peak, calls = threading.Condition(), [0], [0], [0]
     def model(system, user, **kwargs):
-        with lock:
+        with cond:
+            calls[0] += 1
             active[0] += 1
             peak[0] = max(peak[0], active[0])
-        time.sleep(0.2)
-        with lock:
+            cond.notify_all()
+            if calls[0] > 1:  # the first request runs alone
+                cond.wait_for(lambda: peak[0] >= r.PARALLEL, timeout=5)
             active[0] -= 1
         body = json.loads(user)
         ref, source = next(iter(body['evidence'].items()))
