@@ -33,3 +33,14 @@ def test_known_internal_names_removed_from_all_plan_query_types(tmp_path):
     assert "Secret Founder" not in str(plan)
     assert plan["company_queries"] == ["Public Co"]
     assert plan["industry_queries"] == ["public industry"]
+
+
+def test_trial_sponsors_are_confirmed_latin_names_never_model_or_chinese(tmp_path):
+    service, pid = make_service(tmp_path / "sponsors.sqlite3")
+    store = ObjectStore(service.store, service.evidence)
+    store.save(pid, ObjectInput(kind="company", name="合成医疗", purpose="subject", visibility="public"), actor="user")
+    # A model-proposed sponsor is never used as the company's own identity.
+    assert store.scoped_plan(pid, {"trial_sponsors": ["Synthetic Partner"]})["trial_sponsors"] == []
+    store.save(pid, ObjectInput(kind="company", name="Synthetic Med Inc.（合成医疗，开曼注册主体）", purpose="subject",
+                                visibility="public"), actor="user")
+    assert store.scoped_plan(pid, {"trial_sponsors": ["Synthetic Partner"]})["trial_sponsors"] == ["Synthetic Med Inc."]

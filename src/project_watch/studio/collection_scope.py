@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from project_watch.studio.collection_plan import CAPABILITIES, MODES, make_plan
 from project_watch.studio.openalex_query import topic_terms
+from project_watch.studio.query_names import cjk
 
 BASE_DIRECTIONS = ('company', 'competitor', 'chain', 'industry', 'policy', 'technology')
 
@@ -139,12 +140,18 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
             add('google_patent', 'patent', [], historical=True)
         # is_biomed is deliberately not an applicability decision. Sponsor and
         # intervention searches remain separate, including hospital-led studies.
-        sponsors, terms = public_plan.get('trial_sponsors') or [], public_plan.get('trial_terms') or []
-        if sponsors or 'clinical_sponsor' in scoped_sources or (not terms and 'clinical_term' not in scoped_sources):
+        planned = public_plan.get('trial_sponsors') or [], public_plan.get('trial_terms') or []
+        # ClinicalTrials.gov is an English registry: a Chinese sponsor or
+        # business phrase is rejected ("too complicated") or matches nothing.
+        # Without a Latin-script name the gap stays visible as needs_scope.
+        sponsors, terms = ([q for q in queries if isinstance(q, str) and not cjk(q)] for queries in planned)
+        if (sponsors or planned[0] or 'clinical_sponsor' in scoped_sources
+                or (not terms and 'clinical_term' not in scoped_sources)):
             add('clinical_sponsor', 'trial', sponsors, historical=True)
         if terms or 'clinical_term' in scoped_sources:
             add('clinical_term', 'trial', terms, historical=True)
-        if sponsors or terms or scoped_sources & {'clinical_sponsor', 'clinical_term', 'cn_regulatory'}:
+        # The Chinese registry searches the confirmed name, whatever the script.
+        if any(planned) or scoped_sources & {'clinical_sponsor', 'clinical_term', 'cn_regulatory'}:
             add('cn_regulatory', 'trial', [name], historical=True)
 
     # The lifecycle scheduler owns cadence. Include every due relation, without
