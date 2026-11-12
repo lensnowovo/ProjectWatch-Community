@@ -537,8 +537,8 @@ class RegistryPeers:
             try:
                 return collectors.registry_studies(intervention, **options)
             except HttpError as exc:
-                if exc.code == 'request_outcome_unknown' or any(u['unknown'] for u in execution.usage().values()):
-                    raise
+                if exc.code in ('request_outcome_unknown', 'project_paused') or any(u['unknown'] for u in execution.usage().values()):
+                    raise  # a pause parks the job; it is not this source's answer
                 if filtered and exc.code == 'http_failure' and exc.status == 400:
                     # A rejected server filter is a known answer; fall back once to
                     # the unfiltered query, still checking sponsor class locally.

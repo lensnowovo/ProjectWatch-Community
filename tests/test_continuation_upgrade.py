@@ -237,3 +237,33 @@ def test_independent_extraction_keeps_siblings_without_consuming_partial_profile
     assert execution.read_checkpoint('business_proposal_2') == {'retained_batch': 3}
     assert run() is None
     assert len(calls) == 3
+
+
+def test_a_pause_between_extraction_batches_parks_and_resumes_at_the_next_batch(tmp_path):
+    """Review of the 2026-11-12 live pause bug: the batch check turned a pause into a failure."""
+    from types import SimpleNamespace
+
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.pipeline import Pipeline
+    store, pid, job = setup(tmp_path)
+    execution = JobExecution(store, job)
+    project = {'activated': True, 'status': 'active'}
+    calls = []
+    inputs = {'input_version': 'stable', 'binding': 'allowed', 'parts': [{'text': str(i)} for i in range(25)]}
+    def extract(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            project['status'] = 'paused'  # paused while the first batch's request is in flight
+        return {'batch': len(calls)}
+    pipeline = SimpleNamespace(_execution_state=SimpleNamespace(current=execution),
+        store=SimpleNamespace(get_project=lambda _: project), model_binding=lambda: 'allowed')
+    def run():
+        return Pipeline._extract_all_parts(pipeline, pid, inputs, SimpleNamespace(json=extract),
+            'system', lambda batch: batch, 'business', lambda: inputs)
+    with pytest.raises(ModelError) as paused:
+        run()
+    assert paused.value.code == 'project_paused' and len(calls) == 1
+    assert execution.read_checkpoint('business_proposal_0') == {'batch': 1}
+    project['status'] = 'active'
+    proposals = run()
+    assert len(calls) == 3 and len(proposals) == 3  # batch 0 replayed from its checkpoint, not resent

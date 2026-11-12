@@ -156,6 +156,51 @@ def test_bounded_leased_pipeline_researches_both_originals_and_does_not_repeat(t
     assert len(reads) == 2 and all('test' in url for url in reads)
 
 
+def test_a_pause_mid_research_parks_the_job_and_resume_finishes_it(tmp_path):
+    """Live 2026-11-12: pausing failed a running competition job and lost its work."""
+    from project_watch.studio.pipeline import StudioWorker
+    pipeline, pid, _calls, reads = research_pipeline(tmp_path)
+    worker = StudioWorker(pipeline, schedules=False)
+    queued = pipeline.schedule_competition(pid)
+    reader = pipeline.article_reader
+    def pause_on_peer(url):
+        if 'beta.test' in url:
+            pipeline.store.set_status(pid, 'paused')
+        return reader.read(url)
+    pipeline.article_reader = SimpleNamespace(read=pause_on_peer)
+    assert worker.step()
+    job = next(j for j in pipeline.store.jobs(pid) if j['id'] == queued['id'])
+    assert (job['status'], job['stage'], job['error']) == ('queued', '已暂停，恢复后继续', '')
+    assert pipeline.competition_research.saved(pid) is None  # nothing recorded as this run's outcome
+    target_reads = reads.count('https://alpha.test/product')
+    assert worker.step() is False  # a paused project is not claimed
+    pipeline.store.set_status(pid, 'active')
+    pipeline.article_reader = reader
+    assert worker.step()
+    job = next(j for j in pipeline.store.jobs(pid) if j['id'] == queued['id'])
+    assert (job['status'], job['error']) == ('done', '')
+    saved = pipeline.competition_research.saved(pid)
+    assert saved['status'] == 'completed_bounded_batch' and saved['supported_count'] == 1
+    assert reads.count('https://alpha.test/product') == target_reads  # the target stage was replayed, not reread
+
+
+def test_a_job_claimed_as_the_project_pauses_is_parked_not_finished_empty(tmp_path):
+    """Guards existing behaviour: the post-run pause check in Pipeline.run parks this case."""
+    from project_watch.studio.pipeline import StudioWorker
+    pipeline, pid, calls, reads = research_pipeline(tmp_path)
+    queued = pipeline.schedule_competition(pid)
+    claim = pipeline.store.claim
+    def claim_then_pause(*args, **kwargs):
+        job = claim(*args, **kwargs)
+        pipeline.store.set_status(pid, 'paused')
+        return job
+    pipeline.store.claim = claim_then_pause
+    assert StudioWorker(pipeline, schedules=False).step()
+    job = next(j for j in pipeline.store.jobs(pid) if j['id'] == queued['id'])
+    assert (job['status'], job['stage']) == ('queued', '已暂停，恢复后继续')
+    assert calls == [] and reads == []
+
+
 def test_discovery_replay_does_not_downgrade_original_head(tmp_path):
     pipeline, pid, _, _ = research_pipeline(tmp_path)
     hit = {'url': 'https://beta.test/product', 'title': 'Beta', 'snippet': 'short summary'}
