@@ -174,7 +174,7 @@
         },
         {
           "name": "Python domain tests",
-          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/offline\" -- tests --ignore=tests/test_web_preview.py --ignore=tests/test_static_asset_mime.py --ignore=tests/test_windows_icon.py --ignore=tests/test_frontend_notices.py --ignore=tests/test_package_boundary.py --ignore=tests/test_layer_boundaries.py --ignore=tests/test_core_probe.py --ignore=tests/test_studio_runtime_boundary.py --ignore=tests/test_studio.py --ignore=tests/test_studio_taskboard.py --ignore=tests/test_ci_scope.py --ignore=tests/test_release_ci.py --ignore=tests/test_release_security_dependencies.py --ignore=tests/test_release_document_links.py --ignore=tests/test_release_feedback.py --ignore=tests/test_developer_distribution.py"
+          "run": "python -I -X utf8 scripts/run_offline_tests.py --output \"$env:RUNNER_TEMP/offline\" --workers auto -- tests --ignore=tests/test_web_preview.py --ignore=tests/test_static_asset_mime.py --ignore=tests/test_windows_icon.py --ignore=tests/test_frontend_notices.py --ignore=tests/test_package_boundary.py --ignore=tests/test_layer_boundaries.py --ignore=tests/test_core_probe.py --ignore=tests/test_studio_runtime_boundary.py --ignore=tests/test_studio.py --ignore=tests/test_studio_taskboard.py --ignore=tests/test_ci_scope.py --ignore=tests/test_release_ci.py --ignore=tests/test_release_security_dependencies.py --ignore=tests/test_release_document_links.py --ignore=tests/test_release_feedback.py --ignore=tests/test_developer_distribution.py"
         },
         {
           "id": "ci_proof",
@@ -191,7 +191,7 @@
           "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
           "with": {
             "name": "python-summaries",
-            "path": "${{ runner.temp }}/offline/pytest.xml",
+            "path": "${{ runner.temp }}/offline/pytest*.xml",
             "retention-days": 7,
             "if-no-files-found": "warn"
           }

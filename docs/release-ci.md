@@ -37,7 +37,7 @@ Actions 固定为只读核实过的提交，不依赖浮动标签：checkout v6.
 
 ## 隔离与证据
 
-- `scripts/run_offline_tests.py` 只接受源码外全新输出目录，移除继承的 ProjectWatch/供应商/云凭据和 GitHub token，设置专用数据与应用配置目录。结果写入新目录中的 `pytest.xml`。
+- `scripts/run_offline_tests.py` 只接受源码外全新输出目录，移除继承的 ProjectWatch/供应商/云凭据和 GitHub token，设置专用数据与应用配置目录。结果写入新目录中的 `pytest.xml`；带 `--workers` 时先并行运行（每个 worker 同样安装下述网络钩子、关闭用户 site-packages 并启用 UTF-8 模式），再单独串行运行标记为 `serial` 的计时测试，结果写入 `pytest-serial.xml`。
 - Python 审计钩子拒绝非 loopback 连接和 DNS；本机合成网关允许访问。这不是针对任意恶意子进程的 OS 沙箱，不可用它在有真实凭据的主机运行不可信 PR。
 - 默认清除 PostgreSQL 等外部集成变量，不使用真实模型/搜索/商业来源。原生 DSH 域已随 DSH 执行器一起移除。
 - GitHub runner 无真实服务配置；依赖安装会联网下载包，测试阶段不授权供应商调用。

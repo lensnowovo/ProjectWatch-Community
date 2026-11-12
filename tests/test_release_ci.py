@@ -121,7 +121,7 @@ def test_ci_independent_budgets_preserve_every_required_gate_and_summary():
     assert len({step['with']['name'] for step in artifacts}) == 6
     assert all(step['if'] == 'always()' and step['with']['retention-days'] == 7 for step in artifacts)
     assert {p for step in artifacts if step['id'] == 'ci_upload' for p in step['with']['path'].splitlines()} == {
-        '${{ runner.temp }}/offline/pytest.xml', '${{ runner.temp }}/frontend-python/pytest.xml',
+        '${{ runner.temp }}/offline/pytest*.xml', '${{ runner.temp }}/frontend-python/pytest.xml',
         '${{ runner.temp }}/installed-smoke/receipt.json',
         '${{ runner.temp }}/installed-journey/receipt.json',
     }
@@ -219,6 +219,40 @@ def test_offline_network_guard_allows_synthetic_local_servers(host):
     from scripts.run_offline_tests import network_guard
     network_guard('socket.connect', (None, (host, 12345)))
     network_guard('socket.getaddrinfo', (host, 12345, 0, 0, 0))
+
+
+def test_parallel_offline_runner_guards_every_worker_and_runs_serial_tests_alone(tmp_path):
+    probe = tmp_path / 'probe'
+    probe.mkdir()
+    # Its own config: rootdir stays inside the probe and the marker is registered.
+    (probe / 'pytest.ini').write_text('[pytest]\nmarkers =\n    serial: timing test\n')
+    (probe / 'test_probe.py').write_text('''import os
+import socket
+import sys
+
+import pytest
+
+
+@pytest.mark.parametrize('attempt', range(4))
+def test_a_worker_cannot_reach_the_network(attempt):
+    assert os.environ.get('PYTEST_XDIST_WORKER')  # really inside a worker process
+    assert os.environ.get('PYTHONNOUSERSITE') == '1' and sys.flags.utf8_mode == 1
+    connection = socket.socket()
+    connection.settimeout(1)
+    with pytest.raises(RuntimeError, match='non-loopback'):
+        connection.connect(('192.0.2.1', 9))  # TEST-NET-1: never routable
+
+
+@pytest.mark.serial
+def test_serial_tests_run_outside_the_workers():
+    assert 'PYTEST_XDIST_WORKER' not in os.environ
+''')
+    output = tmp_path / 'out'
+    result = subprocess.run([sys.executable, '-I', str(ROOT / 'scripts/run_offline_tests.py'), '--output', str(output),
+                             '--workers', '2', str(probe)], capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '4 passed' in result.stdout and '1 passed' in result.stdout and 'Unknown pytest.mark' not in result.stdout
+    assert (output / 'pytest.xml').is_file() and (output / 'pytest-serial.xml').is_file()
 
 
 def test_offline_runner_rejects_existing_output_before_mutating(tmp_path):

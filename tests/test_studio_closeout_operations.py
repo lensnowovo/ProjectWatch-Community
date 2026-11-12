@@ -26,6 +26,7 @@ def test_progress_includes_empty_units_and_does_not_limit_content(tmp_path):
     assert extract_document_subprocess(source, suffix='.txt').fragments == result.fragments
 
 
+@pytest.mark.serial
 def test_healthy_progress_outlives_idle_window(tmp_path):
     progress = tmp_path / 'progress'
     code = ('import time;from pathlib import Path;'
@@ -39,6 +40,7 @@ def test_healthy_progress_outlives_idle_window(tmp_path):
     assert len(ticks) >= 5
 
 
+@pytest.mark.serial
 @pytest.mark.parametrize('mode', ['stalled', 'cancelled', 'crashed'])
 def test_parser_owned_process_is_stopped_on_failure(tmp_path, mode):
     cancel = threading.Event()
@@ -259,6 +261,7 @@ def test_supervisor_drain_grace_does_not_restart_hung_child(tmp_path, monkeypatc
     assert clock[0] >= 255
 
 
+@pytest.mark.serial
 @pytest.mark.skipif(os.name != 'nt', reason='Windows watchdog tree integration')
 def test_watchdog_reaps_parser_descendant(tmp_path):
     import ctypes
