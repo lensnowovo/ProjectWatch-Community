@@ -544,6 +544,7 @@ class CompetitionResearch(CompanyLeads):
         outcome = {'schema_version': 1, 'prompt_version': PROMPT_VERSION, 'job_id': job['id'], 'input_version': inputs['input_version'],
                    'status': 'partial', 'candidate_count': 0, 'researched_count': 0, 'supported_count': 0, 'coverage_complete': False}
         errors = []
+        parked = False
         binding = pipeline.model_view(llm).binding
         old_binding = execution.read_checkpoint('competition_model_binding')
         if old_binding is not None and old_binding != binding:
@@ -553,6 +554,9 @@ class CompetitionResearch(CompanyLeads):
             with closing(pipeline.store._connect()) as db:
                 execution._guard(db)
             project = pipeline.store.get_project(pid)
+            if project and project['activated'] and project['status'] == 'paused':
+                # A pause parks the job with its checkpoints; resume continues it.
+                raise HttpError('project_paused')
             if not project or project['status'] != 'active' or not project['activated'] or pipeline.model_binding() != binding:
                 raise ValueError('competition execution permission changed')
             expected = execution.read_checkpoint('competition_target_input_version') or inputs['input_version']
@@ -727,7 +731,7 @@ class CompetitionResearch(CompanyLeads):
                         continue
                     if not isinstance(exc, HttpError):
                         raise
-                    if exc.code in ('request_outcome_unknown', 'request_budget', 'provider_backoff') or exc.status in (401, 403, 429):
+                    if exc.code in ('request_outcome_unknown', 'request_budget', 'provider_backoff', 'project_paused') or exc.status in (401, 403, 429):
                         raise
                     completed = {'supported_count': 0, 'failure': exc.code}
                 if completed.get('failure'):
@@ -741,25 +745,28 @@ class CompetitionResearch(CompanyLeads):
                 guard()
                 pipeline.store.enqueue(pid, 'page_summary', automatic=True,
                     input_version='competition-summary:' + job['id'], once_per_input=True)
-        except HttpError as exc:
-            if exc.code == 'request_outcome_unknown':
+        except (HttpError, ModelError) as exc:
+            # A pause parks the job: nothing is recorded as this run's outcome until it resumes and ends.
+            parked = getattr(exc, 'code', '') == 'project_paused'
+            if parked or isinstance(exc, ModelError) or exc.code == 'request_outcome_unknown':
                 raise
             errors.append(exc.code)
         finally:
-            outcome['failures'] = errors
-            outcome['usage'] = execution.usage()
-            # Produced target facts do not immediately cause an identical second paid run.
-            current = research_inputs(service, pid)
-            target = execution.read_checkpoint('competition_target_business') or {}
-            expected_facts = set(inputs['fact_ids']) | set(target.get('fact_ids', []))
-            stable = (all(current.get(k) == inputs.get(k) for k in ('subject_id', 'company', 'overrides', 'week'))
-                      and set(current.get('fact_ids', [])) <= expected_facts
-                      and set(current.get('products', [])) <= set(inputs['products']) | set(target.get('product_ids', [])))
-            outcome['consumed_input_version'] = current.get('input_version') if stable else inputs['input_version']
-            outcome['model_binding'] = binding
-            with closing(pipeline.store._connect()) as db, db:
-                db.execute('BEGIN IMMEDIATE')
-                execution._guard(db)
-                db.execute('INSERT INTO studio_competition_run_state VALUES (?,?) ON CONFLICT(project_id) DO UPDATE SET record=excluded.record',
-                           (pid, json.dumps(outcome)))
-                db.execute('INSERT OR IGNORE INTO studio_competition_run_history VALUES (?,?,?)', (job['id'], pid, json.dumps(outcome)))
+            if not parked:
+                outcome['failures'] = errors
+                outcome['usage'] = execution.usage()
+                # Produced target facts do not immediately cause an identical second paid run.
+                current = research_inputs(service, pid)
+                target = execution.read_checkpoint('competition_target_business') or {}
+                expected_facts = set(inputs['fact_ids']) | set(target.get('fact_ids', []))
+                stable = (all(current.get(k) == inputs.get(k) for k in ('subject_id', 'company', 'overrides', 'week'))
+                          and set(current.get('fact_ids', [])) <= expected_facts
+                          and set(current.get('products', [])) <= set(inputs['products']) | set(target.get('product_ids', [])))
+                outcome['consumed_input_version'] = current.get('input_version') if stable else inputs['input_version']
+                outcome['model_binding'] = binding
+                with closing(pipeline.store._connect()) as db, db:
+                    db.execute('BEGIN IMMEDIATE')
+                    execution._guard(db)
+                    db.execute('INSERT INTO studio_competition_run_state VALUES (?,?) ON CONFLICT(project_id) DO UPDATE SET record=excluded.record',
+                               (pid, json.dumps(outcome)))
+                    db.execute('INSERT OR IGNORE INTO studio_competition_run_history VALUES (?,?,?)', (job['id'], pid, json.dumps(outcome)))

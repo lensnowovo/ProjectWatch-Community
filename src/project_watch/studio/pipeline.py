@@ -2107,6 +2107,9 @@ class Pipeline:
         blocked = False
         for index, parts in enumerate(batches):
             project = self.store.get_project(project_id)
+            if project and project['activated'] and project['status'] == 'paused':
+                # Parked with the finished batches checkpointed; resume continues at this batch.
+                raise ModelError('项目已暂停，恢复后继续', code='project_paused')
             current = current_inputs()
             if (inputs['binding'] != self.model_binding() or not project or not project['activated']
                     or project['status'] != 'active' or not current or current['input_version'] != inputs['input_version']):

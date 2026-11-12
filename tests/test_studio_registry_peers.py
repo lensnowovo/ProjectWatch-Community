@@ -251,6 +251,36 @@ def test_known_registry_failure_is_recorded_and_web_path_continues(tmp_path):
     assert calls['search']  # discovery still ran
 
 
+def test_a_pause_at_registry_dispatch_parks_instead_of_recording_a_failure(tmp_path, monkeypatch):
+    """A pause landing between the guard and dispatch must not be saved as the registry's answer."""
+    from project_watch.studio import dispatch
+    from project_watch.studio.http import HttpError
+    from project_watch.studio.llm import ModelError
+
+    pipeline, pid, calls = registry_pipeline(tmp_path)
+    check, paused = dispatch.check, []
+    def pause_at_first_registry_request(db, job, kind, *args):
+        if kind == 'open_data' and not paused:
+            paused.append(1)
+            db.execute("UPDATE studio_projects SET status='paused' WHERE project_id=?", (pid,))
+        return check(db, job, kind, *args)
+    monkeypatch.setattr(dispatch, 'check', pause_at_first_registry_request)
+    queued = pipeline.schedule_competition(pid)
+    job = pipeline.store.claim()
+    with pytest.raises((HttpError, ModelError)) as stopped:
+        pipeline.run(job)
+    assert stopped.value.code == 'project_paused' and paused and calls['registry'] == []
+    assert pipeline.competition_research.saved(pid) is None
+    pipeline.store.defer_paused(job)
+    pipeline.store.set_status(pid, 'active')
+    resumed = pipeline.store.claim()
+    assert resumed['id'] == queued['id']
+    pipeline.run(resumed)
+    registry = pipeline.competition_research.saved(pid)['registry']
+    assert registry['status'] != 'failed' and not any('project_paused' in f for f in registry['failures'])
+    assert calls['registry']
+
+
 def test_old_research_checkpoint_stops_before_registry_dispatch(tmp_path):
     from project_watch.studio.competition_research import research_inputs
     from project_watch.studio.execution import JobExecution
