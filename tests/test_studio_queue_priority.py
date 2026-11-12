@@ -188,3 +188,91 @@ def test_a_round_does_not_start_while_its_project_has_a_side_job_running(tmp_pat
     assert store.claim('round') is None  # this project's analysis waits for its side job
     store.finish(running['id'], lease_token=running['lease_token'])
     assert store.claim('round')['id'] == blocked['id']
+
+
+def _yield(store, job):
+    assert store.yield_job(job)
+
+
+def test_a_yielded_analysis_keeps_its_project_until_it_finishes(tmp_path):
+    """Live run 2026-11-12: a side job ran between an analysis's slices and its publication failed."""
+    store, ids = setup(tmp_path, 2)
+    analysis = store.enqueue(ids[0], 'analyze', input_version='collect:a')
+    running = store.claim('round')
+    assert running['id'] == analysis['id']
+    _yield(store, running)
+    side = store.enqueue(ids[0], 'competition')
+    other = store.enqueue(ids[1], 'competition')
+    assert store.claim('side')['id'] == other['id']  # another project's side work continues
+    assert store.claim('side') is None  # this project's competition waits for the analysis
+    resumed = store.claim('round')
+    assert resumed['id'] == analysis['id']
+    store.finish(resumed['id'], lease_token=resumed['lease_token'])
+    assert store.claim('side')['id'] == side['id']
+
+
+def test_a_yielded_side_job_runs_before_its_projects_next_side_job(tmp_path):
+    store, (pid,) = setup(tmp_path)
+    summary = store.enqueue(pid, 'page_summary', input_version='analyze:earlier')
+    first = store.claim()
+    assert first['id'] == summary['id']
+    _yield(store, first)
+    store.enqueue(pid, 'competition', input_version='manual:asked')  # preferred, yet waits
+    assert store.claim()['id'] == summary['id']
+
+
+def test_the_analysiss_own_summary_still_runs_between_its_slices(tmp_path):
+    store, (pid,) = setup(tmp_path)
+    analysis = store.enqueue(pid, 'analyze')
+    _yield(store, store.claim('round'))
+    summary = store.enqueue(pid, 'page_summary', input_version='analyze:' + analysis['id'])
+    assert store.claim('side')['id'] == summary['id']
+
+
+def test_only_a_claimable_unfinished_job_holds_its_project(tmp_path):
+    store, (pid,) = setup(tmp_path)
+    analysis = store.enqueue(pid, 'analyze')
+    _yield(store, store.claim('round'))
+    # Paused: internal documents are still read; the parked analysis does not hold them up.
+    store.set_status(pid, 'paused')
+    internal = store.enqueue(pid, 'internal')
+    assert store.claim()['id'] == internal['id']
+    store.set_status(pid, 'active')
+    # Waiting out a provider backoff, it does not hold its project either.
+    with store._connect() as db:
+        db.execute("UPDATE studio_jobs SET retry_after='9999-12-31' WHERE id=?", (analysis['id'],))
+    side = store.enqueue(pid, 'details')
+    assert store.claim('side')['id'] == side['id']
+
+
+def test_two_unfinished_jobs_of_a_project_resume_in_start_order(tmp_path):
+    store, (pid,) = setup(tmp_path)
+    first = store.enqueue(pid, 'details')
+    second = store.enqueue(pid, 'business')
+    a = store.claim()
+    b_id = second['id']
+    with store._connect() as db:  # both started earlier (e.g. before an upgrade) and are queued again
+        db.execute("UPDATE studio_jobs SET status='queued',lease_token='',lease_until=NULL,started_at=? WHERE id=?",
+                   ('2026-01-01T00:00:01+00:00', a['id']))
+        db.execute("UPDATE studio_jobs SET started_at=?,queue_at=? WHERE id=?",
+                   ('2026-01-01T00:00:02+00:00', '2000-01-01T00:00:00+00:00', b_id))
+    job = store.claim()
+    assert job['id'] == first['id']
+    store.finish(job['id'], lease_token=job['lease_token'])
+    assert store.claim()['id'] == b_id
+
+
+def test_a_waiting_round_pulls_its_projects_yielded_side_job_to_the_front(tmp_path):
+    store, ids = setup(tmp_path, 3)
+    held = store.enqueue(ids[0], 'competition')
+    first = store.claim('side')
+    others = [store.enqueue(pid, 'details') for pid in ids[1:]]
+    _yield(store, first)
+    # Without a waiting round, the yielded job takes its turn behind other projects' work.
+    assert store.claim('side')['id'] == others[0]['id']
+    round_job = store.enqueue(ids[0], 'collect', input_version='manual:asked')
+    assert store.claim('round') is None  # the round waits for its project's side job ...
+    assert store.claim('side')['id'] == held['id']  # ... which goes next, not after the lane
+    running = next(j for j in store.jobs(ids[0]) if j['id'] == held['id'])
+    store.finish(held['id'], lease_token=running['lease_token'])
+    assert store.claim('round')['id'] == round_job['id']

@@ -248,8 +248,10 @@ def test_serial_tests_run_outside_the_workers():
     assert 'PYTEST_XDIST_WORKER' not in os.environ
 ''')
     output = tmp_path / 'out'
+    # This test may itself run in an xdist worker; the probe must not inherit that worker's identity.
+    env = {key: value for key, value in os.environ.items() if not key.startswith('PYTEST_')}
     result = subprocess.run([sys.executable, '-I', str(ROOT / 'scripts/run_offline_tests.py'), '--output', str(output),
-                             '--workers', '2', str(probe)], capture_output=True, text=True, timeout=300)
+                             '--workers', '2', str(probe)], capture_output=True, text=True, timeout=300, env=env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '4 passed' in result.stdout and '1 passed' in result.stdout and 'Unknown pytest.mark' not in result.stdout
     assert (output / 'pytest.xml').is_file() and (output / 'pytest-serial.xml').is_file()

@@ -158,7 +158,12 @@ def test_cooperative_yield_keeps_receipts_and_queue_fairness(tmp_path):
     store, pid, job = setup(tmp_path)
     execution = JobExecution(store, job)
     execution.checkpoint('saved_phase', True)
-    other = store.enqueue(pid, 'details')
+    from project_watch.repository import ProjectRepository
+    other_pid = ProjectRepository(store.db_path).create_project('Synthetic Other').id
+    store.upsert_project(other_pid, {}, consent=False)
+    # Fairness is between projects; the yielded job still holds its own project's records.
+    same = store.enqueue(pid, 'details')
+    other = store.enqueue(other_pid, 'details')
     execution.slice_seconds = 0
     with pytest.raises(JobYield):
         execution.yield_if_due()
@@ -169,6 +174,8 @@ def test_cooperative_yield_keeps_receipts_and_queue_fairness(tmp_path):
     resumed = store.claim()
     assert resumed['id'] == job['id'] and resumed['attempts'] == 1
     assert JobExecution(store, resumed).read_checkpoint('saved_phase') is True
+    store.finish(resumed['id'], lease_token=resumed['lease_token'])
+    assert store.claim()['id'] == same['id']
 
 
 def test_pause_is_not_healthy_queued_work(tmp_path):
