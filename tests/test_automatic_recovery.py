@@ -92,6 +92,58 @@ def test_transport_only_classifies_proven_pre_send_errors(monkeypatch, reason, e
     assert error.value.code == expected
 
 
+@pytest.mark.parametrize('reason', [
+    TimeoutError(10060, 'synthetic'),  # TCP connect timeout (Windows)
+    OSError('Tunnel connection failed: 502'),  # proxy CONNECT refused
+    ConnectionResetError(10054, 'synthetic'),  # reset during TLS handshake
+])
+def test_patient_setup_failure_before_connected_is_not_sent(env, monkeypatch, reason):
+    store, pid = env
+    def setup_fails(connection):
+        raise reason
+    monkeypatch.setattr('http.client.HTTPSConnection.connect', setup_fails)
+    with pytest.raises(HttpError) as error:
+        urllib_transport()('POST', 'https://synthetic.invalid', {}, b'{}', None)
+    assert error.value.code == 'connection_not_sent'
+    assert error.value.diagnostics['stage'] == 'connect'
+    assert 'connected_ms' not in error.value.diagnostics
+    work, sent = job(store, pid, 'page_summary'), []
+    with pytest.raises(HttpError, match='connection_not_sent'):
+        work.call('model', 'same', lambda: urllib_transport()('POST', 'https://synthetic.invalid', {}, b'{}', None))
+    with store._connect() as db:
+        assert [tuple(r) for r in db.execute('SELECT status,retryable FROM studio_job_calls')] == [('not_sent', 1)]
+        db.execute('DELETE FROM studio_provider_backoff')
+    work.call('model', 'same', ok(sent))
+    assert sent == [1]
+
+
+def test_patient_failure_after_connected_stays_unknown(monkeypatch):
+    client, peer = socket.socketpair()
+    def connected(connection):
+        connection.sock = client
+    def no_reply(connection):
+        raise TimeoutError(10060, 'synthetic')
+    monkeypatch.setattr('http.client.HTTPSConnection.connect', connected)
+    monkeypatch.setattr('http.client.HTTPConnection.getresponse', no_reply)
+    try:
+        with pytest.raises(HttpError) as error:
+            urllib_transport()('POST', 'https://synthetic.invalid', {}, b'{}', None)
+    finally:
+        client.close()
+        peer.close()
+    assert error.value.code == 'connection_failed'
+    assert 'connected_ms' in error.value.diagnostics
+
+
+def test_bounded_request_timeout_is_not_proven_unsent(monkeypatch):
+    # Without a patient connection the trace has no connect stage evidence.
+    def setup_fails(connection):
+        raise TimeoutError(10060, 'synthetic')
+    monkeypatch.setattr('http.client.HTTPSConnection.connect', setup_fails)
+    with pytest.raises(HttpError, match='connection_failed'):
+        urllib_transport()('POST', 'https://synthetic.invalid', {}, b'{}', 1)
+
+
 def test_redirect_then_dns_failure_stays_unknown(monkeypatch):
     def opener(*handlers):
         def open_request(*a, **kw):

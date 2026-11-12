@@ -374,10 +374,15 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, IncompleteStream) as exc:
             trace.error(exc)
             reason = getattr(exc, 'reason', exc)
+            # A patient connection marks `connected` only after TCP, proxy
+            # tunnel and TLS setup; before that no request byte has left.
+            unconnected = (control is not None and trace.data.get('stage') == 'connect'
+                           and 'connected_ms' not in trace.data)
             if (phase == "connect_or_headers" and not getattr(redirect, "seen_redirect", False)
-                    and isinstance(reason, (socket.gaierror, ConnectionRefusedError))):
+                    and (unconnected or isinstance(reason, (socket.gaierror, ConnectionRefusedError)))):
                 raise HttpError("connection_not_sent", transport_phase=phase,
-                                failure_kind="transport_error", diagnostics=trace.data) from exc
+                                failure_kind='timeout' if isinstance(reason, TimeoutError) else 'transport_error',
+                                diagnostics=trace.data) from exc
             raise HttpError("connection_failed", detail=str(reason), transport_phase=phase,
                             failure_kind='timeout' if isinstance(reason, TimeoutError) else 'transport_error',
                             diagnostics=trace.data) from exc
