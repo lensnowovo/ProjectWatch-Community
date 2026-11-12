@@ -278,3 +278,96 @@ def test_rejected_new_stream_cap_replays_before_unknown_after_cache_change(tmp_p
                 json_options=options).json('s', 'u')
     _CEILINGS.pop((cfg.protocol, cfg.base_url, cfg.model), None)
     assert sent == [131072, 64000]
+
+
+def ended(finish):
+    return (event({'reasoning_content': 'checking'}) + event({'content': '{"answer":'}, finish)
+            + b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":8}}\n\n'
+            + b'data: [DONE]\n\n')
+
+
+@pytest.mark.parametrize(('finish', 'code'), [
+    ('sensitive', 'model_content_rejected'),
+    ('network_error', 'model_output_incomplete'),
+    ('model_context_window_exceeded', 'model_output_truncated'),
+])
+def test_documented_provider_end_is_a_named_result_not_an_unknown(tmp_path, monkeypatch, finish, code):
+    """Live finding: GLM ended two long streams with a documented status the reader called unknown."""
+    store, _, job = setup(tmp_path)
+    execution = JobExecution(store, job)
+    opened = fake_network(monkeypatch, ended(finish))
+    options = job_structured_options(execution, config())
+    for _ in range(2):  # the second attempt replays the saved reply instead of paying again
+        http = execution.http(Http(urllib_transport()), lambda u: ('model', 'synthetic'))
+        with pytest.raises(ModelError) as error:
+            LLM(config(), http, json_options=options).json('s', 'u')
+        assert error.value.code == code
+    assert len(opened) == 1
+    with closing(store._connect()) as db:
+        row = db.execute('SELECT * FROM studio_job_calls').fetchone()
+        assert (row['status'], row['input_tokens'], row['output_tokens']) == ('completed', 12, 8)
+
+
+def test_documented_end_is_isolated_at_an_independent_step(tmp_path, monkeypatch):
+    from project_watch.studio import step_outcomes
+    store, _, job = setup(tmp_path)
+    execution = JobExecution(store, job)
+    fake_network(monkeypatch, ended('network_error'))
+    http = execution.http(Http(urllib_transport()), lambda u: ('model', 'synthetic'))
+    llm = LLM(config(), http, json_options=job_structured_options(execution, config()))
+    assert step_outcomes.attempt(execution, 'section', lambda: llm.json('s', 'u')) == (False, None)
+
+
+def test_undocumented_end_stays_unknown_and_names_the_value(tmp_path, monkeypatch):
+    store, _, job = setup(tmp_path)
+    execution = JobExecution(store, job)
+    opened = fake_network(monkeypatch, ended('tool_calls'))
+    http = execution.http(Http(urllib_transport()), lambda u: ('model', 'synthetic'))
+    with pytest.raises(ModelError) as error:
+        LLM(config(), http, json_options=job_structured_options(execution, config())).json('s', 'u')
+    assert error.value.code == 'request_outcome_unknown' and len(opened) == 1
+    with closing(store._connect()) as db:
+        assert db.execute('SELECT status FROM studio_job_calls').fetchone()[0] == 'unknown'
+        diagnostic = json.loads(db.execute("SELECT data FROM studio_job_checkpoints WHERE stage LIKE 'call_error:%'").fetchone()[0])
+    assert diagnostic['transport']['stream_failure'] == 'invalid_finish'
+    assert diagnostic['transport']['unexpected_finish'] == 'tool_calls'
+
+
+def test_an_end_value_that_is_not_an_enum_word_is_not_recorded():
+    with pytest.raises(IncompleteStream) as error:
+        read_completion(Stream(ended('PRIVATE text')), 10000, lambda n: None)
+    from project_watch.studio.http import TransportTrace
+    trace = TransportTrace(False)
+    trace.error(error.value)
+    assert trace.data['stream_failure'] == 'invalid_finish' and 'unexpected_finish' not in trace.data
+    assert 'unexpected_finish' not in safe_diagnostics({'unexpected_finish': 'Bearer PRIVATE'})
+
+
+@pytest.mark.parametrize('finish', [['stop'], {'reason': 'stop'}, 7])
+def test_a_malformed_end_value_is_an_incomplete_stream_not_a_crash(finish):
+    """Review finding: an unhashable end value raised TypeError past the transport boundary."""
+    with pytest.raises(IncompleteStream) as error:
+        read_completion(Stream(ended(finish)), 10000, lambda n: None)
+    assert error.value.finish is None
+
+
+def test_a_repeated_documented_end_is_not_reported_as_an_unknown_value():
+    data = event({'content': '{}'}, 'stop') + event({}, 'sensitive') + b'data: [DONE]\n\n'
+    with pytest.raises(IncompleteStream) as error:
+        read_completion(Stream(data), 10000, lambda n: None)
+    assert str(error.value) == 'invalid_finish' and error.value.finish is None
+
+
+@pytest.mark.parametrize(('finish', 'code'), [('sensitive', 'model_content_rejected'),
+                                              ('network_error', 'model_output_incomplete')])
+def test_non_stream_reply_with_a_documented_end_never_returns_its_partial_text(finish, code):
+    calls = []
+    def send(*args):
+        calls.append(args)
+        return Response(200, {}, json.dumps({'choices': [{'message': {'content': '{"a":1}'},
+                                                          'finish_reason': finish}]}).encode())
+    cfg = config()
+    cfg.base_url = 'https://gateway.invalid/v1'
+    with pytest.raises(ModelError) as error:
+        LLM(cfg, Http(send)).json('s', 'u')
+    assert error.value.code == code and len(calls) == 1

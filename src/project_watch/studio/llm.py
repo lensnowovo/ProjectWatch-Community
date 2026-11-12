@@ -280,8 +280,16 @@ class LLM:
                 text = (choices[0].get("message") or {}).get("content") or ""
                 usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
                 self._record(token_count(usage.get("prompt_tokens")), token_count(usage.get("completion_tokens")))
-                if choices[0].get('finish_reason') == 'content_filter':
+                finish = choices[0].get('finish_reason')
+                if finish in ('content_filter', 'sensitive'):
                     raise ModelError('模型服务拒绝返回本次内容；已有资料保留', code='model_content_rejected', status=200)
+                # Conclusive provider ends without a usable answer: named, kept, not resent.
+                if finish == 'network_error':
+                    raise ModelError('模型服务推理中断，本次没有结果；已有资料保留，未自动重发',
+                                     code='model_output_incomplete', status=200)
+                if finish == 'model_context_window_exceeded':
+                    raise ModelError('本次内容超出模型上下文窗口，回复未完成；已有资料保留，未自动重发',
+                                     code='model_output_truncated', status=200)
             truncated = (data.get("stop_reason") == "max_tokens" if cfg.protocol == "anthropic"
                          else choices[0].get("finish_reason") == "length")
             if truncated:

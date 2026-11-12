@@ -85,6 +85,9 @@ def safe_diagnostics(value):
     request_id = value.get('provider_request_id')
     if isinstance(request_id, str) and re.fullmatch(r'[a-zA-Z0-9_.:-]{1,128}', request_id):
         result['provider_request_id'] = request_id
+    finish = value.get('unexpected_finish')
+    if isinstance(finish, str) and re.fullmatch(r'[a-z_]{1,40}', finish):
+        result['unexpected_finish'] = finish  # A provider enum word, never reply text.
     return result
 
 
@@ -113,6 +116,8 @@ class TransportTrace:
         self.data['exception'] = next((t.__name__ for t in names if isinstance(reason, t)), 'other')
         if isinstance(reason, IncompleteStream):
             self.data['stream_failure'] = str(reason)
+            if isinstance(reason.finish, str) and re.fullmatch(r'[a-z_]{1,40}', reason.finish):
+                self.data['unexpected_finish'] = reason.finish
         for name in ('errno', 'winerror'):
             value = getattr(reason, name, None)
             if type(value) is int:
