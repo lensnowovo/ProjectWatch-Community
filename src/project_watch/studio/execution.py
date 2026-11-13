@@ -65,6 +65,11 @@ def waiting_on_request(store, job_id):
                           (job_id,)).fetchone() is not None
 
 
+def _diagnostic_stage(prefix, key):
+    """A retry under ``<key>:429:N`` keeps its own diagnostic; the first request keeps its old stage name."""
+    return prefix + key[:40] + key[64:]
+
+
 class JobExecution:
     def __init__(self, store, job, *, budgets=None, cancel_requested=None):
         self.store, self.job = store, job
@@ -203,6 +208,7 @@ class JobExecution:
             logical_key = key
             attempt = 0
             while (old and ((old['retryable'] and old['status'] in ('not_sent', 'completed'))
+                           or (old['status'] in ('unknown', dispatch.RESENT) and old['retryable'] == dispatch.CUT_RESEND)
                            or (old['status'] == 'completed' and old['response_status'] in (401, 402, 403, 429)))):
                 attempt += 1
                 key = f'{logical_key}:429:{attempt}'
@@ -211,7 +217,7 @@ class JobExecution:
             if old:
                 self.last_replay = True
                 if old["status"] == "failed_read":
-                    diagnostic = self._read_checkpoint(db, 'call_error:' + key[:40]) or {}
+                    diagnostic = self._read_checkpoint(db, _diagnostic_stage('call_error:', key)) or {}
                     code = diagnostic.get('code', 'response_too_large')
                     if code not in ('response_too_large', 'public_read_failed'):
                         raise dispatch.NotSent('unknown_not_resent')
@@ -280,12 +286,29 @@ class JobExecution:
                 if failed_read:
                     diagnostic['code'] = failure_code
                     diagnostic['policy'] = 'public_read' if public_read else 'oversized_read'
+                resend = (kind == 'model' and not not_sent and not failed_read and phase == 'response_body'
+                          and dispatch.cut_stream(diagnostic['transport']) and not self.cancel_requested())
+                if resend:
+                    # The provider took the request and its stream broke off. A model request
+                    # changes nothing outside this job, so it is sent once more under a new key;
+                    # a second break of the same logical request stays unknown and holds.
+                    resend = not db.execute(
+                        "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
+                        "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status='unknown' AND c.retryable=? LIMIT 1",
+                        (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND)).fetchone()
+                    if resend:
+                        db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
+                                   (dispatch.CUT_RESEND, self.job["id"], key))
+                    diagnostic['auto_resend'] = bool(resend)
                 # No exception text, URL, credentials or response body in diagnostics.
                 db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
                            'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], 'call_error:' + key[:40], json.dumps(diagnostic)))
+                           (self.job['id'], _diagnostic_stage('call_error:', key), json.dumps(diagnostic)))
             if failed_read:
                 raise HttpError(failure_code) from exc
+            if resend:
+                raise HttpError('stream_cut_resend', transport_phase='response_body',
+                                failure_kind='transport_error', diagnostics=getattr(exc, 'diagnostics', None)) from exc
             raise
         with closing(self.store._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
@@ -301,7 +324,7 @@ class JobExecution:
                 from project_watch.studio.http import safe_diagnostics
                 db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
                            'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], 'call_transport:' + key[:40], json.dumps(safe_diagnostics(response.diagnostics))))
+                           (self.job['id'], _diagnostic_stage('call_transport:', key), json.dumps(safe_diagnostics(response.diagnostics))))
             from project_watch.studio.usage import FIELDS, reported
 
             counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)
@@ -309,6 +332,12 @@ class JobExecution:
                        'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
                        (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
                         int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+            if key != logical_key:
+                # The automatic resend of a cut stream came back: the earlier row stays
+                # counted as spent but is no longer an unresolved outcome.
+                db.execute("UPDATE studio_job_calls SET status=? WHERE job_id=? AND (call_key=? OR call_key GLOB ?||':429:*') "
+                           "AND status='unknown' AND retryable=?",
+                           (dispatch.RESENT, self.job['id'], logical_key, logical_key, dispatch.CUT_RESEND))
             if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
                 db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
                 db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
