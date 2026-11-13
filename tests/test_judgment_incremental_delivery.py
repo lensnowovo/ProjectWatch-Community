@@ -19,7 +19,7 @@ def arrange(host, monkeypatch):
     execution = research.execution
     execution.checkpoint(a.REVIEW_PROTOCOL, {'version': 4})
     selected = {**context, 'coverage': {'fragments': 2}}
-    monkeypatch.setattr(a, 'source_batches', lambda _: iter([sources, sources]))
+    monkeypatch.setattr(a, 'source_batches', lambda *_: iter([sources, sources]))
     def checked(system, payload):
         return reviewer(system, payload)
     def counter(payload):
@@ -129,7 +129,7 @@ def test_later_page_checked_against_already_visible_peer(host, monkeypatch):
 
 def test_repeated_candidate_cannot_rewind_consistency_peer(host, monkeypatch):
     research, selected, sources, checked = arrange(host, monkeypatch)
-    monkeypatch.setattr(a, 'source_batches', lambda _: iter([sources] * 4))
+    monkeypatch.setattr(a, 'source_batches', lambda *_: iter([sources] * 4))
     first, second = part(), part()
     second['summary'] = '合成材料正在招募。'
     seen = []
@@ -293,7 +293,7 @@ def test_unknown_page_stays_fenced_across_changed_draft_and_publication_yield(ho
 def test_independent_pages_review_first_result_and_final_not_every_draft(host, monkeypatch):
     research, selected, sources, checked = arrange(host, monkeypatch)
     research.execution.checkpoint(delivery.MODE, {'enabled': True, 'independent_pages': True})
-    monkeypatch.setattr(a, 'source_batches', lambda _: iter([sources] * 3))
+    monkeypatch.setattr(a, 'source_batches', lambda *_: iter([sources] * 3))
     reviewed = []
     def counter(payload):
         reviewed.append(payload['fields']['operations.summary'])

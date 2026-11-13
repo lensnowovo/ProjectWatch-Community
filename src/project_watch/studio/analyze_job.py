@@ -24,6 +24,12 @@ REVIEW_PROTOCOL = 'analysis_review_sources_v1'
 BATCH_CHARS = 32000
 PUBLICATION = 'analyze_publication_v1'
 SECTION_SCOPE = 'analyze_section_scope_v1'
+# Draft batch size is frozen per job: batch boundaries are part of each cumulative
+# draft's request identity. Older jobs keep the original bound; new ones read about
+# twice as much per request, halving the drafts that must run one after another.
+DRAFT_BATCH = 'analyze_draft_batch_v1'
+LEGACY_BATCH = {'materials': 40, 'chars': 32000}
+WIDE_BATCH = {'materials': 80, 'chars': 64000}
 # Sections no longer shown (公司本体 was replaced by the 公司进展 reading on 2026-11-11).
 # New analyses skip them; analyses that already started keep their original request list.
 RETIRED_SECTIONS = ('operations',)
@@ -126,12 +132,13 @@ def select(store, pid, context):
     return {**context, 'materials': selected, 'coverage': coverage}
 
 
-def source_batches(sources):
+def source_batches(sources, limits=None):
     """Finite snapshot traversal. Batch size is a context bound, never a total quota."""
+    most, chars = (limits['materials'], limits['chars']) if limits else (MAX_MATERIALS, BATCH_CHARS)
     batch, size = {}, 0
     for code, source in sources.items():
         n = len(source['text'])
-        if batch and (len(batch) >= MAX_MATERIALS or size + n > BATCH_CHARS):
+        if batch and (len(batch) >= most or size + n > chars):
             yield batch
             batch, size = {}, 0
         batch[code], size = source, size + n
@@ -146,7 +153,8 @@ def draft_batches(execution, llm, system, company, sources, context, targets, on
     if execution.read_checkpoint('analyze_section_draft_v1') is not None:
         raise ValueError('legacy analysis draft retained; incompatible evidence numbering')
     previous, processed = {}, 0
-    for index, batch in enumerate(source_batches(sources)):
+    limits = execution.read_checkpoint(DRAFT_BATCH) or LEGACY_BATCH
+    for index, batch in enumerate(source_batches(sources, limits)):
         fingerprint = digest([context['id'], targets, batch, previous])
         key = DRAFT + ':' + str(index) + ':' + fingerprint[:24]
         saved = execution.read_checkpoint(key)
@@ -632,6 +640,35 @@ def freeze_section_scope(execution, batch, *, fresh):
     execution.checkpoint(SECTION_SCOPE, {'retired': retired})
 
 
+def freeze_draft_batch(execution, batch, *, fresh):
+    """Decide the draft batch size once; never change it for drafting already under way.
+
+    Like the section scope, a retry of a collection batch whose earlier analysis drafted
+    with the original size keeps it, so a different request cannot sidestep an old one.
+    """
+    if execution.read_checkpoint(DRAFT_BATCH) is not None:
+        return
+    from project_watch.studio.execution import JobExecution
+    from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
+    limits = WIDE_BATCH if fresh else LEGACY_BATCH
+    if limits is WIDE_BATCH and batch:
+        with closing(execution.store._connect()) as db:
+            for row in db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='analyze' "
+                                  "AND input_version IN (?,?) AND id<>?",
+                                  (execution.job['project_id'], 'collect:' + batch, 'redo:' + batch,
+                                   execution.job['id'])).fetchall():
+                previous = JobExecution(execution.store, {'id': row[0]})
+                failures = previous.read_checkpoint(FAILURES, db=db) or {}
+                # A wide draft cut off by the context window would fail the same way again.
+                overflow = any(name.startswith('draft:') and isinstance(value, dict)
+                               and value.get('code') == 'model_output_truncated'
+                               for name, value in failures.items())
+                if previous.read_checkpoint(DRAFT_BATCH, db=db) != WIDE_BATCH or overflow:
+                    limits = LEGACY_BATCH
+                    break
+    execution.checkpoint(DRAFT_BATCH, limits)
+
+
 def run(pipeline, execution):
     from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
     from project_watch.studio.step_outcomes import attempt
@@ -664,6 +701,7 @@ def run(pipeline, execution):
     from project_watch.studio.review_source_traversal import freeze_scope
     freeze_scope(execution)
     freeze_section_scope(execution, batch, fresh=fresh)
+    freeze_draft_batch(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
     # A frozen request may block judgment delivery, not independent round cleanup.
     # Keep the failure under the same boundary that owns section publication.

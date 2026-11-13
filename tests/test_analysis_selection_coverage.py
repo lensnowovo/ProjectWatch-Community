@@ -111,3 +111,53 @@ def test_unknown_stops_before_next_batch_and_keeps_completed_checkpoint(tmp_path
     assert len(calls) == 2
     assert len([k for k in execution.saved if k.startswith(a.DRAFT)]) == 1
     assert execution.saved[a.COVERAGE]['remaining_fragments'] > 0
+
+
+def test_draft_batches_follow_the_frozen_batch_size():
+    sources = {f'S{i}': {'text': 'x' * 3000} for i in range(60)}
+    legacy = list(a.source_batches(sources))
+    wide = list(a.source_batches(sources, a.WIDE_BATCH))
+    assert [len(b) for b in legacy] == [10] * 6  # 32,000 characters per request
+    assert [len(b) for b in wide] == [21, 21, 18]  # 64,000 characters per request
+    assert sum(map(len, wide)) == 60
+    seen = []
+
+    class Execution:
+        def read_checkpoint(self, key):
+            return a.WIDE_BATCH if key == a.DRAFT_BATCH else None
+
+        def checkpoint_chunked(self, key, value):
+            pass
+
+    def drafted(*args, **kwargs):
+        seen.append(len(json.loads(args[1])['materials']))
+        return {'draft': len(seen)}
+    a.draft_batches(Execution(), SimpleNamespace(json=drafted), 'system', {}, sources,
+                    {'id': 'snapshot', 'coverage': {}}, ['industry'])
+    assert seen == [21, 21, 18]
+
+
+def test_a_job_drafted_before_the_upgrade_replays_its_saved_drafts_without_new_requests():
+    sources = {f'S{i}': {'text': 'x' * 3000} for i in range(60)}
+    saved, sent = {}, []
+
+    class Execution:
+        def read_checkpoint(self, key):
+            return saved.get(key)
+
+        def checkpoint(self, key, value):
+            saved[key] = value
+
+        checkpoint_chunked = checkpoint
+
+    def drafted(*args, **kwargs):
+        sent.append(1)
+        return {'draft': len(sent)}
+    llm = SimpleNamespace(json=drafted)
+    context = {'id': 'snapshot', 'coverage': {}}
+    first = a.draft_batches(Execution(), llm, 'system', {}, sources, context, ['industry'])
+    assert len(sent) == 6  # drafted with the original size, before the batch size was frozen
+    a.freeze_draft_batch(Execution(), None, fresh=False)  # the upgraded job resumes
+    assert saved[a.DRAFT_BATCH] == a.LEGACY_BATCH
+    assert a.draft_batches(Execution(), llm, 'system', {}, sources, context, ['industry']) == first
+    assert len(sent) == 6
