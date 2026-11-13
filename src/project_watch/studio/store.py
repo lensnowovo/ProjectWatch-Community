@@ -953,7 +953,8 @@ class StudioStore:
                 if row is None:
                     raise KeyError("item not found")
                 extra = json.loads(row["extra"] or "{}")
-                extra["body_prefilter"] = {"version": "relevance-v1", "read": decision["read"]}
+                extra["body_prefilter"] = {"version": "relevance-v1", "read": decision["read"],
+                                           **({"unassessed": decision["unassessed"]} if decision.get("unassessed") else {})}
                 db.execute("UPDATE studio_items SET extra=? WHERE id=?",
                            (json.dumps(extra, ensure_ascii=False), decision["id"]))
 
