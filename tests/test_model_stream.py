@@ -1,6 +1,7 @@
 """Offline transport faults, journal replay, and frozen legacy wire contracts."""
 import io
 import json
+import secrets
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -9,8 +10,16 @@ from typing import ClassVar
 import pytest
 from test_studio_runtime_health import setup
 
+from project_watch.studio.dispatch import cut_stream
 from project_watch.studio.execution import JobExecution
-from project_watch.studio.http import Http, HttpError, Response, safe_diagnostics, urllib_transport
+from project_watch.studio.http import (
+    Http,
+    HttpError,
+    Response,
+    TransportTrace,
+    safe_diagnostics,
+    urllib_transport,
+)
 from project_watch.studio.llm import LLM, ModelError, job_structured_options
 from project_watch.studio.model_stream import IncompleteStream, read_completion
 from project_watch.studio.settings import ModelConfig
@@ -373,3 +382,57 @@ def test_non_stream_reply_with_a_documented_end_never_returns_its_partial_text(f
     with pytest.raises(ModelError) as error:
         LLM(cfg, Http(send)).json('s', 'u')
     assert error.value.code == code and len(calls) == 1
+
+
+
+def _cut(parts, tail=b'', limit=10**6):
+    with pytest.raises(IncompleteStream) as error:
+        read_completion(Stream(b''.join(event(p) for p in parts) + tail), limit, lambda n: None)
+    assert all(type(v) is int for v in error.value.shape.values())
+    trace = TransportTrace(False)
+    trace.error(error.value)
+    assert all(type(v) is int or k in ('route', 'stage', 'exception', 'stream_failure', 'unexpected_finish') for k, v in trace.data.items())
+    return safe_diagnostics(trace.data)
+
+
+def test_a_cut_stream_records_how_much_reply_arrived_never_the_text():
+    data = _cut([{'reasoning_content': '想一想'}, {'content': '{"私密":'}, {'content': '"合成"}'}])
+    assert data['stream_failure'] == 'missing_end'
+    assert (data['content_chars'], data['reasoning_chars']) == (11, 3)
+    assert '私密' not in json.dumps(data, ensure_ascii=False)
+
+
+def _varied(n):
+    return [{'content': secrets.token_hex(96)} for _ in range(n)]
+
+
+def test_a_cut_stream_shows_whether_the_reply_was_looping():
+    looping = _cut([{'content': '重复的一句话，' * 40} for _ in range(20)])
+    assert looping['content_tail_unique_pct'] < 10 and _cut(_varied(30))['content_tail_unique_pct'] > 95
+
+
+def test_reasoning_that_looped_before_a_short_answer_is_still_measured():
+    data = _cut([{'reasoning_content': '再检查一遍。' * 50} for _ in range(30)] + [{'content': '{"'}])
+    assert data['reasoning_tail_unique_pct'] < 10 and 'content_tail_unique_pct' not in data
+
+
+def test_a_cut_before_any_text_has_no_loop_measure():
+    data = _cut([{}])
+    assert (data['content_chars'], data['reasoning_chars']) == (0, 0)
+    assert not any(k.endswith('tail_unique_pct') for k in data)
+
+
+@pytest.mark.parametrize(('tail', 'limit', 'failure'), [
+    (b'data: [DONE]\n\n', 10**6, 'missing_finish'),
+    (event({}, 'tool_calls'), 10**6, 'invalid_finish'),
+    (b'', 2000, 'oversized_stream')])
+def test_every_kind_of_break_carries_the_counts(tail, limit, failure):
+    data = _cut(_varied(3) + _varied(10), tail, limit)
+    assert data['stream_failure'] == failure and data['content_chars'] > 0
+
+
+def test_the_counts_do_not_change_which_breaks_are_resent():
+    data = _cut(_varied(3))
+    plain = {k: v for k, v in data.items() if not k.endswith(('_chars', '_pct'))}
+    data['headers_ms'] = plain['headers_ms'] = 5
+    assert cut_stream(data) == cut_stream(plain) is True
