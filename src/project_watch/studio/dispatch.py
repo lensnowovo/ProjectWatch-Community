@@ -70,6 +70,25 @@ def spent(db, project_id, kind, *, since=None):
                       (project_id, kind, since or month_start())).fetchone()[0]
 
 
+# retryable value of an unknown row whose one automatic resend is allowed; never 1, which
+# older rows may carry and which must keep holding.
+CUT_RESEND = 2
+# Journal status of an unknown request whose one automatic resend completed: spent, not unresolved.
+RESENT = 'resent'
+
+
+def cut_stream(transport):
+    """A stream the provider accepted (headers arrived) that then broke off, or ended with a
+    finish value outside its documented set. Not a duplicate end event, not a missing finish
+    (repeatable protocol behaviour), and not a stream this side cancelled."""
+    if not isinstance(transport, dict) or transport.get('exception') != 'IncompleteStream':
+        return False
+    if 'headers_ms' not in transport or 'cancel_reason' in transport:
+        return False
+    failure = transport.get('stream_failure')
+    return failure == 'missing_end' or (failure == 'invalid_finish' and bool(transport.get('unexpected_finish')))
+
+
 def check(db, job, kind, call_key, provider_hash):
     """Inside JobExecution.call's admission transaction, before the started row."""
     project = db.execute('SELECT status,consent_at FROM studio_projects WHERE project_id=?',
@@ -95,7 +114,8 @@ def check(db, job, kind, call_key, provider_hash):
     if not explicit_redo(job) and db.execute(
             "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
             "WHERE j.project_id=? AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' "
-            "AND j.input_version IN ('collect:'||?, ?||?))) AND (c.status IN ('unknown','started') "
+            "AND j.input_version IN ('collect:'||?, ?||?))) AND (c.status='started' "
+            "OR (c.status='unknown' AND COALESCE(c.retryable,0)<>2) "
             f"OR (c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE} AND c.retryable=0)) LIMIT 1",
             (job['project_id'], call_key, call_key, job['id'], batch, batch, REDO_PREFIX, batch)).fetchone():
         raise NotSent('unknown_not_resent')

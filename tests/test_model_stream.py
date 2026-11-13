@@ -135,7 +135,7 @@ def test_transport_waits_past_fifteen_minutes_and_journals_complete_usage(tmp_pa
         assert diagnostics['received_bytes'] == len(reply())
 
 
-def test_disconnect_is_unknown_not_resent_after_restart(tmp_path, monkeypatch):
+def test_a_disconnect_is_resent_once_then_held_and_not_resent_after_restart(tmp_path, monkeypatch):
     store, _, job = setup(tmp_path)
     execution = JobExecution(store, job)
     execution.checkpoint('already-saved', {'kept': True})
@@ -146,11 +146,13 @@ def test_disconnect_is_unknown_not_resent_after_restart(tmp_path, monkeypatch):
         with pytest.raises(ModelError) as error:
             LLM(config(), http, json_options=options).json('s', 'u')
         assert error.value.code in ('request_outcome_unknown', 'unknown_not_resent')
-    assert len(opened) == 1
+    assert len(opened) == 2  # the one automatic resend, then held; a restart sends nothing more
     assert execution.read_checkpoint('already-saved') == {'kept': True}
     with closing(store._connect()) as db:
-        row = db.execute('SELECT * FROM studio_job_calls').fetchone()
-        assert row['status'] == 'unknown' and row['input_tokens'] is None
+        rows = db.execute('SELECT * FROM studio_job_calls ORDER BY rowid').fetchall()
+        assert [(r['status'], r['retryable']) for r in rows] == [('unknown', 2), ('unknown', 0)]
+        row = rows[0]
+        assert row['input_tokens'] is None
         diagnostic = json.loads(db.execute("SELECT data FROM studio_job_checkpoints WHERE stage LIKE 'call_error:%'").fetchone()[0])
         assert diagnostic['transport']['stream_failure'] == 'missing_end'
 
@@ -318,16 +320,16 @@ def test_documented_end_is_isolated_at_an_independent_step(tmp_path, monkeypatch
     assert step_outcomes.attempt(execution, 'section', lambda: llm.json('s', 'u')) == (False, None)
 
 
-def test_undocumented_end_stays_unknown_and_names_the_value(tmp_path, monkeypatch):
+def test_an_undocumented_end_is_resent_once_then_stays_unknown_and_names_the_value(tmp_path, monkeypatch):
     store, _, job = setup(tmp_path)
     execution = JobExecution(store, job)
     opened = fake_network(monkeypatch, ended('tool_calls'))
     http = execution.http(Http(urllib_transport()), lambda u: ('model', 'synthetic'))
     with pytest.raises(ModelError) as error:
         LLM(config(), http, json_options=job_structured_options(execution, config())).json('s', 'u')
-    assert error.value.code == 'request_outcome_unknown' and len(opened) == 1
+    assert error.value.code == 'request_outcome_unknown' and len(opened) == 2
     with closing(store._connect()) as db:
-        assert db.execute('SELECT status FROM studio_job_calls').fetchone()[0] == 'unknown'
+        assert [r[0] for r in db.execute('SELECT status FROM studio_job_calls')] == ['unknown', 'unknown']
         diagnostic = json.loads(db.execute("SELECT data FROM studio_job_checkpoints WHERE stage LIKE 'call_error:%'").fetchone()[0])
     assert diagnostic['transport']['stream_failure'] == 'invalid_finish'
     assert diagnostic['transport']['unexpected_finish'] == 'tool_calls'

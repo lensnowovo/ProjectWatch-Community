@@ -188,6 +188,7 @@ class LLM:
         elif key in _CEILINGS:
             budget = min(budget, _CEILINGS[key])
         negotiated = False
+        resent = False
         attempt = 0
         while attempt < 3:
             try:
@@ -222,6 +223,13 @@ class LLM:
                     raise ModelError('已停止本次处理，已有结果保留', code=exc.code) from exc
                 if exc.code == 'connection_not_sent':
                     raise ModelError(MESSAGES[exc.code], code=exc.code) from exc
+                if exc.code == 'stream_cut_resend' and not resent:
+                    # The journal allowed exactly one resend of this request; it does not
+                    # use up an ordinary attempt, so it is always made.
+                    resent = True
+                    last_error = exc
+                    time.sleep(2)
+                    continue
                 if exc.code == 'legacy_batches_waiting':
                     raise ModelError('进度已保存，后续批次尚未发送，等待先前请求处理', code=exc.code) from exc
                 if exc.code in ("unsafe_redirect", "disallowed_url"):
