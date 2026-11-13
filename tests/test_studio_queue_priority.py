@@ -229,7 +229,7 @@ def test_the_analysiss_own_summary_still_runs_between_its_slices(tmp_path):
     assert store.claim('side')['id'] == summary['id']
 
 
-def test_only_a_claimable_unfinished_job_holds_its_project(tmp_path):
+def test_a_parked_job_holds_its_project_through_a_backoff_but_not_a_pause(tmp_path):
     store, (pid,) = setup(tmp_path)
     analysis = store.enqueue(pid, 'analyze')
     _yield(store, store.claim('round'))
@@ -238,11 +238,44 @@ def test_only_a_claimable_unfinished_job_holds_its_project(tmp_path):
     internal = store.enqueue(pid, 'internal')
     assert store.claim()['id'] == internal['id']
     store.set_status(pid, 'active')
-    # Waiting out a provider backoff, it does not hold its project either.
+    # Waiting out a provider backoff, it still holds its project: a side job started
+    # meanwhile would revise the evidence it publishes from (2026-11-13 live run).
+    from datetime import UTC, datetime, timedelta
+    later = (datetime.now(UTC) + timedelta(minutes=10)).isoformat()
     with store._connect() as db:
-        db.execute("UPDATE studio_jobs SET retry_after='9999-12-31' WHERE id=?", (analysis['id'],))
+        db.execute("UPDATE studio_jobs SET retry_after=? WHERE id=?", (later, analysis['id']))
     side = store.enqueue(pid, 'details')
-    assert store.claim('side')['id'] == side['id']
+    assert store.claim('side') is None
+    with store._connect() as db:  # the backoff ends: the analysis resumes before the side job
+        db.execute("UPDATE studio_jobs SET retry_after=NULL WHERE id=?", (analysis['id'],))
+    assert store.claim()['id'] == analysis['id']
+    with store._connect() as db:
+        assert db.execute('SELECT status FROM studio_jobs WHERE id=?', (side['id'],)).fetchone()[0] == 'queued'
+
+
+def test_a_long_wait_releases_the_project_and_update_resumes_a_held_one(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from project_watch.studio import spine
+    store, (pid,) = setup(tmp_path)
+    analysis = store.enqueue(pid, 'analyze')
+    _yield(store, store.claim('round'))
+    side = store.enqueue(pid, 'details')
+    # An account error or a long Retry-After does not hold the project for hours.
+    with store._connect() as db:
+        db.execute("UPDATE studio_jobs SET retry_after=? WHERE id=?",
+                   ((datetime.now(UTC) + timedelta(hours=1)).isoformat(), analysis['id']))
+    claimed = store.claim('side')
+    assert claimed['id'] == side['id']
+    store.finish(claimed['id'], lease_token=claimed['lease_token'])
+    # Within a connection backoff it holds; the owner's 更新 resumes it at once.
+    with store._connect() as db:
+        db.execute("UPDATE studio_jobs SET retry_after=? WHERE id=?",
+                   ((datetime.now(UTC) + timedelta(minutes=20)).isoformat(), analysis['id']))
+    store.enqueue(pid, 'business')
+    assert store.claim('side') is None
+    spine.request_round(store, pid, 'manual')
+    assert store.claim()['id'] == analysis['id']
 
 
 def test_two_unfinished_jobs_of_a_project_resume_in_start_order(tmp_path):
