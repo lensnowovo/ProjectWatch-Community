@@ -65,6 +65,11 @@ def waiting_on_request(store, job_id):
                           (job_id,)).fetchone() is not None
 
 
+def _diagnostic_stage(prefix, key):
+    """A retry under ``<key>:429:N`` keeps its own diagnostic; the first request keeps its old stage name."""
+    return prefix + key[:40] + key[64:]
+
+
 class JobExecution:
     def __init__(self, store, job, *, budgets=None, cancel_requested=None):
         self.store, self.job = store, job
@@ -212,7 +217,7 @@ class JobExecution:
             if old:
                 self.last_replay = True
                 if old["status"] == "failed_read":
-                    diagnostic = self._read_checkpoint(db, 'call_error:' + key[:40]) or {}
+                    diagnostic = self._read_checkpoint(db, _diagnostic_stage('call_error:', key)) or {}
                     code = diagnostic.get('code', 'response_too_large')
                     if code not in ('response_too_large', 'public_read_failed'):
                         raise dispatch.NotSent('unknown_not_resent')
@@ -298,7 +303,7 @@ class JobExecution:
                 # No exception text, URL, credentials or response body in diagnostics.
                 db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
                            'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], 'call_error:' + key[:40], json.dumps(diagnostic)))
+                           (self.job['id'], _diagnostic_stage('call_error:', key), json.dumps(diagnostic)))
             if failed_read:
                 raise HttpError(failure_code) from exc
             if resend:
@@ -319,7 +324,7 @@ class JobExecution:
                 from project_watch.studio.http import safe_diagnostics
                 db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
                            'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], 'call_transport:' + key[:40], json.dumps(safe_diagnostics(response.diagnostics))))
+                           (self.job['id'], _diagnostic_stage('call_transport:', key), json.dumps(safe_diagnostics(response.diagnostics))))
             from project_watch.studio.usage import FIELDS, reported
 
             counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)

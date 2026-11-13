@@ -182,3 +182,16 @@ def test_the_resend_is_made_even_after_ordinary_attempts_were_used(monkeypatch):
     model = LLM(ModelConfig(base_url='https://synthetic.invalid', model='synthetic', api_key='fake'), Http(transport))
     assert model.complete('system', 'user', stream=False) == '合成回答'
     assert len(attempts) == 4
+
+
+def test_each_request_of_a_resend_keeps_its_own_diagnostic(env):
+    store, pid = env
+    work = job(store, pid, 'analyze')
+    with pytest.raises(HttpError, match='stream_cut_resend'):
+        work.call('model', 'same', cut())
+    with pytest.raises(HttpError, match='connection_failed'):
+        work.call('model', 'same', cut())
+    with store._connect() as db:
+        saved = {r[0][len('call_error:'):][40:]: json.loads(r[1])['auto_resend']
+                 for r in db.execute("SELECT stage,data FROM studio_job_checkpoints WHERE stage LIKE 'call_error:%'")}
+    assert saved == {'': True, ':429:1': False}
