@@ -430,7 +430,10 @@ def publish_draft(pipeline, execution, llm, draft, sources, selected, targets, r
                     allowed = section_analysis.UNKNOWN_ERRORS | ISOLATABLE
                     if exc.code not in allowed:
                         raise
-                    outcome = section_analysis.blocked_outcome(exc)
+                    if not (outcome.get('status') == 'approved' and outcome.get('summary_withheld')):
+                        outcome = section_analysis.blocked_outcome(exc)
+                    # else: the reviewed section without its summary still stands; the
+                    # rewrite is not resent.
             result = section_analysis.publish(pipeline, execution, selected, raw, sources, {name: outcome}, guard,
                                               targets=[name]) if outcome['status'] == 'approved' else {}
             saved_section = dict(outcome=outcome, published=bool(result.get('published')),
@@ -505,7 +508,8 @@ def repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer
     for name, outcome in outcomes.items():
         if name not in raw:
             continue
-        reason = _summary_problem(name, outcome)
+        reason = _summary_problem(name, outcome) or (outcome.get('status') == 'approved'
+                                                      and outcome.get('summary_withheld')) or None
         if reason is None and outcome.get('status') == 'approved':
             reason = _normalization_problem(generator, name, raw[name], sources, modern=_review_version(execution) >= 2)
         if reason:
@@ -730,6 +734,32 @@ def freeze_draft_batch(execution, batch, *, fresh):
     execution.checkpoint(DRAFT_BATCH, limits)
 
 
+def freeze_summary_policy(execution, batch, *, fresh):
+    """Withhold a failed summary only for analyses that start under this rule.
+
+    A retry of a collection batch whose earlier analysis rejected such sections
+    keeps rejecting them, so its review requests keep their original identity.
+    """
+    from project_watch.studio.section_analysis import SUMMARY_POLICY
+    if execution.read_checkpoint(SUMMARY_POLICY) is not None:
+        return
+    from project_watch.studio.execution import JobExecution
+    withhold = bool(fresh)
+    with closing(execution.store._connect()) as db:
+        if db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (execution.job['id'],)).fetchone():
+            withhold = False  # requests already sent keep the rules they were sent under
+        if withhold and batch:
+            for row in db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='analyze' "
+                                  "AND input_version IN (?,?) AND id<>?",
+                                  (execution.job['project_id'], 'collect:' + batch, 'redo:' + batch,
+                                   execution.job['id'])).fetchall():
+                previous = JobExecution(execution.store, {'id': row[0]}).read_checkpoint(SUMMARY_POLICY, db=db)
+                if not (previous or {}).get('withhold'):
+                    withhold = False
+                    break
+    execution.checkpoint(SUMMARY_POLICY, {'withhold': withhold})
+
+
 def run(pipeline, execution):
     from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
     from project_watch.studio.step_outcomes import attempt
@@ -763,6 +793,7 @@ def run(pipeline, execution):
     freeze_scope(execution)
     freeze_section_scope(execution, batch, fresh=fresh)
     freeze_draft_batch(execution, batch, fresh=fresh)
+    freeze_summary_policy(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
     # A frozen request may block judgment delivery, not independent round cleanup.
     # Keep the failure under the same boundary that owns section publication.
