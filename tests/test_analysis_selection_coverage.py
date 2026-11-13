@@ -3,6 +3,8 @@ import json
 import sqlite3
 from types import SimpleNamespace
 
+import pytest
+
 from project_watch.studio import analyze_job as a
 from project_watch.studio import section_analysis
 from project_watch.studio.llm import ModelError
@@ -111,3 +113,136 @@ def test_unknown_stops_before_next_batch_and_keeps_completed_checkpoint(tmp_path
     assert len(calls) == 2
     assert len([k for k in execution.saved if k.startswith(a.DRAFT)]) == 1
     assert execution.saved[a.COVERAGE]['remaining_fragments'] > 0
+
+
+def test_draft_batches_follow_the_frozen_batch_size():
+    sources = {f'S{i}': {'text': 'x' * 3000} for i in range(60)}
+    legacy = list(a.source_batches(sources))
+    wide = list(a.source_batches(sources, a.WIDE_BATCH))
+    assert [len(b) for b in legacy] == [10] * 6  # 32,000 characters per request
+    assert [len(b) for b in wide] == [21, 21, 18]  # 64,000 characters per request
+    assert sum(map(len, wide)) == 60
+    seen = []
+
+    class Execution:
+        def read_checkpoint(self, key):
+            return a.WIDE_BATCH if key == a.DRAFT_BATCH else None
+
+        def checkpoint_chunked(self, key, value):
+            pass
+
+    def drafted(*args, **kwargs):
+        seen.append(len(json.loads(args[1])['materials']))
+        return {'draft': len(seen)}
+    a.draft_batches(Execution(), SimpleNamespace(json=drafted), 'system', {}, sources,
+                    {'id': 'snapshot', 'coverage': {}}, ['industry'])
+    assert seen == [21, 21, 18]
+
+
+def test_a_job_drafted_before_the_upgrade_replays_its_saved_drafts_without_new_requests():
+    sources = {f'S{i}': {'text': 'x' * 3000} for i in range(60)}
+    saved, sent = {}, []
+
+    class Execution:
+        def read_checkpoint(self, key):
+            return saved.get(key)
+
+        def checkpoint(self, key, value):
+            saved[key] = value
+
+        checkpoint_chunked = checkpoint
+
+    def drafted(*args, **kwargs):
+        sent.append(1)
+        return {'draft': len(sent)}
+    llm = SimpleNamespace(json=drafted)
+    context = {'id': 'snapshot', 'coverage': {}}
+    first = a.draft_batches(Execution(), llm, 'system', {}, sources, context, ['industry'])
+    assert len(sent) == 6  # drafted with the original size, before the batch size was frozen
+    a.freeze_draft_batch(Execution(), None, fresh=False)  # the upgraded job resumes
+    assert saved[a.DRAFT_BATCH] == a.LEGACY_BATCH
+    assert a.draft_batches(Execution(), llm, 'system', {}, sources, context, ['industry']) == first
+    assert len(sent) == 6
+
+
+def _fixture(tmp_path):
+    path = tmp_path / 'golden.db'
+    def connect():
+        db = sqlite3.connect(path)
+        db.row_factory = sqlite3.Row
+        return db
+    with connect() as db:
+        db.executescript('CREATE TABLE studio_item_evidence(evidence_version_id TEXT,item_id TEXT); '
+                         'CREATE TABLE studio_items(id TEXT,project_id TEXT,relevant INT,triaged INT,importance TEXT,'
+                         'published_at TEXT,collected_at TEXT,category TEXT);')
+        rows = [('a', 1, 1, 'major', 'company'), ('b', 1, 1, 'routine', 'policy'), ('c', 0, 1, 'major', 'company'),
+                ('d', 1, 1, 'notable', None)]
+        for eid, relevant, triaged, importance, category in rows:
+            db.execute('INSERT INTO studio_item_evidence VALUES (?,?)', (eid, eid))
+            db.execute('INSERT INTO studio_items VALUES (?,?,?,?,?,?,?,?)',
+                       (eid, 'p', relevant, triaged, importance, '2026-11-0' + str(len(eid)), '', category))
+    def material(eid, parts):
+        return dict(evidence_version_id=eid, source_key=eid, read_scope='full',
+                    evidence=dict(parts=[dict(text=t) for t in parts]))
+    context = dict(id='snap', baseline_analysis={'snapshot-section:industry': 'v1'}, exclusions=[],
+                   materials=[material('a', ['A' * 4100]), material('b', ['', 'B1', 'B2']),
+                              material('c', ['C']), material('d', ['D'])])
+    return SimpleNamespace(_connect=connect), context
+
+
+def test_reference_selection_rebuilds_a_fixed_expected_layout(tmp_path):
+    store, context = _fixture(tmp_path)
+    plan = a.select_refs(store, 'p', context)
+    # Importance first, directions interleaved, long parts split at 4,000, empty parts kept.
+    assert plan['refs'] == [['a', 0, 0], ['a', 0, 4000], ['d', 0, 0], ['b', 1, 0], ['b', 2, 0]]
+    assert plan['baseline_analysis'] == context['baseline_analysis']
+    assert plan['coverage']['excluded'] == [{'evidence_version_id': 'c', 'reason': 'irrelevant'}]
+    sources = section_analysis.numbered(a.materialize(context, json.loads(json.dumps(plan))))
+    assert [(code, s['text'], s['read_scope']) for code, s in sources.items()] == [
+        ('S1', 'A' * 4000, 'partial'), ('S2', 'A' * 100, 'partial'), ('S3', 'D', 'full'),
+        ('S4', 'B1', 'partial'), ('S5', 'B2', 'partial')]
+
+
+def test_saved_full_text_wins_and_an_unrebuildable_selection_is_kept_in_full(tmp_path):
+    store, context = _fixture(tmp_path)
+    execution = Execution()
+    execution.store = store
+    full = a.select(store, 'p', context)
+    execution.saved[a.SELECTION] = full
+    execution.saved[a.SELECTION_REFS] = {**a.select_refs(store, 'p', context), 'refs': []}
+    assert a.frozen_selection(execution, 'p', context) == full  # the older full-text record wins
+    # A selection the snapshot cannot rebuild (no fragment positions) keeps its full text.
+    other = Execution()
+    synthetic = {'id': 'snap', 'materials': [{'evidence_version_id': 'x', 'evidence': {'parts': []}}]}
+    assert a.freeze_selection(other, 'full', 'refs', context, lambda: synthetic) == synthetic
+    assert other.saved == {'full': synthetic}
+
+
+def test_selection_is_frozen_as_small_references_and_rebuilds_the_same_fragments(tmp_path):
+    selected, context = selection(tmp_path)
+    def connect():
+        db = sqlite3.connect(tmp_path / 'selection.db')
+        db.row_factory = sqlite3.Row
+        return db
+    store = SimpleNamespace(_connect=connect)
+    execution = Execution()
+    execution.store = store
+    rebuilt = a.frozen_selection(execution, 'p', context)
+    assert rebuilt == selected
+    assert a.SELECTION not in execution.saved
+    plan = execution.saved[a.SELECTION_REFS]
+    assert len(json.dumps(plan)) * 20 < len(json.dumps(selected))  # references, not copied text
+    # Resume rebuilds the identical sources, so draft request identities do not change.
+    assert section_analysis.numbered(a.frozen_selection(execution, 'p', context)) == section_analysis.numbered(selected)
+    with pytest.raises(ValueError, match='snapshot changed'):
+        a.materialize({**context, 'id': 'other'}, plan)
+    with pytest.raises(ValueError, match='missing'):
+        a.materialize({**context, 'materials': context['materials'][1:]}, plan)
+
+
+def test_an_older_job_keeps_its_saved_full_text_selection(tmp_path):
+    selected, context = selection(tmp_path)
+    execution = Execution()
+    execution.saved[a.SELECTION] = selected
+    assert a.frozen_selection(execution, 'p', {**context, 'materials': []}) == selected
+    assert a.SELECTION_REFS not in execution.saved

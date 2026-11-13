@@ -233,7 +233,15 @@ def read_bodies(pipeline, execution, collectors):
     eligible = pipeline.prefilter_bodies(pid, llm, project, plan, stage, item_ids=ids)
     # What is read is the relevance pre-filter's choice; there is no count cap.
     read = pipeline.fetch_bodies(pid, stage, eligible_ids=eligible, collectors=collectors)
-    return {'read': read, 'candidates': len(ids)}
+    # Batches the pre-filter could not assess are read in full; count them so a model that
+    # never answers this prompt shows up in the round result instead of only in a log.
+    with closing(pipeline.store._connect()) as db:
+        unassessed = db.execute(
+            'SELECT COUNT(DISTINCT i.id) FROM studio_collection_observations o JOIN studio_items i ON i.id=o.item_id '
+            "WHERE o.job_id=? AND i.category NOT IN ('paper','patent','trial') "
+            "AND json_extract(i.extra,'$.body_prefilter.unassessed') IS NOT NULL",
+            (execution.job['id'],)).fetchone()[0]
+    return {'read': read, 'candidates': len(ids), **({'prefilter_unassessed': unassessed} if unassessed else {})}
 
 
 def _record_health(pipeline, pid, rows):
@@ -315,6 +323,8 @@ def run(pipeline, execution, *, mode='refresh'):
     result = dict(status=status, finished_at=now(), sources=len(rows),
                   outcomes={o: outcomes.count(o) for o in set(outcomes)}, patent_documents=numbers,
                   bodies_read=bodies.get('read', 0),
+                  **({'prefilter_unassessed': bodies['prefilter_unassessed']}
+                     if bodies.get('prefilter_unassessed') else {}),
                   not_collected=[dict(source=r['source'], outcome=r['outcome'], reason=(r['reason'] or '')[:80])
                                  for r in rows if r['capability'] == 'available'
                                  and r['outcome'] not in ('success', 'not_due')])

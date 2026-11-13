@@ -421,6 +421,10 @@ def _news(collectors, query, search_count=0):
     return items
 
 
+PREFILTER_FAIL_OPEN = frozenset({'model_content_rejected', 'model_output_invalid_json', 'model_output_invalid_shape',
+                                 'model_output_incomplete', 'model_output_truncated'})
+
+
 class Pipeline:
     def __init__(self, repository: ProjectRepository, store: StudioStore,
                  settings_store: SettingsStore, *,
@@ -1567,25 +1571,33 @@ class Pipeline:
             saved = execution.read_checkpoint(key) if execution else None
             if saved is None:
                 stage(f"筛选待阅读材料（第 {start // TRIAGE_BATCH + 1} 批）")
+                unassessed = None
                 try:
                     data = llm.json(_BODY_PREFILTER_SYSTEM, user, max_tokens=4000) if llm.ready else {"results": []}
                 except ModelError as exc:
-                    # A conclusive content refusal is not resent; prioritisation fails open.
-                    if exc.code != 'model_content_rejected':
+                    # Prioritisation only: a definite "no usable answer" is never resent, and the
+                    # batch is read in full instead of failing the whole collection. An uncertain
+                    # outcome (unknown, timeout) still holds the round for the owner to see.
+                    if exc.code not in PREFILTER_FAIL_OPEN:
                         raise
-                    _log.info("body prefilter batch refused by the model provider; reading all of it")
-                    data = {"results": []}
+                    _log.info("body prefilter batch had no usable reply (%s); reading all of it", exc.code)
+                    data, unassessed = {"results": []}, exc.code
                 rows = data.get("results") if isinstance(data, dict) else None
                 if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
-                    raise ModelError("正文预筛返回格式不正确", code="model_output_invalid_shape")
+                    _log.info("body prefilter reply malformed; reading the whole batch")
+                    rows, unassessed = [], 'model_output_invalid_shape'
                 known = {i["id"] for i in batch}
-                decisions = {}
+                decisions, conflicted = {}, set()
                 for r in rows:
                     if isinstance(r.get("id"), str) and r["id"] in known and type(r.get("read")) is bool:
                         if r["id"] in decisions and decisions[r["id"]] != r["read"]:
-                            raise ModelError("正文预筛返回冲突的决定", code="model_output_invalid_shape")
+                            conflicted.add(r["id"])  # contradictory: read it rather than guess
                         decisions[r["id"]] = r["read"]
-                saved = [{"id": i["id"], "read": decisions.get(i["id"], True)} for i in batch]
+                for item_id in conflicted:
+                    decisions[item_id] = True
+                # A failed-open batch is marked, so a model that never answers it stays visible.
+                saved = [{"id": i["id"], "read": decisions.get(i["id"], True),
+                          **({"unassessed": unassessed} if unassessed else {})} for i in batch]
                 if execution:
                     execution.checkpoint(key, saved)
             self.store.save_body_prefilter(saved, guard=execution._guard if execution else None)

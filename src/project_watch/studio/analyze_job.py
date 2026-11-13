@@ -18,12 +18,19 @@ RESULT = 'analyze_result_v1'
 SNAPSHOT = 'analyze_snapshot_v1'
 DRAFT = 'analyze_section_draft_v2'
 COVERAGE = 'analyze_coverage_v2'
-SELECTION = 'analyze_selection_v2'
+SELECTION = 'analyze_selection_v2'  # older jobs: the selection with its full text
+SELECTION_REFS = 'analyze_selection_refs_v1'  # new jobs: fragment references only
 PROTOCOL = 'analyze_protocol_v2'
 REVIEW_PROTOCOL = 'analysis_review_sources_v1'
 BATCH_CHARS = 32000
 PUBLICATION = 'analyze_publication_v1'
 SECTION_SCOPE = 'analyze_section_scope_v1'
+# Draft batch size is frozen per job: batch boundaries are part of each cumulative
+# draft's request identity. Older jobs keep the original bound; new ones read about
+# twice as much per request, halving the drafts that must run one after another.
+DRAFT_BATCH = 'analyze_draft_batch_v1'
+LEGACY_BATCH = {'materials': 40, 'chars': 32000}
+WIDE_BATCH = {'materials': 80, 'chars': 64000}
 # Sections no longer shown (公司本体 was replaced by the 公司进展 reading on 2026-11-11).
 # New analyses skip them; analyses that already started keep their original request list.
 RETIRED_SECTIONS = ('operations',)
@@ -86,6 +93,15 @@ def _plan(pipeline, execution, collect_job_id):
 
 def select(store, pid, context):
     """Traverse eligible materials; bound each request, never silently drop the tail."""
+    return materialize(context, select_refs(store, pid, context))
+
+
+def select_refs(store, pid, context):
+    """The selection as fragment references into the frozen snapshot, not copied text.
+
+    The originals are immutable evidence versions the snapshot already resolves, so
+    the stored plan stays small however much material a project accumulates.
+    """
     with closing(store._connect()) as db:
         rows = {r['evidence_version_id']: dict(r) for r in db.execute(
             'SELECT b.evidence_version_id,i.relevant,i.triaged,i.importance,i.published_at,i.collected_at,i.category '
@@ -110,28 +126,83 @@ def select(store, pid, context):
         directions.setdefault(item.get('category') or 'other', []).append(material)
     ordered = [material for row in range(max((len(v) for v in directions.values()), default=0))
                for values in directions.values() for material in values[row:row + 1]]
-    selected = []
-    for material in ordered:
-        evidence = material['evidence']
-        for part_no, part in enumerate(evidence['parts']):
-            for offset in range(0, len(part['text']), MAX_CHARS):
-                fragment = {**part, 'text': part['text'][offset:offset + MAX_CHARS]}
-                selected.append({**material, 'evidence': {**evidence, 'parts': [fragment]},
-                                 'fragment': {'part': part_no, 'offset': offset},
-                                 'read_scope': 'partial' if len(evidence['parts']) > 1 or len(part['text']) > MAX_CHARS
-                                 else material['read_scope']})
+    refs = [[material['evidence_version_id'], part_no, offset]
+            for material in ordered
+            for part_no, part in enumerate(material['evidence']['parts'])
+            for offset in range(0, len(part['text']), MAX_CHARS)]
     coverage = dict(snapshot_id=context['id'], candidates=len(context['materials']),
-                    selected_materials=len(ordered), fragments=len(selected), processed_fragments=0,
+                    selected_materials=len(ordered), fragments=len(refs), processed_fragments=0,
                     excluded=excluded, directions={k: len(v) for k, v in directions.items()})
-    return {**context, 'materials': selected, 'coverage': coverage}
+    return {**{k: v for k, v in context.items() if k != 'materials'}, 'refs': refs, 'coverage': coverage}
 
 
-def source_batches(sources):
+def materialize(context, plan):
+    """Rebuild the selected fragments from the snapshot exactly as select() orders them."""
+    if plan['id'] != context['id']:
+        raise ValueError('analysis selection snapshot changed')
+    by_id = {material['evidence_version_id']: material for material in context['materials']}
+    selected = []
+    for eid, part_no, offset in plan['refs']:
+        material = by_id.get(eid)
+        if material is None:
+            raise ValueError('analysis selection material missing from snapshot')
+        evidence = material['evidence']
+        part = evidence['parts'][part_no]
+        fragment = {**part, 'text': part['text'][offset:offset + MAX_CHARS]}
+        selected.append({**material, 'evidence': {**evidence, 'parts': [fragment]},
+                         'fragment': {'part': part_no, 'offset': offset},
+                         'read_scope': 'partial' if len(evidence['parts']) > 1 or len(part['text']) > MAX_CHARS
+                         else material['read_scope']})
+    return {**{k: v for k, v in plan.items() if k != 'refs'}, 'materials': selected}
+
+
+def freeze_selection(execution, full_key, refs_key, snapshot, build):
+    """Freeze a selection once; store fragment references when they rebuild it exactly.
+
+    An older job keeps its saved full-text selection. A new one stores references only
+    after checking that the frozen snapshot rebuilds the identical selection, so request
+    identities cannot change on resume; otherwise the full text is kept as before.
+    """
+    selected = execution.read_checkpoint(full_key)
+    if selected is not None:
+        return selected
+    plan = execution.read_checkpoint(refs_key)
+    if plan is not None:
+        return materialize(snapshot, plan)
+    selected = build()
+    plan = _references(selected)
+    try:
+        exact = plan is not None and materialize(snapshot, plan) == selected
+    except (KeyError, IndexError, ValueError):
+        exact = False
+    if exact:
+        execution.checkpoint_chunked(refs_key, plan)
+    else:
+        execution.checkpoint_chunked(full_key, selected)
+    return selected
+
+
+def _references(selected):
+    try:
+        refs = [[m['evidence_version_id'], m['fragment']['part'], m['fragment']['offset']]
+                for m in selected['materials']]
+    except (KeyError, TypeError):
+        return None
+    return {**{k: v for k, v in selected.items() if k != 'materials'}, 'refs': refs}
+
+
+def frozen_selection(execution, pid, context):
+    return freeze_selection(execution, SELECTION, SELECTION_REFS, context,
+                            lambda: select(execution.store, pid, context))
+
+
+def source_batches(sources, limits=None):
     """Finite snapshot traversal. Batch size is a context bound, never a total quota."""
+    most, chars = (limits['materials'], limits['chars']) if limits else (MAX_MATERIALS, BATCH_CHARS)
     batch, size = {}, 0
     for code, source in sources.items():
         n = len(source['text'])
-        if batch and (len(batch) >= MAX_MATERIALS or size + n > BATCH_CHARS):
+        if batch and (len(batch) >= most or size + n > chars):
             yield batch
             batch, size = {}, 0
         batch[code], size = source, size + n
@@ -146,7 +217,8 @@ def draft_batches(execution, llm, system, company, sources, context, targets, on
     if execution.read_checkpoint('analyze_section_draft_v1') is not None:
         raise ValueError('legacy analysis draft retained; incompatible evidence numbering')
     previous, processed = {}, 0
-    for index, batch in enumerate(source_batches(sources)):
+    limits = execution.read_checkpoint(DRAFT_BATCH) or LEGACY_BATCH
+    for index, batch in enumerate(source_batches(sources, limits)):
         fingerprint = digest([context['id'], targets, batch, previous])
         key = DRAFT + ':' + str(index) + ':' + fingerprint[:24]
         saved = execution.read_checkpoint(key)
@@ -271,10 +343,7 @@ def sections(pipeline, execution, llm, context, affected=None):
     def guard():
         with closing(execution.store._connect()) as db:
             execution._guard(db)
-    selected = execution.read_checkpoint(SELECTION)
-    if selected is None:
-        selected = select(execution.store, pid, context)
-        execution.checkpoint_chunked(SELECTION, selected)
+    selected = frozen_selection(execution, pid, context)
     if selected['id'] != context['id']:
         raise ValueError('analysis selection snapshot changed')
     if not selected['materials']:
@@ -632,6 +701,35 @@ def freeze_section_scope(execution, batch, *, fresh):
     execution.checkpoint(SECTION_SCOPE, {'retired': retired})
 
 
+def freeze_draft_batch(execution, batch, *, fresh):
+    """Decide the draft batch size once; never change it for drafting already under way.
+
+    Like the section scope, a retry of a collection batch whose earlier analysis drafted
+    with the original size keeps it, so a different request cannot sidestep an old one.
+    """
+    if execution.read_checkpoint(DRAFT_BATCH) is not None:
+        return
+    from project_watch.studio.execution import JobExecution
+    from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
+    limits = WIDE_BATCH if fresh else LEGACY_BATCH
+    if limits is WIDE_BATCH and batch:
+        with closing(execution.store._connect()) as db:
+            for row in db.execute("SELECT id FROM studio_jobs WHERE project_id=? AND kind='analyze' "
+                                  "AND input_version IN (?,?) AND id<>?",
+                                  (execution.job['project_id'], 'collect:' + batch, 'redo:' + batch,
+                                   execution.job['id'])).fetchall():
+                previous = JobExecution(execution.store, {'id': row[0]})
+                failures = previous.read_checkpoint(FAILURES, db=db) or {}
+                # A wide draft cut off by the context window would fail the same way again.
+                overflow = any(name.startswith('draft:') and isinstance(value, dict)
+                               and value.get('code') == 'model_output_truncated'
+                               for name, value in failures.items())
+                if previous.read_checkpoint(DRAFT_BATCH, db=db) != WIDE_BATCH or overflow:
+                    limits = LEGACY_BATCH
+                    break
+    execution.checkpoint(DRAFT_BATCH, limits)
+
+
 def run(pipeline, execution):
     from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
     from project_watch.studio.step_outcomes import attempt
@@ -664,6 +762,7 @@ def run(pipeline, execution):
     from project_watch.studio.review_source_traversal import freeze_scope
     freeze_scope(execution)
     freeze_section_scope(execution, batch, fresh=fresh)
+    freeze_draft_batch(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
     # A frozen request may block judgment delivery, not independent round cleanup.
     # Keep the failure under the same boundary that owns section publication.

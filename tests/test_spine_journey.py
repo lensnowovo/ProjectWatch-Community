@@ -479,3 +479,45 @@ def test_progress_reads_a_retired_section_as_retired_from_any_checkpoint(env):
 def test_a_retired_section_reads_as_retired_not_as_a_failure():
     from project_watch.studio.section_progress import outcome_state
     assert outcome_state({'status': 'retired', 'reason': 'section no longer drafted'}) == 'retired'
+
+
+def test_a_new_analysis_drafts_in_wide_batches_and_one_under_way_keeps_its_size(env):
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    first = work(pipeline, 'analyze')
+    assert first.read_checkpoint(analyze_job.DRAFT_BATCH) == analyze_job.WIDE_BATCH
+    # A redo of a batch whose analysis drafted with the original size keeps that size.
+    with pipeline.store._connect() as db, db:
+        db.execute("DELETE FROM studio_job_checkpoints WHERE job_id=? AND stage=?",
+                   (first.job['id'], analyze_job.DRAFT_BATCH))
+    redo = _redo(pipeline, pid, collect.job['id'])
+    assert redo.read_checkpoint(analyze_job.DRAFT_BATCH) == analyze_job.LEGACY_BATCH
+
+
+def test_an_analysis_that_started_before_the_wide_batch_keeps_the_original_size(env):
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    job = pipeline.store.claim(lane='round')
+    JobExecution(pipeline.store, job).checkpoint(analyze_job.PROTOCOL, {'version': 2})  # began before the upgrade
+    pipeline.run(job)
+    pipeline.store.finish(job['id'], lease_token=job['lease_token'])
+    assert JobExecution(pipeline.store, job).read_checkpoint(analyze_job.DRAFT_BATCH) == analyze_job.LEGACY_BATCH
+
+
+def test_a_redo_of_a_wide_batch_stays_wide_unless_a_wide_draft_overflowed(env):
+    from project_watch.studio.step_outcomes import CHECKPOINT as FAILURES
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    first = work(pipeline, 'analyze')
+    redo = _redo(pipeline, pid, collect.job['id'])
+    assert redo.read_checkpoint(analyze_job.DRAFT_BATCH) == analyze_job.WIDE_BATCH
+    # A wide draft cut off by the context window: the next redo drafts at the original size.
+    import json
+    with pipeline.store._connect() as db, db:
+        db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?)', (first.job['id'], FAILURES, json.dumps(
+            {'draft:analyze_section_draft_v2:0:x': {'status': 'blocked', 'code': 'model_output_truncated'}})))
+    again = _redo(pipeline, pid, collect.job['id'])
+    assert again.read_checkpoint(analyze_job.DRAFT_BATCH) == analyze_job.LEGACY_BATCH

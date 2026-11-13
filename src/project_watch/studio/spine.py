@@ -20,6 +20,13 @@ def request_round(store, project_id, reason, *, automatic=False, db=None):
     with (closing(store._connect()) if own else nullcontext(db)) as conn, (conn if own else nullcontext()):
         if own:
             conn.execute('BEGIN IMMEDIATE')
+        if reason == 'manual':
+            # A started job waiting out a connection backoff holds its project (claim);
+            # 更新 resumes it now. Nothing was sent; a remaining rate limit re-defers it
+            # without a request.
+            conn.execute("UPDATE studio_jobs SET retry_after=NULL WHERE project_id=? AND status='queued' "
+                         "AND started_at IS NOT NULL AND retry_after>?", (project_id, now()))
+            conn.execute('DELETE FROM studio_provider_backoff WHERE status=0')
         active = conn.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind IN ('collect','analyze','report') "
                               "AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1", (project_id,)).fetchone()
         if active:

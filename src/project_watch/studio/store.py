@@ -953,7 +953,8 @@ class StudioStore:
                 if row is None:
                     raise KeyError("item not found")
                 extra = json.loads(row["extra"] or "{}")
-                extra["body_prefilter"] = {"version": "relevance-v1", "read": decision["read"]}
+                extra["body_prefilter"] = {"version": "relevance-v1", "read": decision["read"],
+                                           **({"unassessed": decision["unassessed"]} if decision.get("unassessed") else {})}
                 db.execute("UPDATE studio_items SET extra=? WHERE id=?",
                            (json.dumps(extra, ensure_ascii=False), decision["id"]))
 
@@ -1349,6 +1350,8 @@ class StudioStore:
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
     ROUND_KINDS = ('collect', 'analyze', 'report', 'brief')
+    # Covers connection backoffs (retry_delay caps at 30 min) and the 30-min rate limit.
+    HOLD_WAIT = timedelta(minutes=35)
 
     def claim(self, lane: str | None = None) -> dict | None:
         """The next job; lane 'round' takes only round work, lane 'side' only the rest.
@@ -1404,9 +1407,12 @@ class StudioStore:
                           f"AND (y.retry_after IS NULL OR y.retry_after<=?) AND y.kind IN ({marks}) "
                           "AND (y.kind='internal' OR COALESCE(p.status,'active')='active') "
                           "AND NOT (y.kind='analyze' AND j.kind='page_summary' AND j.input_version='analyze:'||y.id))")
-            # A job held back by a backoff or a pause does not hold its project; it re-checks its
-            # inputs when it publishes. A started job that a waiting round of its project
-            # depends on goes first in its lane, so the round waits for one job, not the lane.
+            # This includes a job deferred by a connection backoff or rate limit (up to
+            # HOLD_WAIT): model work is stalled by the backoff anyway, while letting side jobs
+            # in would revise the evidence it publishes from. A longer wait (account error,
+            # a provider's long Retry-After) and a paused project release the project.
+            # A started job that a waiting round of its project depends on goes first in its
+            # lane, so the round waits for one job, not the lane.
             row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
                 WHERE j.status='queued' AND (j.retry_after IS NULL OR j.retry_after<=?) AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
@@ -1416,7 +1422,8 @@ class StudioStore:
                          CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
                               WHEN j.kind IN ('collect','analyze') OR j.input_version LIKE 'manual:%' THEN 1 ELSE 2 END,
                          COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""",
-                (now(), *JOB_KINDS, *lane_args, now(), *JOB_KINDS, *self.ROUND_KINDS, prefer_brief)).fetchone()
+                (now(), *JOB_KINDS, *lane_args, (datetime.now(UTC) + self.HOLD_WAIT).isoformat(), *JOB_KINDS,
+                 *self.ROUND_KINDS, prefer_brief)).fetchone()
             if not row:
                 return None
             if lane is None:  # lanes leave the single-queue reservation counter alone
