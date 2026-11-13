@@ -78,10 +78,14 @@ class Proposal(BaseModel):
 
 
 class _ProposalEnvelope(BaseModel):
-    """Keep response bounds strict while isolating row-level schema errors."""
+    """Strict top-level shape; the prompt's 12-row target is not a failure limit.
+
+    Each batch reply is bounded by its max_tokens. Each row is validated on
+    its own, so one row too many does not discard the located products before it.
+    """
 
     model_config = ConfigDict(extra='forbid')
-    products: list[object] = Field(max_length=12)
+    products: list[object]
 
 
 def ownership_passages(part):

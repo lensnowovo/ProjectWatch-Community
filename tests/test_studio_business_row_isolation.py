@@ -55,8 +55,7 @@ def test_all_invalid_is_completed_insufficient_not_fake_success(tmp_path):
 
 
 @pytest.mark.parametrize('data', [None, [], {}, {'products': None}, {'products': {}},
-                                    {'products': [], 'unknown': 'secret'},
-                                    {'products': [None] * 13}])
+                                    {'products': [], 'unknown': 'secret'}])
 def test_invalid_envelope_remains_fatal_without_writes(tmp_path, data):
     service, pid, _, profiles, inputs, _ = profile_inputs(tmp_path)
     with pytest.raises(ValidationError):
@@ -98,3 +97,13 @@ def test_guard_still_runs_for_all_invalid_rows(tmp_path):
 def test_external_strict_proposal_contract_is_preserved():
     with pytest.raises(ValidationError):
         Proposal.model_validate({'products': [None]})
+
+
+def test_a_row_beyond_the_prompt_target_does_not_fail_the_reply(tmp_path):
+    """Live finding: 13 products for a 12-row prompt failed a whole competition job."""
+    service, pid, _, profiles, inputs, proposal = profile_inputs(tmp_path)
+    proposal['products'] = [None] * 12 + proposal['products']
+    result = profiles.apply(pid, inputs, proposal)
+    assert result['status'] == 'extracted'
+    assert result['accepted'] == 1 and result['rejected'] == result['rejected_schema'] == 12
+    assert [o['name'] for o in service.objects.page(pid) if o['kind'] == 'product'] == ['Lens A']
