@@ -2070,8 +2070,8 @@ class Pipeline:
             return {'company': batch['company'], 'subjects': batch.get('subjects', []),
                     'sources': [{'source': p['marker'], 'text': p['text'], 'read_scope': p['read_scope'],
                                  'published_at': p.get('published_at', '')} for p in batch['parts']]}
-        proposals = self._extract_all_parts(pid, inputs, llm, SYSTEM, payload, 'detail',
-            lambda: self.structured_facts.inputs(pid, self.model_view(llm).binding))
+        proposals = self._superseded_ok(job, lambda: self._extract_all_parts(pid, inputs, llm, SYSTEM, payload, 'detail',
+            lambda: self.structured_facts.inputs(pid, self.model_view(llm).binding)))
         if not proposals:
             return  # No verified batch: retain the previous profile unchanged.
         project = self.store.get_project(pid)
@@ -2082,6 +2082,23 @@ class Pipeline:
         from project_watch.studio.relation_delivery import sync
         sync(self, pid, guard=execution._guard)
 
+    def _superseded_ok(self, job, extract):
+        """A parked job whose saved inputs went stale ends quietly, sending nothing.
+
+        The scheduler already queues a new job for the current material, so the
+        stale one is not a failure the owner must act on.
+        """
+        try:
+            return extract()
+        except ModelError as exc:
+            if exc.code != 'input_superseded':
+                raise
+            execution = getattr(self._execution_state, 'current', None)
+            if execution:
+                # finish() clears the stage; the job view reads this instead.
+                execution.checkpoint('input_superseded_v1', {'job_kind': job['kind']})
+            return []
+
     def _extract_all_parts(self, project_id, inputs, llm, system, payload, prefix, current_inputs,
                            *, isolate_failures=True):
         """Visit independent batches; retain completed outputs when a sibling fails."""
@@ -2089,7 +2106,7 @@ class Pipeline:
         execution = getattr(self._execution_state, 'current', None)
         saved = execution.read_checkpoint(prefix + '_inputs') if execution else None
         if saved and saved['input_version'] != inputs['input_version']:
-            raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始')
+            raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
         if execution:
             # Evidence is immutable and already persisted; avoid copying entire
             # reports into the checkpoint's 1 MB metadata slot.
@@ -2112,8 +2129,11 @@ class Pipeline:
                 raise ModelError('项目已暂停，恢复后继续', code='project_paused')
             current = current_inputs()
             if (inputs['binding'] != self.model_binding() or not project or not project['activated']
-                    or project['status'] != 'active' or not current or current['input_version'] != inputs['input_version']):
+                    or project['status'] != 'active' or not current):
                 raise ModelError('分析输入或授权已变化，请按当前资料重新开始')
+            if current['input_version'] != inputs['input_version']:
+                # Only the material moved on: a newer job covers it.
+                raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
             stage = f'{prefix}_proposal_{index}'
             proposal = execution.read_checkpoint(stage) if execution else None
             if proposal is None and execution and len(batches) == 1:
@@ -2197,8 +2217,9 @@ class Pipeline:
         if previous and previous['input_version'] == inputs['input_version']:
             return
         self.store.set_stage(job['id'], '提取产品、用途与购买方')
-        proposals = self._extract_all_parts(project_id, inputs, llm, SYSTEM, model_payload, 'business',
-            lambda: self.business_profiles.inputs(project_id, binding=self.model_view(llm).binding))
+        proposals = self._superseded_ok(job, lambda: self._extract_all_parts(
+            project_id, inputs, llm, SYSTEM, model_payload, 'business',
+            lambda: self.business_profiles.inputs(project_id, binding=self.model_view(llm).binding)))
         if not proposals:
             return
         # Configuration/provider permission may have changed while the call ran.

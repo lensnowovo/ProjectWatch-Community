@@ -222,6 +222,8 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
                     traversal.COUNTER_SYSTEM + traversal.METRIC_SCOPE]
         if frozen_version >= 4:
             contract.append(getattr(reviewer, 'contract', ''))
+        if traversal.relevant_scope(execution):
+            contract.append([traversal.SCOPE, traversal.SCOPE_CHARS, traversal.FIELD_CHARS, traversal.PER_FIELD])
         counter_signature = digest(contract)
         # Freeze before any provider work. A changed contract cannot turn an old
         # successful/uncertain review into a fresh request under a different key.

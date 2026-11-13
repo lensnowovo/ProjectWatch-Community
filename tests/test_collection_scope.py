@@ -50,6 +50,40 @@ def test_specialist_company_has_distinct_sponsor_and_intervention_routes():
     assert by_source['openalex_topic']['window_start'] is not None
 
 
+def test_english_trial_registry_gets_only_latin_script_queries():
+    p = build(public_plan={'trial_sponsors': ['合成医疗科技股份有限公司', '合成医疗', 'Synthetic Medical'],
+                           'trial_terms': ['超声', 'MT 8000C凝血流水线', 'pembrolizumab']})
+    queries = {(u['source'], u['query']) for u in p['units'] if u['category'] == 'trial'}
+    assert {q for s, q in queries if s == 'clinical_sponsor'} == {'Synthetic Medical'}
+    assert {q for s, q in queries if s == 'clinical_term'} == {'pembrolizumab'}
+    assert ('cn_regulatory', 'Synthetic Company') in queries
+
+
+def test_chinese_only_trial_scope_is_a_visible_gap_not_a_query():
+    p = build(public_plan={'trial_sponsors': ['合成医疗'], 'trial_terms': ['超声']})
+    trial = [u for u in p['units'] if u['category'] == 'trial']
+    sponsor = next(u for u in trial if u['source'] == 'clinical_sponsor')
+    assert sponsor['capability'] == 'needs_scope' and sponsor['query'] == ''
+    assert not any(u['source'] == 'clinical_term' for u in trial)
+    # The Chinese registry still runs on the confirmed name.
+    assert any(u['source'] == 'cn_regulatory' and u['capability'] == 'available' for u in trial)
+
+
+def test_chinese_sponsor_with_latin_product_code_keeps_the_sponsor_gap_visible():
+    p = build(public_plan={'trial_sponsors': ['合成医疗'], 'trial_terms': ['XYZ-101']})
+    trial = {u['source']: u for u in p['units'] if u['category'] == 'trial'}
+    assert trial['clinical_sponsor']['capability'] == 'needs_scope'
+    assert trial['clinical_term']['query'] == 'XYZ-101'
+
+
+def test_recorded_exclusion_still_wins_over_a_filtered_sponsor():
+    decision = {'capability': 'not_applicable', 'reason': 'Confirmed scope excludes clinical products',
+                'evidence_ids': ['synthetic-scope-confirmation']}
+    p = build(public_plan={'trial_sponsors': ['合成医疗']}, source_decisions={'clinical_sponsor': decision})
+    unit = next(u for u in p['units'] if u['source'] == 'clinical_sponsor')
+    assert unit['disposition'] == 'not_applicable'
+
+
 def test_hospital_led_trial_does_not_require_company_sponsor():
     p = build(public_plan={'trial_terms': ['Synthetic Intervention'], 'is_biomed': False})
     trial = [u for u in p['units'] if u['category'] == 'trial']

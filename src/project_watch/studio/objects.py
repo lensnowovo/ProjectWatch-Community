@@ -378,7 +378,12 @@ class ObjectStore:
             result["company_queries"] = inputs["company_names"][:4]
             result["affiliation_names"] = inputs["company_names"][:2]
             result["patent_assignees"] = inputs["company_names"][:2]
-            result["trial_sponsors"] = inputs["company_names"][:3]
+            # Sponsors are also read as the company's own identity, so only
+            # confirmed names, and only Latin-script ones: the trial registry
+            # indexes English sponsor names. A Chinese-only company shows a
+            # visible trial-scope gap until an English alias is confirmed.
+            from project_watch.studio.query_names import cjk, query_names
+            result["trial_sponsors"] = [n for n in query_names(inputs["company_names"]) if not cjk(n)][:3]
         # Confirmed people first, then people named with sources in the public dossier (never model-only names).
         dossier = [n for n in plan.get("dossier_people") or [] if isinstance(n, str) and n.casefold() not in hidden]
         result["people"] = list(dict.fromkeys([*inputs["people"], *dossier]))[:3]

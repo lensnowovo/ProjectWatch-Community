@@ -267,3 +267,39 @@ def test_a_pause_between_extraction_batches_parks_and_resumes_at_the_next_batch(
     project['status'] = 'active'
     proposals = run()
     assert len(calls) == 3 and len(proposals) == 3  # batch 0 replayed from its checkpoint, not resent
+
+
+@pytest.mark.parametrize('change', ['material', 'binding'])
+def test_material_change_between_batches_is_superseded_but_a_binding_change_fails(tmp_path, change):
+    from types import SimpleNamespace
+
+    from project_watch.studio.llm import ModelError
+    from project_watch.studio.pipeline import Pipeline
+    store, pid, job = setup(tmp_path)
+    execution = JobExecution(store, job)
+    binding = ['allowed']
+    inputs = {'input_version': 'v1', 'binding': 'allowed', 'parts': [{'text': str(i)} for i in range(25)]}
+    current = dict(inputs)
+    calls = []
+    def extract(*args, **kwargs):
+        calls.append(1)
+        if change == 'material':
+            current['input_version'] = 'v2'  # another job revised the source while this batch ran
+        else:
+            binding[0] = 'other-model'
+        return {'batch': len(calls)}
+    pipeline = SimpleNamespace(_execution_state=SimpleNamespace(current=execution),
+        store=SimpleNamespace(get_project=lambda _: {'activated': True, 'status': 'active'}),
+        model_binding=lambda: binding[0])
+    pipeline._extract_all_parts = lambda *a, **k: Pipeline._extract_all_parts(pipeline, *a, **k)
+    extract_job = lambda: Pipeline._superseded_ok(pipeline, {'id': job['id'], 'kind': 'details'},  # noqa: E731
+        lambda: pipeline._extract_all_parts(pid, inputs, SimpleNamespace(json=extract),
+                                            'system', lambda batch: batch, 'detail', lambda: current))
+    if change == 'material':
+        assert extract_job() == [] and len(calls) == 1
+        assert execution.read_checkpoint('input_superseded_v1') == {'job_kind': 'details'}
+    else:
+        with pytest.raises(ModelError) as failed:
+            extract_job()
+        assert failed.value.code == 'model_error'
+        assert execution.read_checkpoint('input_superseded_v1') is None

@@ -85,6 +85,9 @@ def safe_diagnostics(value):
     request_id = value.get('provider_request_id')
     if isinstance(request_id, str) and re.fullmatch(r'[a-zA-Z0-9_.:-]{1,128}', request_id):
         result['provider_request_id'] = request_id
+    finish = value.get('unexpected_finish')
+    if isinstance(finish, str) and re.fullmatch(r'[a-z_]{1,40}', finish):
+        result['unexpected_finish'] = finish  # A provider enum word, never reply text.
     return result
 
 
@@ -113,6 +116,8 @@ class TransportTrace:
         self.data['exception'] = next((t.__name__ for t in names if isinstance(reason, t)), 'other')
         if isinstance(reason, IncompleteStream):
             self.data['stream_failure'] = str(reason)
+            if isinstance(reason.finish, str) and re.fullmatch(r'[a-z_]{1,40}', reason.finish):
+                self.data['unexpected_finish'] = reason.finish
         for name in ('errno', 'winerror'):
             value = getattr(reason, name, None)
             if type(value) is int:
@@ -369,10 +374,15 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, IncompleteStream) as exc:
             trace.error(exc)
             reason = getattr(exc, 'reason', exc)
+            # A patient connection marks `connected` only after TCP, proxy
+            # tunnel and TLS setup; before that no request byte has left.
+            unconnected = (control is not None and trace.data.get('stage') == 'connect'
+                           and 'connected_ms' not in trace.data)
             if (phase == "connect_or_headers" and not getattr(redirect, "seen_redirect", False)
-                    and isinstance(reason, (socket.gaierror, ConnectionRefusedError))):
+                    and (unconnected or isinstance(reason, (socket.gaierror, ConnectionRefusedError)))):
                 raise HttpError("connection_not_sent", transport_phase=phase,
-                                failure_kind="transport_error", diagnostics=trace.data) from exc
+                                failure_kind='timeout' if isinstance(reason, TimeoutError) else 'transport_error',
+                                diagnostics=trace.data) from exc
             raise HttpError("connection_failed", detail=str(reason), transport_phase=phase,
                             failure_kind='timeout' if isinstance(reason, TimeoutError) else 'transport_error',
                             diagnostics=trace.data) from exc

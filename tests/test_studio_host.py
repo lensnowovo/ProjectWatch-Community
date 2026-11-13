@@ -138,9 +138,10 @@ def test_windows_job_object_kills_venv_descendants(tmp_path):
         process = WindowsChild([sys.executable, '-c', code], env=dict(os.environ), log=log)
         try:
             deadline = time.monotonic() + 10
-            while not pid_path.exists() and time.monotonic() < deadline:
+            # The file can exist before its content is written; wait for the whole pid.
+            while not (pid_path.exists() and pid_path.read_text().strip()) and time.monotonic() < deadline:
                 time.sleep(.05)
-            assert pid_path.exists(), (tmp_path / 'child.log').read_text()
+            assert pid_path.exists() and pid_path.read_text().strip(), (tmp_path / 'child.log').read_text()
             descendant = kernel.OpenProcess(0x100000, False, int(pid_path.read_text()))
             assert descendant
             assert process.poll() is None

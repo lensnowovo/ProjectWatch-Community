@@ -1356,7 +1356,8 @@ class StudioStore:
         Neither lane starts a job for a project the other lane is working on, so one
         project's records are never written by two jobs at once (an analysis fails
         if its section evidence changes underneath it). A round waits at most for
-        that one running side job, not for the side queue.
+        that project's unfinished side job, not for the side queue. A job that has
+        started and handed its turn back still holds its project until it finishes.
         """
         if lane not in (None, 'round', 'side'):
             raise ValueError('unknown worker lane')
@@ -1392,13 +1393,30 @@ class StudioStore:
             # Retired kinds are archived at startup and never claimed; internal
             # documents keep being read while public monitoring is paused.
             marks = ','.join('?' * len(JOB_KINDS))
+            # A started job that handed its turn back (time slice, pause, lost lease) still
+            # owns its project's records: no other job of that project starts until the
+            # earliest such job can no longer be claimed. Otherwise a side job rewrites
+            # the inputs an analysis or summary snapshotted, and it fails when it publishes.
+            # The analysis's own page summary is the one exception, as in the lane filter.
+            unfinished = (f" AND NOT EXISTS (SELECT 1 FROM studio_jobs y WHERE y.project_id=j.project_id AND y.id!=j.id "
+                          "AND y.status='queued' AND y.started_at IS NOT NULL "
+                          "AND (j.started_at IS NULL OR y.started_at<j.started_at OR (y.started_at=j.started_at AND y.rowid<j.rowid)) "
+                          f"AND (y.retry_after IS NULL OR y.retry_after<=?) AND y.kind IN ({marks}) "
+                          "AND (y.kind='internal' OR COALESCE(p.status,'active')='active') "
+                          "AND NOT (y.kind='analyze' AND j.kind='page_summary' AND j.input_version='analyze:'||y.id))")
+            # A job held back by a backoff or a pause does not hold its project; it re-checks its
+            # inputs when it publishes. A started job that a waiting round of its project
+            # depends on goes first in its lane, so the round waits for one job, not the lane.
             row = db.execute(f"""SELECT j.* FROM studio_jobs j
                 LEFT JOIN studio_projects p ON p.project_id=j.project_id
                 WHERE j.status='queued' AND (j.retry_after IS NULL OR j.retry_after<=?) AND COALESCE(p.execution_mode,'api')='api' AND j.kind IN ({marks})
-                AND (j.kind='internal' OR COALESCE(p.status,'active')='active'){lane_filter}
-                ORDER BY CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
+                AND (j.kind='internal' OR COALESCE(p.status,'active')='active'){lane_filter}{unfinished}
+                ORDER BY CASE WHEN j.started_at IS NOT NULL AND EXISTS (SELECT 1 FROM studio_jobs w WHERE w.project_id=j.project_id
+                                  AND w.id!=j.id AND w.status='queued' AND w.kind IN ({rounds})) THEN 0 ELSE 1 END,
+                         CASE WHEN NOT ? THEN 0 WHEN j.kind IN ('brief','report') THEN 0
                               WHEN j.kind IN ('collect','analyze') OR j.input_version LIKE 'manual:%' THEN 1 ELSE 2 END,
-                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""", (now(), *JOB_KINDS, *lane_args, prefer_brief)).fetchone()
+                         COALESCE(j.queue_at,j.created_at),j.rowid LIMIT 1""",
+                (now(), *JOB_KINDS, *lane_args, now(), *JOB_KINDS, *self.ROUND_KINDS, prefer_brief)).fetchone()
             if not row:
                 return None
             if lane is None:  # lanes leave the single-queue reservation counter alone

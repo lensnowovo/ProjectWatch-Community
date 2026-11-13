@@ -201,9 +201,59 @@ def review_instruction(page, legacy=False):
     return instruction
 
 
-def grouped_outcomes(page, candidates, sources, reviewer):
+def _claims(page, candidate, sources, response):
+    """The assertions of a supported candidate that need a counterevidence verdict, by field."""
+    provisional = reviewed_fields(page, candidate, sources, response, {'issues': []})
+    bindings, claims = {}, {}
+    if provisional['status'] == 'approved':
+        excluded = {i['field'] for i in provisional['issues']}
+        for check in response['checks']:
+            field = check['field']
+            if field in excluded:
+                continue
+            group, index = field.split('.')[1:3]
+            row = candidate[group][int(index)]
+            # An unresolved subject or qualifier stays attached to its
+            # original context. Distinct numbers, periods or units never alias.
+            claim = dict(text=row['text'], refs=sorted(set(row['refs']) |
+                         {w['ref'] for w in check['evidence']}))
+            if check.get('standalone') is not True:
+                claim['context'] = candidate['sentences']
+            key = digest(claim)
+            bindings[field] = key
+            claims[key] = claim
+    return bindings, claims
+
+
+class ClaimVerdicts:
+    """Counterevidence verdicts saved per assertion for the job's frozen sources.
+
+    The same sentence in an early and a final draft, or on two pages, is checked once.
+    """
+    PREFIX = 'claim-verdict:'  # stage names are at most 60 characters
+
+    def __init__(self, execution):
+        self.execution = execution
+        self.responses = {}  # support reviews made while prefetching, reused by the page's own review
+
+    def support(self, page, candidate, reviewer, payload):
+        key = digest([page, candidate])
+        if key not in self.responses:
+            self.responses[key] = reviewer(review_instruction(page), payload)
+        return self.responses[key]
+
+    def get(self, key):
+        saved = self.execution.read_checkpoint(self.PREFIX + key[:40])
+        return None if saved is None else (saved['issues'], saved['receipts'])
+
+    def put(self, key, verdict):
+        self.execution.checkpoint_chunked(self.PREFIX + key[:40], {'issues': verdict[0], 'receipts': verdict[1]})
+
+
+def grouped_outcomes(page, candidates, sources, reviewer, verdicts=None):
     """Try recent drafts first, doubling the prefix considered after each failed wave.
-    Reuse conflict verdicts only within this page and immutable source snapshot.
+    Reuse conflict verdicts only within this page and immutable source snapshot,
+    or, with saved verdicts, within this job's snapshot.
     """
     evidence = {ref: {k: v for k, v in source.items() if k != 'text'} for ref, source in sources.items()}
     checked = {}
@@ -217,30 +267,24 @@ def grouped_outcomes(page, candidates, sources, reviewer):
                 yield candidate, {'status': 'no_material'}
                 continue
             payload = review_payload(page, candidate, rows, sources)
-            response = reviewer(review_instruction(page), payload)
-            provisional = reviewed_fields(page, candidate, sources, response, {'issues': []})
-            bindings = {}
-            if provisional['status'] == 'approved':
-                excluded = {i['field'] for i in provisional['issues']}
-                for check in response['checks']:
-                    field = check['field']
-                    if field in excluded:
-                        continue
-                    group, index = field.split('.')[1:3]
-                    row = candidate[group][int(index)]
-                    # An unresolved subject or qualifier stays attached to its
-                    # original context. Distinct numbers, periods or units never alias.
-                    claim = dict(text=row['text'], refs=sorted(set(row['refs']) |
-                                 {w['ref'] for w in check['evidence']}))
-                    if check.get('standalone') is not True:
-                        claim['context'] = candidate['sentences']
-                    key = digest(claim)
-                    bindings[field] = key
-                    if key not in checked:
-                        pending[key] = claim
+            response = (verdicts.support(page, candidate, reviewer, payload) if verdicts is not None
+                        else reviewer(review_instruction(page), payload))
+            bindings, claims = _claims(page, candidate, sources, response)
+            for key, claim in claims.items():
+                if key in checked:
+                    continue
+                saved = verdicts.get(key) if verdicts is not None else None
+                if saved is not None:
+                    checked[key] = saved
+                else:
+                    pending[key] = claim
             wave.append((candidate, response, bindings))
         if pending:
-            checked.update(check_claims(page, pending, evidence, reviewer))
+            found = check_claims(page, pending, evidence, reviewer)
+            if verdicts is not None:
+                for key, verdict in found.items():
+                    verdicts.put(key, verdict)
+            checked.update(found)
         for candidate, response, bindings in wave:
             issues, receipts = [], set()
             for field, key in bindings.items():
@@ -256,6 +300,23 @@ def grouped_outcomes(page, candidates, sources, reviewer):
 
 
 def check_claims(page, claims, evidence, reviewer):
+    return _check_claims(claims, evidence, reviewer, lambda fields: {
+        'fields': {f: claims[k]['text'] for f, k in fields.items()},
+        'analysis': {f: claims[k] for f, k in fields.items()},
+        'page_contract': CONTRACTS[page], 'evidence': evidence})
+
+
+def check_claims_across(items, evidence, reviewer):
+    """One traversal for several pages' assertions; items maps key -> (page, claim)."""
+    def payload(fields):
+        pages = sorted({items[k][0] for k in fields.values()})
+        return {'fields': {f: items[k][1]['text'] for f, k in fields.items()},
+                'analysis': {f: {**items[k][1], 'page': items[k][0]} for f, k in fields.items()},
+                'page_contracts': {p: CONTRACTS[p] for p in pages}, 'evidence': evidence}
+    return _check_claims(items, evidence, reviewer, payload)
+
+
+def _check_claims(claims, evidence, reviewer, build):
     # Pack several independent assertions into one traversal. Split oversized
     # requests locally before sending anything, never omit a claim or source.
     from project_watch.studio import review_source_traversal as traversal
@@ -265,9 +326,7 @@ def check_claims(page, claims, evidence, reviewer):
     while groups:
         keys = groups.pop()
         fields = {f'claim.{i}': key for i, key in enumerate(keys)}
-        payload = {'fields': {f: claims[k]['text'] for f, k in fields.items()},
-                   'analysis': {f: claims[k] for f, k in fields.items()},
-                   'page_contract': CONTRACTS[page], 'evidence': evidence}
+        payload = build(fields)
         # Reserve response space for one checked id and a potential conflict per field.
         if len(keys) > 1:
             try:
@@ -287,6 +346,40 @@ def check_claims(page, claims, evidence, reviewer):
     return checked
 
 
+def prefetch_verdicts(pairs, sources, reviewer, verdicts, guard, hold):
+    """Check the new assertions of several pages' drafts in shared traversals, before each
+    page's own review. Each page's review then finds its verdicts saved. A failed request
+    holds the pages it covered, as their own review would."""
+    evidence = {ref: {k: v for k, v in source.items() if k != 'text'} for ref, source in sources.items()}
+    items = {}
+    for page, candidate in pairs:
+        try:
+            rows = validate(page, candidate, sources)
+        except ValueError:
+            continue  # the page's own review reports an invalid draft
+        if not rows:
+            continue
+        guard()
+        try:
+            response = verdicts.support(page, candidate, reviewer, review_payload(page, candidate, rows, sources))
+        except ModelError as exc:
+            hold(page, exc)
+            continue
+        for key, claim in _claims(page, candidate, sources, response)[1].items():
+            if key not in items and verdicts.get(key) is None:
+                items[key] = (page, claim)
+    if not items:
+        return
+    try:
+        found = check_claims_across(items, evidence, reviewer)
+    except ModelError as exc:
+        for page in dict.fromkeys(page for page, _ in items.values()):
+            hold(page, exc)
+        return
+    for key, verdict in found.items():
+        verdicts.put(key, verdict)
+
+
 def _candidate_signature(execution, context, page, candidate, sources, binding):
     from project_watch.studio import review_source_traversal as traversal
 
@@ -298,14 +391,19 @@ def _candidate_signature(execution, context, page, candidate, sources, binding):
     return digest(scope)
 
 
-def candidate_reviews(execution, context, page, candidates, sources, reviewer, binding, guard):
+def candidate_reviews(execution, context, page, candidates, sources, reviewer, binding, guard, verdicts=None):
     """Reuse complete candidate verdicts; group the remaining assertions.
 
     Partial traversals/unknowns never produce completion checkpoints. Pending
     newer candidates are settled before accepting a cached older publication.
     """
+    from project_watch.studio.review_source_traversal import relevant_scope
+
+    if verdicts is None and relevant_scope(execution):
+        verdicts = ClaimVerdicts(execution)
+
     def fresh(pending):
-        for candidate, outcome in grouped_outcomes(page, pending, sources, reviewer):
+        for candidate, outcome in grouped_outcomes(page, pending, sources, reviewer, verdicts):
             guard()
             signature = _candidate_signature(execution, context, page, candidate, sources, binding)
             execution.checkpoint_chunked(PROTOCOL + ':candidate:' + signature[:32],
@@ -333,9 +431,9 @@ def candidate_reviews(execution, context, page, candidates, sources, reviewer, b
     yield from fresh(pending)
 
 
-def candidate_review(execution, context, page, candidate, sources, reviewer, binding, guard):
+def candidate_review(execution, context, page, candidate, sources, reviewer, binding, guard, verdicts=None):
     _, outcome, fresh = next(candidate_reviews(execution, context, page, [candidate], sources,
-                                               reviewer, binding, guard))
+                                               reviewer, binding, guard, verdicts))
     return outcome, fresh
 
 
@@ -514,6 +612,8 @@ def run(pipeline, execution, *, targets=None):
                               (execution.job['id'],)).fetchone()
         if not sent:
             execution.checkpoint(EXECUTION_PROTOCOL, {'version': 1, 'binding': pipeline.model_binding()})
+    from project_watch.studio.review_source_traversal import freeze_scope
+    freeze_scope(execution)
     protocol = execution.read_checkpoint(EXECUTION_PROTOCOL)
     modern = bool(protocol and protocol.get('version') == 1)
     mode_key = PROTOCOL + ':retain-candidates'
@@ -571,6 +671,14 @@ def run(pipeline, execution, *, targets=None):
             failures[page] = exc.code
             execution.checkpoint(PROTOCOL + ':page-failures', failures)
         progressive = bool(execution.read_checkpoint(PROTOCOL + ':progressive'))
+        from project_watch.studio.review_source_traversal import relevant_scope
+        # Jobs started under the relevant counterevidence scope also share one traversal across pages.
+        packed = modern and relevant_scope(execution)
+        verdicts = ClaimVerdicts(execution) if packed else None
+
+        def unreviewed(page, candidate):
+            signature = _candidate_signature(execution, context, page, candidate, sources, protocol['binding'])
+            return execution.read_checkpoint(PROTOCOL + ':candidate:' + signature[:32]) is None
         early = execution.read_checkpoint(PROTOCOL + ':early-pages') or []
         attempted = execution.read_checkpoint(PROTOCOL + ':early-attempted') or [] if modern else []
         reviewer = analyze_job._reviewer(pipeline, execution, llm, guard)
@@ -618,6 +726,12 @@ def run(pipeline, execution, *, targets=None):
             if progressive:
                 # Review against the complete frozen evidence (including counterevidence),
                 # not just the batch that happened to produce this draft.
+                if packed:
+                    prefetch_verdicts([(page, draft[page]) for page in targets
+                                       if page not in early and page not in failures and page not in attempted
+                                       and draft.get(page) and draft[page].get('status') == 'ready'
+                                       and unreviewed(page, draft[page])],
+                                      sources, reviewer, verdicts, guard, hold)
                 for page in targets:
                     candidate = draft.get(page)
                     if page in early or page in failures or not candidate or candidate.get('status') != 'ready':
@@ -627,7 +741,7 @@ def run(pipeline, execution, *, targets=None):
                             continue
                         try:
                             outcome, reviewed = candidate_review(execution, context, page, candidate,
-                                                                 sources, reviewer, protocol['binding'], guard)
+                                                                 sources, reviewer, protocol['binding'], guard, verdicts)
                         except ModelError as exc:
                             hold(page, exc)
                             execution.yield_if_due()
@@ -662,6 +776,12 @@ def run(pipeline, execution, *, targets=None):
         if modern:
             # Later drafts can add new facts after an early publication. Review
             # those candidates too, but never repeat an identical full verdict.
+            if packed:
+                newest = [(page, next((c for c in reversed(queues[page]) if c), None))
+                          for page in targets if page not in failures]
+                prefetch_verdicts([(page, c) for page, c in newest if c and unreviewed(page, c)],
+                                  sources, reviewer, verdicts, guard, hold)
+                outcomes.update({page: 'failed' for page in failures})
             for page in targets:
                 if page in failures:
                     continue
@@ -672,7 +792,8 @@ def run(pipeline, execution, *, targets=None):
                     continue
                 try:
                     for candidate, outcome, reviewed in candidate_reviews(execution, context, page, candidates,
-                                                                          sources, reviewer, protocol['binding'], guard):
+                                                                          sources, reviewer, protocol['binding'], guard,
+                                                                          verdicts):
                         outcomes[page] = outcome['status']
                         guard()
                         accepted = publish(execution, context, page, candidate, sources, outcome)

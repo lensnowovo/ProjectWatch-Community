@@ -1,9 +1,21 @@
 """Read a complete OpenAI SSE reply without treating partial output as a result."""
 import json
 
+# Provider-declared ends of a complete reply. Beyond the OpenAI values, the GLM
+# endpoint documents sensitive (safety review), network_error (inference failed)
+# and model_context_window_exceeded: each is a conclusive answer that there is no
+# usable result, which the caller names; none is an uncertain transport outcome.
+# https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8
+FINISHES = frozenset({'stop', 'length', 'content_filter', 'sensitive', 'network_error',
+                      'model_context_window_exceeded'})
+
 
 class IncompleteStream(ValueError):
     """No conclusive complete response; callers must not automatically resend."""
+
+    def __init__(self, reason, finish=None):
+        super().__init__(reason)
+        self.finish = finish  # The provider's undocumented end value, for diagnostics only.
 
 
 def read_completion(response, limit, observe, identify=None):
@@ -73,8 +85,10 @@ def read_completion(response, limit, observe, identify=None):
                             target.append(value)
                 end = choice.get('finish_reason')
                 if end is not None:
-                    if finish is not None or end not in ('stop', 'length', 'content_filter'):
-                        raise IncompleteStream('invalid_finish')
+                    if finish is not None:
+                        raise IncompleteStream('invalid_finish')  # a second end, not an unknown value
+                    if not isinstance(end, str) or end not in FINISHES:
+                        raise IncompleteStream('invalid_finish', end if isinstance(end, str) else None)
                     finish = end
         elif line == '':
             event_bytes = 0  # Comments/heartbeats do not accumulate in memory.

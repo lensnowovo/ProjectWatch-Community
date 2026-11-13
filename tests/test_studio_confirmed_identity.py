@@ -8,7 +8,6 @@ from test_studio_evidence_versions import sample
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import Http, Response
-from project_watch.studio.llm import ModelError
 from project_watch.studio.monitoring_contracts import Alias, ObjectInput
 
 FULL, SHORT = '合成视界科技有限公司', '合成视界'
@@ -229,8 +228,10 @@ def test_http_name_correction_fences_saved_checkpoint_before_transport(tmp_path)
         pipeline.http_factory = lambda _: Http(transport)
         pipeline._execution_state.current = execution
         try:
-            with pytest.raises(ModelError, match='旧检查点未重发'):
-                pipeline.run_business(job)
+            # Stale saved inputs end the job quietly; the scheduler queues current material.
+            pipeline.run_business(job)
+            assert pipeline.business_profiles.get(pid) is None
+            assert execution.read_checkpoint('input_superseded_v1') == {'job_kind': 'business'}
         finally:
             pipeline._execution_state.current = None
         assert calls == []

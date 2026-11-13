@@ -659,7 +659,9 @@ def test_name_or_bp_to_active_monitoring(studio):
     assert detail['project']['last_external_at'], [(j['kind'], j['status'], j['error']) for j in detail['jobs']]
     # M2: the first complete round suggests tracked questions (BP + name entry, one advisor call).
     assert [q['origin'] for q in client.get(f"/api/studio/projects/{project['id']}/questions").json()['questions']] == ['ai']
-    assert {"company", "paper", "trial"} <= set(detail["counts"])
+    # A Chinese-only confirmed name is no ClinicalTrials.gov sponsor: that gap
+    # stays visible as needs_scope instead of a query the registry rejects.
+    assert {"company", "paper"} <= set(detail["counts"]) and "trial" not in detail["counts"]
     assert detail["project"]["industry"] == "激光雷达光学"
 
     feed = client.get("/api/studio/feed").json()
