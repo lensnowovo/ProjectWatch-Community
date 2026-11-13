@@ -14,6 +14,40 @@ PREFIX = 'snapshot-section:'
 UNKNOWN_ERRORS = frozenset({'request_outcome_unknown', 'model_timeout', 'unknown_not_resent', 'request_in_flight'})
 
 
+# Frozen per job (analyze_job.freeze_summary_policy): a summary that fails review is
+# withheld and the reviewed section is published without it, instead of rejecting it.
+SUMMARY_POLICY = 'analyze_summary_policy_v1'
+WITHHELD_NOTE = '总结句未通过证据核查，本栏只列出已核实的依据。'
+
+
+def withholds_summary(execution):
+    return bool((execution.read_checkpoint(SUMMARY_POLICY) or {}).get('withhold'))
+
+
+def _summary_issue(name, issue):
+    if not isinstance(issue, dict):
+        return False
+    return (issue.get('fields') or [issue.get('field')]) == [name + '.summary']
+
+
+def _hold_summary(name, issues, withhold):
+    """Split the issues that name only this section's summary, when the job withholds it."""
+    if not withhold:
+        return issues, []
+    held = [i for i in issues if _summary_issue(name, i)]
+    return [i for i in issues if not _summary_issue(name, i)], held
+
+
+def _withhold(trimmed, outcome, held):
+    """The rest of the section stands on its reviewed items; only the summary is left out."""
+    if not held or trimmed is None:
+        return
+    trimmed['summary'] = ''
+    trimmed['confidence'] = 'low'
+    reason = '；'.join(str(i.get('reason') or i.get('code')) for i in held)
+    outcome['summary_withheld'] = '；'.join(filter(None, [outcome.get('summary_withheld'), reason]))[:600]
+
+
 def _isolated(execution):
     return (execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1) >= 3
 
@@ -214,6 +248,7 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
     """
     outcomes, valid = {}, {}
     isolated = _isolated(execution)
+    withhold = withholds_summary(execution)
     counter_signature = None
     if isolated:
         from project_watch.studio import review_source_traversal as traversal
@@ -279,12 +314,14 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
             if isolated:
                 execution.checkpoint_chunked(unit_key, dict(outcome=outcomes[name], raw=None))
             continue
-        trimmed, dropped, blocking = trim(part, issues)
+        kept, held = _hold_summary(name, issues, withhold)
+        trimmed, dropped, blocking = trim(part, kept)
         if trimmed is not None and not _refs(trimmed, sources):
             trimmed, blocking = None, [dict(code='section_without_supported_items', field=name)]
         outcomes[name] = dict(status='approved' if trimmed is not None else 'rejected', issues=issues,
                               refs=sorted(_refs(trimmed, sources) if trimmed is not None else refs),
                               review_receipts=receipts, dropped=dropped, blocking=blocking)
+        _withhold(trimmed, outcomes[name], held)
         if trimmed is None:
             basis, removed, _ = trim(part, issues, keep_blocked=True)
             outcomes[name].update(repair_basis=basis, dropped=removed)
@@ -319,7 +356,8 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
         for name in list(valid):
             found = [issue for issue in counter['issues'] if issue['field'].split('.')[0] == name]
             candidate = valid[name]
-            trimmed, dropped, blocking = trim(candidate, found)
+            kept, held = _hold_summary(name, found, withhold)
+            trimmed, dropped, blocking = trim(candidate, kept)
             outcome = outcomes[name]
             outcome['issues'] = outcome['issues'] + found
             outcome['review_receipts'] = outcome['review_receipts'] + list(counter['receipts'])
@@ -330,6 +368,7 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
                 outcome['repair_basis'] = basis
                 del valid[name]
             else:
+                _withhold(trimmed, outcome, held)
                 raw[name] = valid[name] = trimmed
                 outcome['refs'] = sorted(_refs(trimmed, sources))
     combined, evidence = combine(valid, sources, retained)
@@ -367,12 +406,14 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
                     if any(p.split('.')[0] == name for p in c['fields'])]
             if not mine:
                 continue
-            trimmed, dropped, blocking = trim(valid[name], mine)
+            kept, held = _hold_summary(name, mine, withhold)
+            trimmed, dropped, blocking = trim(valid[name], kept)
             if trimmed is None or not _refs(trimmed, sources):
                 outcomes[name].update(status='rejected', issues=outcomes[name]['issues'] + mine, blocking=blocking or mine)
                 basis, removed, _ = trim(valid[name], mine, keep_blocked=True)
                 outcomes[name].update(repair_basis=basis, dropped=outcomes[name]['dropped'] + removed)
                 continue
+            _withhold(trimmed, outcomes[name], held)
             raw[name] = valid[name] = trimmed
             outcomes[name].update(refs=sorted(_refs(trimmed, sources)), dropped=outcomes[name]['dropped'] + dropped,
                                   issues=outcomes[name]['issues'] + mine)
@@ -417,6 +458,17 @@ def retained_sections(store, pid, context):
     return result
 
 
+def _reviewed_head_of_this_job(execution, pid, name):
+    with closing(execution.store._connect()) as db:
+        row = db.execute('SELECT v.record FROM studio_insight_heads h JOIN studio_insight_versions v '
+                         'ON v.id=h.version_id WHERE h.project_id=? AND h.artifact_key=?',
+                         (pid, PREFIX + name)).fetchone()
+    if not row:
+        return False
+    record = json.loads(row[0])
+    return record.get('job_id') == execution.job['id'] and bool((record.get('analysis') or {}).get('summary'))
+
+
 def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targets=SECTIONS):
     """Publish only independently approved sections, preserving prior heads."""
     pid = execution.job['project_id']
@@ -426,12 +478,34 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
         if result['status'] != 'approved':
             continue
         try:
-            if ((execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1) >= 2
-                    and normalization_problem(generator, name, raw[name], sources)):
+            withhold = withholds_summary(execution)
+            problem = ((execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1) >= 2
+                       and normalization_problem(generator, name, raw[name], sources))
+            if problem and not withhold:
                 raise ValueError('section summary replaced by normalization guard')
             full = generator.normalize({name: raw[name]}, sources)
             normalized = full[name]
-            if not normalized.get('summary'):
+            if withhold and (problem or not normalized.get('summary')):
+                # A guard placeholder or a blank summary is not a conclusion: publish the
+                # cited, reviewed points and say plainly that the summary was left out.
+                # Peer names and change conditions carry no source of their own.
+                if not any(isinstance(p, dict) and p.get('refs') for k in ITEMS - {'gaps'}
+                           for p in normalized.get(k) or ()):
+                    raise ValueError('section has no reviewed items to publish without a summary')
+                if _reviewed_head_of_this_job(execution, pid, name):
+                    # Keep the earlier draft of this job whose conclusion passed review.
+                    result['kept_earlier'] = True
+                    continue
+                normalized['summary'] = ''
+                normalized['confidence'] = 'low'
+                # The labels are the unverified judgment the summary stated.
+                for label in ('verdict', 'maturity', 'consensus'):
+                    if label in normalized:
+                        normalized[label] = 'unclear'
+                normalized['gaps'] = [WITHHELD_NOTE, *[g for g in normalized.get('gaps') or [] if g != WITHHELD_NOTE]]
+                if not result.get('summary_withheld'):
+                    result['summary_withheld'] = problem or 'summary_blank_after_normalization'
+            if not normalized.get('summary') and not withhold:
                 raise ValueError('section has no supported summary')
             accepted[name] = normalized
             # Points the normalizer's guards omitted are recorded like review-trimmed ones.
