@@ -18,7 +18,8 @@ RESULT = 'analyze_result_v1'
 SNAPSHOT = 'analyze_snapshot_v1'
 DRAFT = 'analyze_section_draft_v2'
 COVERAGE = 'analyze_coverage_v2'
-SELECTION = 'analyze_selection_v2'
+SELECTION = 'analyze_selection_v2'  # older jobs: the selection with its full text
+SELECTION_REFS = 'analyze_selection_refs_v1'  # new jobs: fragment references only
 PROTOCOL = 'analyze_protocol_v2'
 REVIEW_PROTOCOL = 'analysis_review_sources_v1'
 BATCH_CHARS = 32000
@@ -92,6 +93,15 @@ def _plan(pipeline, execution, collect_job_id):
 
 def select(store, pid, context):
     """Traverse eligible materials; bound each request, never silently drop the tail."""
+    return materialize(context, select_refs(store, pid, context))
+
+
+def select_refs(store, pid, context):
+    """The selection as fragment references into the frozen snapshot, not copied text.
+
+    The originals are immutable evidence versions the snapshot already resolves, so
+    the stored plan stays small however much material a project accumulates.
+    """
     with closing(store._connect()) as db:
         rows = {r['evidence_version_id']: dict(r) for r in db.execute(
             'SELECT b.evidence_version_id,i.relevant,i.triaged,i.importance,i.published_at,i.collected_at,i.category '
@@ -116,20 +126,74 @@ def select(store, pid, context):
         directions.setdefault(item.get('category') or 'other', []).append(material)
     ordered = [material for row in range(max((len(v) for v in directions.values()), default=0))
                for values in directions.values() for material in values[row:row + 1]]
-    selected = []
-    for material in ordered:
-        evidence = material['evidence']
-        for part_no, part in enumerate(evidence['parts']):
-            for offset in range(0, len(part['text']), MAX_CHARS):
-                fragment = {**part, 'text': part['text'][offset:offset + MAX_CHARS]}
-                selected.append({**material, 'evidence': {**evidence, 'parts': [fragment]},
-                                 'fragment': {'part': part_no, 'offset': offset},
-                                 'read_scope': 'partial' if len(evidence['parts']) > 1 or len(part['text']) > MAX_CHARS
-                                 else material['read_scope']})
+    refs = [[material['evidence_version_id'], part_no, offset]
+            for material in ordered
+            for part_no, part in enumerate(material['evidence']['parts'])
+            for offset in range(0, len(part['text']), MAX_CHARS)]
     coverage = dict(snapshot_id=context['id'], candidates=len(context['materials']),
-                    selected_materials=len(ordered), fragments=len(selected), processed_fragments=0,
+                    selected_materials=len(ordered), fragments=len(refs), processed_fragments=0,
                     excluded=excluded, directions={k: len(v) for k, v in directions.items()})
-    return {**context, 'materials': selected, 'coverage': coverage}
+    return {**{k: v for k, v in context.items() if k != 'materials'}, 'refs': refs, 'coverage': coverage}
+
+
+def materialize(context, plan):
+    """Rebuild the selected fragments from the snapshot exactly as select() orders them."""
+    if plan['id'] != context['id']:
+        raise ValueError('analysis selection snapshot changed')
+    by_id = {material['evidence_version_id']: material for material in context['materials']}
+    selected = []
+    for eid, part_no, offset in plan['refs']:
+        material = by_id.get(eid)
+        if material is None:
+            raise ValueError('analysis selection material missing from snapshot')
+        evidence = material['evidence']
+        part = evidence['parts'][part_no]
+        fragment = {**part, 'text': part['text'][offset:offset + MAX_CHARS]}
+        selected.append({**material, 'evidence': {**evidence, 'parts': [fragment]},
+                         'fragment': {'part': part_no, 'offset': offset},
+                         'read_scope': 'partial' if len(evidence['parts']) > 1 or len(part['text']) > MAX_CHARS
+                         else material['read_scope']})
+    return {**{k: v for k, v in plan.items() if k != 'refs'}, 'materials': selected}
+
+
+def freeze_selection(execution, full_key, refs_key, snapshot, build):
+    """Freeze a selection once; store fragment references when they rebuild it exactly.
+
+    An older job keeps its saved full-text selection. A new one stores references only
+    after checking that the frozen snapshot rebuilds the identical selection, so request
+    identities cannot change on resume; otherwise the full text is kept as before.
+    """
+    selected = execution.read_checkpoint(full_key)
+    if selected is not None:
+        return selected
+    plan = execution.read_checkpoint(refs_key)
+    if plan is not None:
+        return materialize(snapshot, plan)
+    selected = build()
+    plan = _references(selected)
+    try:
+        exact = plan is not None and materialize(snapshot, plan) == selected
+    except (KeyError, IndexError, ValueError):
+        exact = False
+    if exact:
+        execution.checkpoint_chunked(refs_key, plan)
+    else:
+        execution.checkpoint_chunked(full_key, selected)
+    return selected
+
+
+def _references(selected):
+    try:
+        refs = [[m['evidence_version_id'], m['fragment']['part'], m['fragment']['offset']]
+                for m in selected['materials']]
+    except (KeyError, TypeError):
+        return None
+    return {**{k: v for k, v in selected.items() if k != 'materials'}, 'refs': refs}
+
+
+def frozen_selection(execution, pid, context):
+    return freeze_selection(execution, SELECTION, SELECTION_REFS, context,
+                            lambda: select(execution.store, pid, context))
 
 
 def source_batches(sources, limits=None):
@@ -279,10 +343,7 @@ def sections(pipeline, execution, llm, context, affected=None):
     def guard():
         with closing(execution.store._connect()) as db:
             execution._guard(db)
-    selected = execution.read_checkpoint(SELECTION)
-    if selected is None:
-        selected = select(execution.store, pid, context)
-        execution.checkpoint_chunked(SELECTION, selected)
+    selected = frozen_selection(execution, pid, context)
     if selected['id'] != context['id']:
         raise ValueError('analysis selection snapshot changed')
     if not selected['materials']:

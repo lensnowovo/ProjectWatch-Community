@@ -632,11 +632,11 @@ def run(pipeline, execution, *, targets=None):
         context, sources = _internal_context(pipeline, execution)
     else:
         snapshot = material_snapshot.capture(execution)
-        context = execution.read_checkpoint(PROTOCOL + ':selection')
-        if context is None:
-            context = select_context(execution.store, pid, material_snapshot.read(execution.store, pid, snapshot['id']), targets)
-            execution.checkpoint_chunked(PROTOCOL + ':selection', context)
-        material_snapshot.read(execution.store, pid, snapshot['id'])
+        frozen = material_snapshot.read(execution.store, pid, snapshot['id'])
+        # References rebuild the identical selection from the frozen snapshot (16 MB bound).
+        context = analyze_job.freeze_selection(
+            execution, PROTOCOL + ':selection', PROTOCOL + ':selection-refs', frozen,
+            lambda: select_context(execution.store, pid, frozen, targets))
         sources = section_analysis.numbered(context)
     if not sources:
         result = {'status': 'no_material', 'published': []}
