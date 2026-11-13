@@ -16,6 +16,23 @@ class IncompleteStream(ValueError):
     def __init__(self, reason, finish=None):
         super().__init__(reason)
         self.finish = finish  # The provider's undocumented end value, for diagnostics only.
+        self.shape = {}  # Counts of what arrived before the break; never reply text.
+
+
+def _tail_unique_pct(parts, window=4000, size=20):
+    """Share of distinct 20-character pieces in the tail; low means the model looped.
+
+    A rough signal: a repeat longer than about 1,000 characters still reads high.
+    """
+    tail, length = [], 0
+    for part in reversed(parts):
+        tail.append(part)
+        length += len(part)
+        if length >= window:
+            break
+    text = ''.join(reversed(tail))[-window:]
+    pieces = [text[i:i + size] for i in range(0, len(text) - size + 1, size)]
+    return round(100 * len(set(pieces)) / len(pieces)) if pieces else None
 
 
 def read_completion(response, limit, observe, identify=None):
@@ -24,9 +41,22 @@ def read_completion(response, limit, observe, identify=None):
     No socket deadline or model retries. Line reads are size bounded; comment
     heartbeats count as transport activity, never as a completed model answer.
     """
+    content, reasoning = [], []
+    try:
+        return _read(response, limit, observe, identify, content, reasoning)
+    except IncompleteStream as exc:
+        for name, parts in (('content', content), ('reasoning', reasoning)):
+            exc.shape[name + '_chars'] = sum(map(len, parts))
+            unique = _tail_unique_pct(parts)
+            if unique is not None:
+                exc.shape[name + '_tail_unique_pct'] = unique
+        raise
+
+
+def _read(response, limit, observe, identify, content, reasoning):
     event_bytes = 0
     decoded_bytes = 0
-    content, reasoning, event = [], [], []
+    event = []
     finish = None
     usage = None
     identity = {}

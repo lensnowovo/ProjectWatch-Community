@@ -79,7 +79,9 @@ def safe_diagnostics(value):
                            'invalid_delta', 'invalid_finish', 'missing_finish', 'unexpected_content_type'},
     }
     numbers = {'connected_ms', 'sent_ms', 'headers_ms', 'first_chunk_ms', 'last_chunk_ms',
-               'end_ms', 'received_bytes', 'errno', 'winerror'}
+               'end_ms', 'received_bytes', 'errno', 'winerror',
+               'content_chars', 'reasoning_chars', 'content_tail_unique_pct',
+               'reasoning_tail_unique_pct'}
     result = {k: v for k, v in value.items() if (k in numbers and type(v) is int)
               or (k in enums and isinstance(v, str) and v in enums[k])}
     request_id = value.get('provider_request_id')
@@ -118,6 +120,7 @@ class TransportTrace:
             self.data['stream_failure'] = str(reason)
             if isinstance(reason.finish, str) and re.fullmatch(r'[a-z_]{1,40}', reason.finish):
                 self.data['unexpected_finish'] = reason.finish
+            self.data.update({k: v for k, v in reason.shape.items() if type(v) is int})
         for name in ('errno', 'winerror'):
             value = getattr(reason, name, None)
             if type(value) is int:
