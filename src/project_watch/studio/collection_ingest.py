@@ -22,6 +22,14 @@ from project_watch.studio.store import now
 SKIPPABLE = frozenset({'source_only_admitted_item', 'source_only_withdrawn_item',
                        'ambiguous_collection_identity'})
 
+# The primary key leads with job_id. Snapshot permission checks look up every frozen
+# version by evidence_version_id; without these a 4,500-material check took 17 s.
+OBSERVATION_INDEXES = (
+    'CREATE INDEX IF NOT EXISTS studio_collection_observations_evidence '
+    'ON studio_collection_observations(evidence_version_id)',
+    'CREATE INDEX IF NOT EXISTS studio_collection_observations_item ON studio_collection_observations(item_id)',
+)
+
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS studio_collection_sources (
         project_id TEXT NOT NULL REFERENCES projects(id), identity TEXT NOT NULL,
@@ -34,6 +42,7 @@ SCHEMA = (
         evidence_version_id TEXT NOT NULL REFERENCES studio_evidence_versions(id),
         operation TEXT NOT NULL CHECK(operation IN ('added','updated','reused','historical')),
         observed_at TEXT NOT NULL, PRIMARY KEY(job_id,unit_id,item_id,evidence_version_id))""",
+    *OBSERVATION_INDEXES,
 )
 
 

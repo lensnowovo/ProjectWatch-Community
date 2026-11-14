@@ -246,6 +246,13 @@ class RelationshipStore:
             return bool(sides[0] & sides[1])
 
     def page(self, project_id, *, include_internal=True, db=None):
+        if db is not None:
+            return self._page(project_id, include_internal=include_internal, db=db)
+        # One connection for the whole page: each object lookup used to open its own.
+        with self.store.read_session():
+            return self._page(project_id, include_internal=include_internal, db=db)
+
+    def _page(self, project_id, *, include_internal, db):
         candidates = {r["scope_key"]: r for r in self._rows("studio_relationship_candidates", project_id, include_internal, db=db)}
         overrides = {r["scope_key"]: r for r in self.overrides(project_id, include_internal=include_internal, db=db)}
         # A reset removes user-selected status, not the AI safety gate.
@@ -281,6 +288,11 @@ class RelationshipStore:
         return result
 
     def view(self, project_id, *, include_internal=True):
+        # The scheduler builds this view twice a minute; one connection instead of thousands.
+        with self.store.read_session():
+            return self._view(project_id, include_internal=include_internal)
+
+    def _view(self, project_id, *, include_internal):
         def labels(row):
             result = dict(row)
             for key in RelationshipScope.model_fields:
