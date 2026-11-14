@@ -296,12 +296,14 @@ def test_a_stale_head_is_reviewed_again_even_without_new_material(project, monke
     before = project.head('chain')['id']
     real = project.store.evidence.dependencies.get
     monkeypatch.setattr(project.store.evidence.dependencies, 'get', lambda pid, key, **kw: {
-        **real(pid, key, **kw), 'status': 'stale', 'stale_reason': 'source_revised'})
+        **real(pid, key, **kw), 'status': 'stale', 'stale_reason': 'source_revised',
+        'stale_reasons': ['source_revised']})
     execution, publication, requests = project.run('b2')
     assert requests == [] and execution.read_checkpoint(inc.PLAN)['mode'] == 'incremental'
     assert project.head('chain')['id'] != before and 'chain' in publication['published']
     monkeypatch.setattr(project.store.evidence.dependencies, 'get', lambda pid, key, **kw: {
-        **real(pid, key, **kw), 'status': 'stale', 'stale_reason': 'object_revised'})
+        **real(pid, key, **kw), 'status': 'stale', 'stale_reason': 'event_revised',
+        'stale_reasons': ['event_revised']})
     project.add(1)
     execution, _, requests = project.run('b3')
     assert execution.read_checkpoint(inc.PLAN)['reason'] == 'not_current:operations'

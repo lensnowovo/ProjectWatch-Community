@@ -18,9 +18,45 @@ from project_watch.studio.store import digest
 MODE = 'analyze_incremental_v1'
 PLAN = 'analyze_incremental_plan_v1'
 TRAVERSAL_VERSION = 1
-# The one staleness a seed survives: a revised source's new version is new material,
-# and the superseded version's citations drop out of the seed when it is renumbered.
+# Staleness a seed survives: a revised source's new version is new material, and the
+# superseded version's citations drop out of the seed when it is renumbered. An object
+# revision survives only when it replaced supporting quotes and left the identity alone
+# (``objects_keep_identity``). Every reason since the last publish must qualify.
 SEEDABLE_STALE = frozenset({'source_revised'})
+_OBJECT_STALE = 'object_revised'
+
+
+def objects_keep_identity(db, pid, artifact_key) -> bool:
+    """Each object the published section was bound to differs from its bound version only in refs."""
+    from project_watch.studio.dependencies import DependencyStore
+
+    links = db.execute('SELECT object_id,object_version FROM studio_object_dependency_links '
+                       'WHERE project_id=? AND artifact_key=?', (pid, artifact_key)).fetchall()
+    for object_id, version in links:
+        current = db.execute('SELECT record FROM studio_monitor_objects WHERE project_id=? AND id=?',
+                             (pid, object_id)).fetchone()
+        bound = db.execute('SELECT h.record FROM studio_object_history h JOIN studio_monitor_objects o ON o.id=h.object_id '
+                           'WHERE o.project_id=? AND h.object_id=? AND h.version=?', (pid, object_id, version)).fetchone()
+        if not current or not bound:
+            return False
+        now_, then = (DependencyStore._identity(json.loads(r[0])) for r in (current, bound))
+        now_.pop('refs', None)
+        then.pop('refs', None)
+        if now_ != then:
+            return False
+    return True
+
+
+def seedable(db, pid, artifact_key, dependency) -> bool:
+    status = dependency.get('status')
+    if status == 'current':
+        return True
+    reasons = dependency.get('stale_reasons')
+    if status != 'stale' or not reasons:
+        return False  # unknown history (recorded before reasons were kept) drafts in full once
+    if not set(reasons) <= SEEDABLE_STALE | {_OBJECT_STALE}:
+        return False
+    return _OBJECT_STALE not in reasons or objects_keep_identity(db, pid, artifact_key)
 
 
 def _siblings(execution, batch, db):
@@ -233,7 +269,9 @@ def _build(store, pid, context, selected, sources, targets, refs):
                 return full('not_permitted:' + name)
         dependency = store.evidence.dependencies.get(pid, PREFIX + name) or {}
         status = dependency.get('status')
-        if status != 'current' and not (status == 'stale' and dependency.get('stale_reason') in SEEDABLE_STALE):
+        with closing(store._connect()) as db:
+            usable = seedable(db, pid, PREFIX + name, dependency)
+        if not usable:
             return full('not_current:' + name)
         covered = covered_fragments(store, record) if record.get('section') == name else None
         if covered is None:

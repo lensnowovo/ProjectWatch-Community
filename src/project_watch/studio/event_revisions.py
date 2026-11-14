@@ -3,7 +3,7 @@ import hashlib
 import json
 from contextlib import closing, contextmanager
 
-from project_watch.studio.dependencies import DependencyStore
+from project_watch.studio.dependencies import DependencyStore, mark_stale
 from project_watch.studio.store import now
 
 SCHEMA = """
@@ -76,8 +76,7 @@ def record(db, project_id, event_id):
         'JOIN studio_event_dependency_links l ON l.project_id=d.project_id AND l.artifact_key=d.artifact_key '
         'WHERE l.project_id=? AND l.event_id=? AND l.revision_id!=?', (project_id, event_id, revision)).fetchall()
     for row in affected:
-        changed = {**json.loads(row['record']), 'status': 'stale', 'generation': generation,
-                   'stale_reason': 'event_revised', 'invalidated_at': now()}
+        changed = mark_stale(json.loads(row['record']), 'event_revised', generation)
         db.execute("UPDATE studio_analysis_dependencies SET status='stale',generation=?,record=? WHERE project_id=? AND artifact_key=?",
                    (generation, _encoded(changed), project_id, row['artifact_key']))
         db.execute("INSERT INTO studio_rebuild_requests VALUES (?,?,?,'queued') ON CONFLICT(project_id,artifact_key) "

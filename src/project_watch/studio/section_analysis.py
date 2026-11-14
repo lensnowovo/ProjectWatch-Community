@@ -543,7 +543,8 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
                 material_snapshot._permitted(db, pid, eid)
             dependency = pipeline.evidence.dependencies.track(pid, key, 'insight', evidence_ids, db=db)
             if context['object_versions']:
-                dependency = pipeline.evidence.dependencies.track_objects(pid, key, context['object_versions'], db=db)
+                dependency = pipeline.evidence.dependencies.track_objects(pid, key, context['object_versions'], db=db,
+                                                                          refs_matter=False)
             if dependency['status'] != 'current':
                 raise ValueError('section evidence changed')
             previous = db.execute('SELECT version_id FROM studio_insight_heads WHERE project_id=? AND artifact_key=?', (pid, key)).fetchone()

@@ -12,6 +12,25 @@ from contextlib import closing
 
 from project_watch.studio.store import now
 
+
+def mark_stale(record: dict, reason: str, generation: int | None = None) -> dict:
+    """The record marked stale, keeping every reason since it was last current.
+
+    ``stale_reason`` is the latest; ``stale_reasons`` lets a reader tell whether
+    any earlier change since the last publish still matters. A record that was
+    already stale before reasons were collected has no list: its history is unknown.
+    """
+    was_stale = record.get('status') == 'stale'
+    reasons = record.get('stale_reasons') if was_stale else []
+    out = {**record, 'status': 'stale', 'stale_reason': reason, 'invalidated_at': now()}
+    if reasons is not None:
+        out['stale_reasons'] = sorted({*reasons, reason})
+    else:
+        out.pop('stale_reasons', None)
+    if generation is not None:
+        out['generation'] = generation
+    return out
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS studio_dependency_state (
     project_id TEXT PRIMARY KEY REFERENCES projects(id), generation INTEGER NOT NULL
@@ -102,14 +121,19 @@ class DependencyStore:
                 continue
             if references_added and row['kind'] == 'fact':
                 continue
-            data = {**json.loads(row["record"]), "status": "stale", "generation": generation,
-                    "stale_reason": "object_revised", "invalidated_at": now()}
+            data = mark_stale(json.loads(row["record"]), "object_revised", generation)
             db.execute("UPDATE studio_analysis_dependencies SET status='stale',generation=?,record=? WHERE project_id=? AND artifact_key=?",
                        (generation, json.dumps(data), project_id, row["artifact_key"]))
             db.execute("INSERT INTO studio_rebuild_requests VALUES (?,?,?,'queued') ON CONFLICT(project_id,artifact_key) "
                        "DO UPDATE SET generation=excluded.generation,status='queued'", (project_id, row["artifact_key"], generation))
 
-    def track_objects(self, project_id, artifact_key, object_versions, *, db):
+    def track_objects(self, project_id, artifact_key, object_versions, *, db, refs_matter=True):
+        """Bind an artifact to object versions; stale when an object's identity has since moved.
+
+        ``refs_matter=False`` is for artifacts that never read object contents (analysis
+        sections cite evidence, not object quotes): a revision that only replaced an
+        object's supporting quotes then leaves them current.
+        """
         row = db.execute("SELECT record FROM studio_analysis_dependencies WHERE project_id=? AND artifact_key=?", (project_id, artifact_key)).fetchone()
         if not row:
             raise KeyError("artifact dependency must exist before binding objects")
@@ -120,10 +144,14 @@ class DependencyStore:
                                     "WHERE o.project_id=? AND h.object_id=? AND h.version=?", (project_id, object_id, version)).fetchone()
             if not current or not historical:
                 raise KeyError("object version not found in project")
-            stale |= self._identity(json.loads(current[0])) != self._identity(json.loads(historical[0]))
+            now_, then = self._identity(json.loads(current[0])), self._identity(json.loads(historical[0]))
+            if not refs_matter:
+                now_.pop('refs', None)
+                then.pop('refs', None)
+            stale |= now_ != then
         data = {**json.loads(row[0]), "object_versions": object_versions}
         if stale:
-            data.update(status="stale", stale_reason="object_revised")
+            data = mark_stale(data, "object_revised")
             db.execute("INSERT INTO studio_rebuild_requests VALUES (?,?,?,'queued') ON CONFLICT(project_id,artifact_key) "
                        "DO UPDATE SET generation=excluded.generation,status='queued'", (project_id, artifact_key, data["generation"]))
         db.execute("UPDATE studio_analysis_dependencies SET status=?,record=? WHERE project_id=? AND artifact_key=?",
@@ -142,8 +170,7 @@ class DependencyStore:
         generation = self._bump(db, project_id)
         rows = db.execute("SELECT artifact_key,record FROM studio_analysis_dependencies WHERE project_id=? AND kind IN ('brief','watch','insight')", (project_id,)).fetchall()
         for row in rows:
-            data = {**json.loads(row["record"]), "status": "stale", "generation": generation,
-                    "stale_reason": "relationship_corrected", "invalidated_at": now()}
+            data = mark_stale(json.loads(row["record"]), "relationship_corrected", generation)
             db.execute("UPDATE studio_analysis_dependencies SET status='stale',generation=?,record=? WHERE project_id=? AND artifact_key=?",
                        (generation, json.dumps(data), project_id, row["artifact_key"]))
             db.execute("INSERT INTO studio_rebuild_requests VALUES (?,?,?,'queued') ON CONFLICT(project_id,artifact_key) "
@@ -161,8 +188,7 @@ class DependencyStore:
                           "WHERE d.project_id=? AND e.project_id=? AND e.source_key=? AND (? IS NULL OR e.id=?)",
                           (project_id, project_id, source_key, version_id, version_id)).fetchall()
         for row in rows:
-            record = {**json.loads(row["record"]), "status": "stale", "generation": generation,
-                      "stale_reason": reason, "invalidated_at": now()}
+            record = mark_stale(json.loads(row["record"]), reason, generation)
             db.execute("UPDATE studio_analysis_dependencies SET status='stale',generation=?,record=? "
                        "WHERE project_id=? AND artifact_key=?", (generation, json.dumps(record), project_id, row["artifact_key"]))
             db.execute("INSERT INTO studio_rebuild_requests VALUES (?,?,?,'queued') ON CONFLICT(project_id,artifact_key) "
@@ -186,8 +212,7 @@ class DependencyStore:
                 rows = db.execute("SELECT artifact_key,record FROM studio_analysis_dependencies WHERE project_id=? AND kind=?",
                                   (project_id, context_kind)).fetchall()
                 for row in rows:
-                    artifact = {**json.loads(row["record"]), "status": "stale", "generation": generation,
-                                "stale_reason": "input_set_expanded", "invalidated_at": now()}
+                    artifact = mark_stale(json.loads(row["record"]), "input_set_expanded", generation)
                     db.execute("UPDATE studio_analysis_dependencies SET status='stale',generation=?,record=? "
                                "WHERE project_id=? AND artifact_key=?", (generation, json.dumps(artifact), project_id, row["artifact_key"]))
                     db.execute("INSERT INTO studio_rebuild_requests VALUES (?,?,?,'queued') ON CONFLICT(project_id,artifact_key) "
@@ -226,7 +251,8 @@ class DependencyStore:
             record = {"project_id": project_id, "artifact_key": artifact_key, "kind": kind,
                       "status": "stale" if stale else "current", "generation": generation,
                       "input_generation": expected_generation, "evidence_ids": list(dict.fromkeys(evidence_ids)),
-                      "stale_reason": "superseded_input" if stale else "", "updated_at": now()}
+                      "stale_reason": "superseded_input" if stale else "", "updated_at": now(),
+                      **({"stale_reasons": ["superseded_input"]} if stale else {})}
             connection.execute("INSERT INTO studio_analysis_dependencies VALUES (?,?,?,?,?,?) "
                                "ON CONFLICT(project_id,artifact_key) DO UPDATE SET kind=excluded.kind,status=excluded.status,"
                                "generation=excluded.generation,record=excluded.record",
