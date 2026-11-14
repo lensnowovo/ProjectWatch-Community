@@ -30,7 +30,7 @@ from project_watch.studio.article_lookup import (
     title_query,
 )
 from project_watch.studio.http import Http, HttpError
-from project_watch.studio.llm import LLM, ModelError
+from project_watch.studio.llm import LLM, UNUSABLE_REPLY, ModelError
 from project_watch.studio.normalize import normalize_metric
 from project_watch.studio.settings import SettingsStore, StudioSettings
 from project_watch.studio.sources import Collectors
@@ -421,8 +421,7 @@ def _news(collectors, query, search_count=0):
     return items
 
 
-PREFILTER_FAIL_OPEN = frozenset({'model_content_rejected', 'model_output_invalid_json', 'model_output_invalid_shape',
-                                 'model_output_incomplete', 'model_output_truncated'})
+PREFILTER_FAIL_OPEN = UNUSABLE_REPLY
 
 
 class Pipeline:
@@ -2112,8 +2111,13 @@ class Pipeline:
             return []
 
     def _extract_all_parts(self, project_id, inputs, llm, system, payload, prefix, current_inputs,
-                           *, isolate_failures=True):
-        """Visit independent batches; retain completed outputs when a sibling fails."""
+                           *, isolate_failures=True, skipped=None):
+        """Visit independent batches; retain completed outputs when a sibling fails.
+
+        With ``skipped`` (a list), a definite unusable reply (truncated, invalid,
+        refused) is recorded there and its batch left out; the other batches are
+        returned. Provider uncertainty (unknown, timeout) still propagates.
+        """
         from project_watch.studio.step_outcomes import attempt
         execution = getattr(self._execution_state, 'current', None)
         saved = execution.read_checkpoint(prefix + '_inputs') if execution else None
@@ -2157,6 +2161,21 @@ class Pipeline:
                     success, proposal = attempt(execution, stage, extract)
                     if not success:
                         blocked = True
+                        continue
+                elif skipped is not None:
+                    # A resumed job does not pay again for a batch already found unusable.
+                    code = execution.read_checkpoint(stage + '_unusable') if execution else None
+                    if code is None:
+                        try:
+                            proposal = extract()
+                        except ModelError as exc:
+                            if exc.code not in PREFILTER_FAIL_OPEN:
+                                raise
+                            code = exc.code
+                            if execution:
+                                execution.checkpoint(stage + '_unusable', code)
+                    if code is not None:
+                        skipped.append(code)
                         continue
                 else:
                     proposal = extract()

@@ -213,7 +213,7 @@ class BusinessProfiles:
         return all(p['visibility'] == 'public' or (p['source_id'] and self.store.source_analysis_allowed(project_id, p['source_id'], inputs['binding']))
                    for p in inputs['parts'])
 
-    def apply(self, project_id, inputs, data, *, guard=None, batch_outputs=None):
+    def apply(self, project_id, inputs, data, *, guard=None, batch_outputs=None, unread_batches=0):
         # Validate each bounded response before publishing the complete union.
         responses = [data] if batch_outputs is None else batch_outputs
         rows = [row for response in responses for row in _ProposalEnvelope.model_validate(response).products]
@@ -284,7 +284,8 @@ class BusinessProfiles:
             if (not current_inputs or current_inputs['input_version'] != inputs['input_version'] or not self.permitted(project_id, inputs)):
                 return {'status': 'superseded', 'accepted': 0, 'rejected': rejected}
             old = db.execute('SELECT record FROM studio_peer_business_profiles WHERE project_id=? AND subject_id=? AND input_version=?', (project_id, peer_subject_id, inputs['input_version'])).fetchone() if peer_subject_id else db.execute('SELECT record FROM studio_business_profiles WHERE project_id=? AND input_version=?', (project_id, inputs['input_version'])).fetchone()
-            if old:
+            # A record built with unread batches is not final: a later complete read replaces it.
+            if old and not json.loads(old[0]).get('unread_batches'):
                 return json.loads(old[0])
             subject = self.objects.get(project_id, inputs['subject_id'], db=db)
             products, fact_ids, aliased_facts = [], [], set()
@@ -364,7 +365,8 @@ class BusinessProfiles:
                       'rejected_fields': rejected_fields, 'rejected_schema': rejected_schema,
                       'product_ids': list(dict.fromkeys(products)), 'fact_ids': list(dict.fromkeys(fact_ids)),
                       'summary_only': bool(prepared) and all(s['read_scope'] == 'summary' for _, s, _, _, _ in prepared),
-                      'bounded_inputs': False, 'assertion_basis': 'source_assertions_not_independent_verification'}
+                      'bounded_inputs': False, 'assertion_basis': 'source_assertions_not_independent_verification',
+                      **({'unread_batches': unread_batches} if unread_batches else {})}
             if peer_subject_id:
                 db.execute('INSERT INTO studio_peer_business_profiles VALUES (?,?,?,?) ON CONFLICT(project_id,subject_id) DO UPDATE SET input_version=excluded.input_version,record=excluded.record',
                            (project_id, peer_subject_id, inputs['input_version'], json.dumps(result)))
