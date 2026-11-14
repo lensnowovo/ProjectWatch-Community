@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from project_watch.studio.collection_plan import CAPABILITIES, MODES, make_plan
 from project_watch.studio.openalex_query import topic_terms
+from project_watch.studio.peer_names import peer_search_query
 from project_watch.studio.query_names import cjk
 
 BASE_DIRECTIONS = ('company', 'competitor', 'chain', 'industry', 'policy', 'technology')
@@ -98,7 +99,7 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
 
     if mode != 'topic':
         peers = public_plan.get('competitors') or []
-        peer_queries = [p.get('query') or p.get('name') for p in peers if p.get('name')]
+        peer_queries = [peer_search_query(p) for p in peers if p.get('name')]
         # Discovery queries concern the confirmed company; they do not declare
         # that a named company is already a competitor, supplier or customer.
         directions = {
@@ -114,7 +115,7 @@ def build_collection_plan(*, round_id, project, binding, public_plan, watches,
             if direction == 'competitor' and peer_queries:
                 for peer in peers:
                     if peer.get('name'):
-                        add('search', direction, [peer.get('query') or peer['name']],
+                        add('search', direction, [peer_search_query(peer)],
                             target='peer:' + peer['name'])
             else:
                 add('search', direction, directions[direction], priority=0 if direction == 'company' else 1)

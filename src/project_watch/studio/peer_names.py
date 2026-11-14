@@ -30,11 +30,67 @@ def company_core(name: str) -> str:
     return core or (name or "").strip()
 
 
+# Product codes such as YL201, HS-20093, MHB-088C, BL-B01D1, I-DXd.
+_CODE = re.compile(r'(?<![A-Za-z0-9-])(?:[A-Z]{1,6}(?:-[A-Z]{1,3})?-?\d{2,6}(?:[A-Za-z]\d{0,2})?'
+                   r'|[A-Z]-[A-Z]{1,3}[a-z]{1,2})(?![A-Za-z0-9-])')
+# Targets and mutations name a mechanism many companies share, not one company's product.
+_TARGET = re.compile(r'(?:CD|IL|CLDN|PD|HER|EGFR|FGFR|KRAS|NRAS|TROP|B7|CTLA|LAG|TIM|VEGFR?|BCMA|GPRC|DLL|CCR|'
+                     r'CXCR|TNF|IFN|TGF|JAK|BTK|CDK|PARP|ALK|ROS|RET|FLT|BCL|HDAC|ERBB|MUC|TSLP|GPC|CEACAM|'
+                     r'NECTIN|FR|ROR|SSTR|PSMA|KIT)-?\d+[A-Za-z]?|[A-Z]\d{1,4}[A-Z]', re.I)
+
+
+def _target(value: str) -> bool:
+    return bool(_TARGET.fullmatch(value.strip()))
+
+
+def peer_codes(name: str) -> list[str]:
+    """Product codes written in a drafted competitor's parenthetical note."""
+    notes = ' '.join(re.findall(r"[（(]([^）)]*)[）)]", name or ""))
+    codes = [c for c in _CODE.findall(notes) if not _target(c)]
+    # Headlines write MHB-088C as MHB088C too; I-DXd without its hyphen is no code.
+    joined = [c.replace('-', '') for c in codes if '-' in c and re.search(r'\d', c)]
+    return list(dict.fromkeys([*codes, *joined]))
+
+
+def usable_alias(alias) -> bool:
+    """A name that can identify one company in a headline, not a category word."""
+    if not isinstance(alias, str):
+        return False
+    alias = alias.strip()
+    if not 2 <= len(alias) <= 40 or re.search(r'[（()）:：,，;；]', alias) or not company_name(alias):
+        return False
+    # ADC, GSK, MSD: too short to tell one company apart; CD20, G12C: a shared target
+    return not re.fullmatch(r'[A-Za-z]{1,3}', alias) and not _target(alias)
+
+
+_LATIN_SUFFIX = re.compile(r'\s+(?:Pharma|Pharmaceuticals?|Therapeutics|Medicine|Biologics|Biotech(?:nology)?|'
+                           r'Biosciences?|Bio|Holdings?|Group|Inc\.?|Co\.?|Ltd\.?|Limited|Corp(?:oration)?\.?)$', re.I)
+
+
+def brand_variants(alias: str) -> list[str]:
+    """'Hansoh Pharma' also as 'Hansoh': headlines drop the corporate word."""
+    short = alias
+    for _ in range(2):
+        short = _LATIN_SUFFIX.sub('', short).strip()
+    return [alias, short] if short != alias and re.fullmatch(r'[A-Za-z][A-Za-z .&-]{3,}', short) else [alias]
+
+
+def peer_search_query(peer: dict) -> str:
+    """Short name plus one own product code: a long drafted description is a poor news query."""
+    if isinstance(peer.get('query'), str) and peer['query'].strip():
+        return peer['query'].strip()
+    name = peer.get('name') or ''
+    short = re.split(r'\s*[/／]\s*', company_core(name))[0]
+    codes = peer_codes(name) or [a for a in peer.get('aliases') or [] if _CODE.fullmatch(a or '')]
+    return ' '.join(filter(None, [short, codes[0] if codes else ''])) or name
+
+
 def headline_leads(title: str, names: list[str]) -> bool:
     """Conservative headline attribution, not a general grammatical/entity resolver."""
     head = re.sub(r"^[【\[][^】\]]{0,12}[】\]]\s*", "", title).strip()
     for name in sorted({n for n in names if n}, key=len, reverse=True):
-        if not head.startswith(name):
+        # Latin names lead case-insensitively ("Ifinatamab …" for ifinatamab).
+        if head[:len(name)].casefold() != name.casefold():
             continue
         tail = head[len(name):]
         if re.search(r'[A-Za-z0-9]$', name) and re.match(r'[A-Za-z0-9]', tail):
@@ -105,13 +161,32 @@ def peers_for(project: dict, plan: dict | None, relationships: dict | None, limi
     for c in (plan or {}).get("competitors") or []:
         name = c.get("name") or ""
         core = key_for(name)
+        # Codes from the drafted note and recorded names (English, traditional, own products).
+        drafted = [*peer_codes(name), *(a for a in c.get("aliases") or [] if usable_alias(a))]
         if name and allowed(name) and core not in out:
-            out[core] = {"name": name, "aliases": [], "note": (c.get("reason") or "监控方案中的竞对")[:24],
+            out[core] = {"name": name, "aliases": drafted, "note": (c.get("reason") or "监控方案中的竞对")[:24],
                          "relation_type": 'unknown'}
-        elif name and allowed(name) and core in out and name != out[core]['name']:
-            out[core]['aliases'].append(name)
-    for peer in out.values():
+        elif name and allowed(name) and core in out:
+            out[core]['aliases'].extend([name, *drafted] if name != out[core]['name'] else drafted)
+    confirmed = {}
+    for key, peer in out.items():
+        confirmed[key] = {n.casefold() for n in identity_names(peer['name'])}
         peer['aliases'] = list(dict.fromkeys([*peer['aliases'], *identity_names(peer['name'])]))
         peer['aliases'] = [n for n in peer['aliases'] if n != peer['name'] and
                            (n.casefold() not in owners or len(owners[n.casefold()]) == 1)]
+    # A drafted name two peers share, or one naming the company itself, identifies nobody.
+    # Names from a public identity were already kept to one owner and stay.
+    counts: dict[str, int] = {}
+    for peer in out.values():
+        for n in {a.casefold() for a in peer['aliases']}:
+            counts[n] = counts.get(n, 0) + 1
+    own_names = {n.casefold() for n in own | {project.get(k) or '' for k in ('name', 'legal_name', 'short_name')}
+                 if len(n) >= 2}
+
+    def names_own(alias):
+        return any(alias in n or n in alias for n in own_names)
+
+    for key, peer in out.items():
+        peer['aliases'] = [n for n in peer['aliases'] if n.casefold() in confirmed[key]
+                           or (counts[n.casefold()] == 1 and not names_own(n.casefold()))]
     return list(out.values())[:limit]
