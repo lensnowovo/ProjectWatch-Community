@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type ProjectRound, type RoundFigures, type RoundQuality, type RoundStage } from "./api";
+import { api, type AnalysisCoverage, type ProjectRound, type RoundFigures, type RoundQuality, type RoundStage } from "./api";
 import { useToast } from "./motion";
 import { useVisiblePoll } from "./Operational";
 import { ErrorNote, relTime, useAsync } from "./ui";
@@ -31,6 +31,13 @@ function analyzeLine(stage: RoundStage | null, collect: RoundStage | null): stri
     : sections ? `部分完成 · ${sections} 个判断栏目已更新` : "部分完成 · 暂无判断栏目更新";
 }
 
+/** How much material the analysis read; an incremental round says what it carried forward and what it read anew. */
+export function coverageLine(c: AnalysisCoverage): string {
+  const head = `分析材料：${c.selected_materials} 份`;
+  if (c.carried_fragments == null || c.new_fragments == null) return `${head} · 已处理 ${c.processed_fragments} / ${c.fragments} 段`;
+  return `${head} · 沿用已发布判断 ${c.carried_fragments} 段 · 新读 ${c.drafted_fragments ?? 0} / ${c.new_fragments} 段`;
+}
+
 /** What the latest update produced, stage by stage; collected material counts even before analysis. */
 export function RoundProgress({ projectId, onReload }: { projectId: string; onReload: () => void }) {
   const { data, reload } = useAsync<ProjectRound>(() => api.projectRound(projectId), [projectId]);
@@ -54,7 +61,7 @@ export function RoundProgress({ projectId, onReload }: { projectId: string; onRe
       <div><dt>分析</dt><dd>{analyzeLine(data.analyze, data.collect)}</dd></div>
       {finished && !data.running && <div><dt>完成</dt><dd className="muted">{relTime(finished)}</dd></div>}
     </dl>
-    {data.analyze?.result?.coverage && <p className="small muted">分析材料：{data.analyze.result.coverage.selected_materials} 份 · 已处理 {data.analyze.result.coverage.processed_fragments} / {data.analyze.result.coverage.fragments} 段
+    {data.analyze?.result?.coverage && <p className="small muted">{coverageLine(data.analyze.result.coverage)}
       {data.analyze.result.coverage.excluded.length > 0 && ` · ${data.analyze.result.coverage.excluded.length} 份未纳入（待核实、不相关、无正文或无权限）`}</p>}
     {data.can_reanalyze && <Reanalyze projectId={projectId} onQueued={() => { reload(); onReload(); }} />}
     {data.quality && <QualityReport quality={data.quality} />}

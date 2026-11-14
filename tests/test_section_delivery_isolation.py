@@ -276,7 +276,7 @@ def test_repair_refusal_does_not_skip_later_section_receipts(host, monkeypatch, 
     selected = {**context, 'coverage': {}}
     monkeypatch.setattr(analyze_job, 'select', lambda *_: selected)
     raw = {n: part() for n in section_analysis.SECTIONS}
-    monkeypatch.setattr(analyze_job, 'draft_batches', lambda *_: deepcopy(raw))
+    monkeypatch.setattr(analyze_job, 'draft_batches', lambda *_, **__: deepcopy(raw))
     outcomes = {n: {'status': 'approved', 'refs': ['S1'], 'issues': []} for n in raw}
     monkeypatch.setattr(section_analysis, 'evaluate', lambda *_: deepcopy(outcomes))
     monkeypatch.setattr(analyze_job, '_normalization_problem', lambda generator, name, *args, **kwargs: 'repair' if name in ('position', 'operations') else None)
@@ -288,7 +288,7 @@ def test_repair_refusal_does_not_skip_later_section_receipts(host, monkeypatch, 
             raise ModelError('synthetic unusable reply', code=failure)
         return outcomes
     monkeypatch.setattr(analyze_job, 'repair_summaries', repair)
-    monkeypatch.setattr(section_analysis, 'publish', lambda *args, targets: {'published': targets})
+    monkeypatch.setattr(section_analysis, 'publish', lambda *args, targets, **kwargs: {'published': targets})
     result = analyze_job.sections(research.pipeline, execution, SimpleNamespace(ready=True), selected)
     assert result['status'] == 'partial'
     assert set(result['published']) == set(raw) - {'position'}

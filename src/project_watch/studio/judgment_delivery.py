@@ -96,7 +96,9 @@ def publish_pages(pipeline, execution, llm, draft, sources, selected, targets, r
             'coverage': execution.read_checkpoint(analyze_job.COVERAGE) or selected['coverage']}
 
 
-def deliver_batches(pipeline, execution, llm, company, sources, selected, targets, retained, guard):
+def deliver_batches(pipeline, execution, llm, company, sources, selected, targets, retained, guard, *,
+                    draft_sources=None, seed=None):
+    """Draft ``draft_sources`` (all of ``sources`` unless incremental) and review against all of ``sources``."""
     from project_watch.studio import analyze_job
     from project_watch.studio.llm import ModelError
 
@@ -153,7 +155,13 @@ def deliver_batches(pipeline, execution, llm, company, sources, selected, target
 
     draft = analyze_job.draft_batches(
         execution, llm, pipeline.insight_generator.SYSTEM + analyze_job.GUIDANCE,
-        company, sources, selected, targets, on_draft=deliver)
+        company, sources if draft_sources is None else draft_sources, selected, targets, on_draft=deliver, seed=seed)
+    from project_watch.studio.incremental_drafting import seed_stands
+    if seed_stands(execution, seed):
+        # Stopped before any new material: the seed is already published; do not review it again.
+        latest = analyze_job.seed_kept(execution, selected, targets)
+        execution.checkpoint_chunked(analyze_job.PUBLICATION, latest)
+        return latest
     if latest is None or independent_pages(execution):
         deliver(draft, final=True)
     latest['coverage'] = execution.read_checkpoint(analyze_job.COVERAGE) or selected['coverage']
