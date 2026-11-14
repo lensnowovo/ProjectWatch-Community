@@ -304,6 +304,12 @@ class StudioStore:
             from project_watch.studio.direct_operations import SCHEMA as DIRECT_SCHEMA
 
             db.executescript(DIRECT_SCHEMA)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='studio_collection_observations'").fetchone():
+                # Existing instances get the lookup indexes at start, before any snapshot check.
+                from project_watch.studio.collection_ingest import OBSERVATION_INDEXES
+
+                for statement in OBSERVATION_INDEXES:
+                    db.execute(statement)
             if not db.execute("SELECT 1 FROM studio_state WHERE key='item_dates_v2'").fetchone():
                 self._backfill_item_dates(db)
                 db.execute("INSERT OR REPLACE INTO studio_state VALUES ('item_dates_v2',?)", (now(),))
