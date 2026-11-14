@@ -27,7 +27,7 @@ from project_watch.studio.business_profile import model_payload as business_payl
 from project_watch.studio.company_leads import CompanyLeads
 from project_watch.studio.competition import assess_relation
 from project_watch.studio.http import HttpError
-from project_watch.studio.llm import ModelError
+from project_watch.studio.llm import UNUSABLE_REPLY, ModelError
 from project_watch.studio.peer_contracts import Candidate as Candidate
 from project_watch.studio.peer_contracts import Discovery as Discovery
 from project_watch.studio.peer_discovery import atomic_discovery_name as atomic_discovery_name
@@ -74,6 +74,7 @@ def _unheld_unknown(execution):
         if usage['unknown'] and (kind != 'model' or usage['unknown'] > len(held)):
             return True
     return False
+
 
 
 def _hold_peer_model(execution, index, exc):
@@ -594,12 +595,27 @@ class CompetitionResearch(CompanyLeads):
             hits = stage('competition_discovery_search', lambda: collect(inputs['queries']))
             sources = [e for e in (self._snapshot(pid, hit, execution=execution) for hit in hits) if e]
             listing = [{'source': f'D{i+1}', 'text': e['parts'][0]['text']} for i, e in enumerate(sources)]
-            data = stage('competition_discovery_model', lambda: llm.json(DISCOVER, json.dumps({
-                'company': inputs['company'], **({'industry_hint': inputs['industry_hint']} if inputs.get('industry_hint') else {}),
-                'product_contexts': [
-                    {k: c[k] for k in ('product_name', 'uses', 'buyers', 'discovery_basis')}
-                    for c in inputs['query_contexts']], 'sources': listing}, ensure_ascii=False), max_tokens=5000))
+            def discovery_reply():
+                try:
+                    return llm.json(DISCOVER, json.dumps({
+                        'company': inputs['company'], **({'industry_hint': inputs['industry_hint']} if inputs.get('industry_hint') else {}),
+                        'product_contexts': [
+                            {k: c[k] for k in ('product_name', 'uses', 'buyers', 'discovery_basis')}
+                            for c in inputs['query_contexts']], 'sources': listing}, ensure_ascii=False), max_tokens=5000)
+                except ModelError as exc:
+                    # A truncated or unusable reply leaves this round without search leads;
+                    # registry peers, the target reading and earlier leads still go ahead.
+                    if exc.code not in UNUSABLE_REPLY:
+                        raise
+                    execution.checkpoint('competition_discovery_unusable', exc.code)
+                    return {}
+            data = stage('competition_discovery_model', discovery_reply)
+            unusable_discovery = execution.read_checkpoint('competition_discovery_unusable')
+            if unusable_discovery:
+                errors.append(unusable_discovery)
             def discover():
+                if unusable_discovery:
+                    return []
                 rejections = {}
                 peers = discover_candidates(service, pid, inputs['subject_id'], sources, data,
                     guard=execution._guard, report=rejections,
@@ -646,19 +662,26 @@ class CompetitionResearch(CompanyLeads):
                             subject_id=subject_id, evidence_ids=evidences)
                 if not business['parts']:
                     return {'product_ids': [], 'reading': reading}
+                skipped = []
                 proposals = pipeline._extract_all_parts(pid, business, llm, BUSINESS_SYSTEM, business_payload,
                     'peer_' + subject_id, lambda: pipeline.business_profiles.inputs(pid,
                         binding=pipeline.model_view(llm).binding, subject_id=subject_id, evidence_ids=evidences),
-                    isolate_failures=False)
+                    isolate_failures=False, skipped=skipped)
+                if skipped:
+                    # The unusable batch stays unread this round; products located in the others are kept.
+                    reading = {**reading, 'unread_batches': len(skipped), 'unread_codes': sorted(set(skipped))}
                 guard()
-                return {**pipeline.business_profiles.apply(pid, business, None, batch_outputs=proposals,
-                    guard=execution._guard), 'reading': reading}
+                applied = pipeline.business_profiles.apply(pid, business, None, batch_outputs=proposals,
+                    guard=execution._guard, unread_batches=len(skipped)) if proposals or not skipped else {'product_ids': []}
+                return {**applied, 'reading': reading, **({'failure': skipped[0]} if skipped else {})}
             target = stage('competition_target_business', lambda: extract(inputs['subject_id'], target_hits, target_context))
             if execution.read_checkpoint('competition_target_input_version') is None:
                 execution.checkpoint('competition_target_input_version', research_inputs(service, pid)['input_version'])
             outcome['reading'] = {'target': target.get('reading', {}), 'peers': []}
             errors.extend(r['lookup_error_code'] for r in target.get('reading', {}).get('pages', [])
                           if r.get('lookup_error_code'))
+            if target.get('failure'):
+                errors.append(target['failure'])
             target_products = list(dict.fromkeys([*target.get('product_ids', []), *inputs['products']]))
             previous = self.saved(pid) or {}
             start = stage('competition_peer_offset', lambda: int(previous.get('next_peer_offset', 0)))
@@ -680,7 +703,7 @@ class CompetitionResearch(CompanyLeads):
                 peer_hits = stage(f'peer_search:{index}', lambda: collect(peer_context['queries']))
                 result = stage(f'peer_business:{index}', lambda: extract(peer['id'], peer_hits, peer_context))
                 peer_products = result.get('product_ids', [])
-                supported = 0
+                supported, review_failure = 0, None
                 selected_pairs = select_product_pairs(service, pid, inputs['subject_id'], peer['id'], target_products, peer_products)
                 for scope in selected_pairs:
                     review_error = []
@@ -694,14 +717,19 @@ class CompetitionResearch(CompanyLeads):
                     if 'compatible_delivery' in assessment['missing']:
                         assessment = assess_relation(service, pid, scope, 'substitute', review=review, include_internal=False)
                     if review_error:
+                        if isinstance(review_error[0], ModelError) and review_error[0].code in UNUSABLE_REPLY:
+                            # An unusable review reply ends this peer; its reading and earlier pairs stay.
+                            review_failure = review_error[0].code
+                            break
                         raise review_error[0]
                     guard()
                     pipeline.relationships.save_assessment(pid, assessment, guard=execution._guard)
                     supported += assessment['support'] == 'supported'
                 reading = result.get('reading', {})
-                failure = any(r.get('lookup_error_code') for r in reading.get('pages', []))
+                failure = review_failure or result.get('failure') or (
+                    'search_query_invalid' if any(r.get('lookup_error_code') for r in reading.get('pages', [])) else None)
                 return {'supported_count': supported, 'reading': reading,
-                        **({'failure': 'search_query_invalid'} if failure else {})}
+                        **({'failure': failure} if failure else {})}
             for index, peer in enumerate(selected):
                 guard()
                 completed = execution.read_checkpoint(f'peer_completed:{index}')

@@ -41,6 +41,12 @@ class ModelError(RuntimeError):
         self.code, self.status = code, status
 
 
+# A definite reply that cannot be used: cut at the output limit, invalid, empty or refused.
+# Unlike an unknown outcome, it is final; callers may skip that one step and continue.
+UNUSABLE_REPLY = frozenset({'model_output_truncated', 'model_output_incomplete', 'model_output_invalid_json',
+                            'model_output_invalid_shape', 'model_content_rejected'})
+
+
 def _extract_json(text: str):
     text = text.strip()
     fenced = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
