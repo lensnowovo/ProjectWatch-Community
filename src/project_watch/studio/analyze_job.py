@@ -11,7 +11,7 @@ the request journal replays the model answers it already has.
 import json
 from contextlib import closing
 
-from project_watch.studio import material_snapshot
+from project_watch.studio import incremental_drafting, material_snapshot
 from project_watch.studio.store import digest, now
 
 RESULT = 'analyze_result_v1'
@@ -210,14 +210,28 @@ def source_batches(sources, limits=None):
         yield batch
 
 
-def draft_batches(execution, llm, system, company, sources, context, targets, on_draft=None):
+def draft_batches(execution, llm, system, company, sources, context, targets, on_draft=None, seed=None):
+    """Cumulative drafts over ``sources`` in order, each revising the one before.
+
+    ``seed`` (an incremental round) is the published version the first draft revises;
+    ``sources`` is then only the material that version has not covered. COVERAGE's
+    ``drafted_fragments`` is the traversed prefix of ``sources``: publication records it
+    so a later round knows exactly which material a published version reflects.
+    """
     from project_watch.studio.llm import ModelError
     from project_watch.studio.step_outcomes import attempt
 
     if execution.read_checkpoint('analyze_section_draft_v1') is not None:
         raise ValueError('legacy analysis draft retained; incompatible evidence numbering')
-    previous, processed = {}, 0
+    previous, processed = dict(seed or {}), 0
+    carried = context['coverage'].get('carried_fragments', 0)
+
+    def progress(**extra):
+        return {**context['coverage'], 'processed_fragments': carried + processed, 'drafted_fragments': processed,
+                'remaining_fragments': len(sources) - processed, **extra}
     limits = execution.read_checkpoint(DRAFT_BATCH) or LEGACY_BATCH
+    if not sources:
+        execution.checkpoint_chunked(COVERAGE, progress())  # an incremental round with nothing new
     for index, batch in enumerate(source_batches(sources, limits)):
         fingerprint = digest([context['id'], targets, batch, previous])
         key = DRAFT + ':' + str(index) + ':' + fingerprint[:24]
@@ -233,8 +247,7 @@ def draft_batches(execution, llm, system, company, sources, context, targets, on
             if not success:
                 # Later cumulative drafts depend on this response. Review the
                 # last retained candidate; never jump past an unknown draft.
-                execution.checkpoint_chunked(COVERAGE, {**context['coverage'], 'processed_fragments': processed,
-                    'remaining_fragments': len(sources) - processed, 'blocked': True})
+                execution.checkpoint_chunked(COVERAGE, progress(blocked=True))
                 break
             if not isinstance(value, dict):
                 raise ModelError('analysis draft must be an object', code='model_output_invalid_shape')
@@ -242,8 +255,7 @@ def draft_batches(execution, llm, system, company, sources, context, targets, on
             execution.checkpoint_chunked(key, saved)
         previous = saved['draft']
         processed += len(batch)
-        execution.checkpoint_chunked(COVERAGE, {**context['coverage'], 'processed_fragments': processed,
-                                               'remaining_fragments': len(sources) - processed})
+        execution.checkpoint_chunked(COVERAGE, progress())
         if on_draft is not None:
             on_draft(previous)
         if fresh_batch:
@@ -354,6 +366,28 @@ def sections(pipeline, execution, llm, context, affected=None):
     retained = {name: record for name, record in retained.items() if name not in retired}
     targets = [s for s in section_analysis.SECTIONS
                if s not in retired and (affected is None or s in affected or s not in retained)]
+    # An automatic round may draft only what each target's published version has not covered.
+    # Once frozen, the plan's targets stand: a later change in which items are relevant
+    # must not skip drafts already sent or change their request identity.
+    plan = execution.read_checkpoint(incremental_drafting.PLAN)
+    if plan is None and affected is not None and targets:
+        plan = incremental_drafting.plan(execution, context, selected, sources, targets)
+    draft_sources, seed, drafting = sources, None, selected
+    if plan is not None:
+        targets = plan['targets']
+    if plan is not None and plan['mode'] == 'incremental':
+        draft_sources, seed, drafting = incremental_drafting.view(plan, selected, sources)
+        if not draft_sources and all(s['intact'] for s in plan['seeds'].values()):
+            coverage = {**drafting['coverage'], 'processed_fragments': len(sources), 'drafted_fragments': 0,
+                        'remaining_fragments': 0}
+            execution.checkpoint_chunked(COVERAGE, coverage)
+            outcomes = {s: dict(status='unchanged', reason='no new material since the published version'
+                                if s in targets else 'no new relevant material for this section')
+                        for s in section_analysis.SECTIONS}
+            publication = _mark_retired(dict(status='completed', targets=targets, published=[], sections=outcomes,
+                                             snapshot_id=selected['id'], coverage=coverage), retired)
+            execution.checkpoint_chunked(PUBLICATION, publication)
+            return publication
     if not targets:
         publication = _mark_retired(dict(status='completed', targets=[], published=[],
                            sections={s: dict(status='unchanged', reason='no new relevant material for this section')
@@ -363,15 +397,36 @@ def sections(pipeline, execution, llm, context, affected=None):
     project = pipeline.store.get_project(pid) or {}
     company = {k: project.get(k) for k in ('name', 'legal_name', 'short_name', 'industry', 'description')}
     from project_watch.studio.judgment_delivery import deliver_batches, enabled
+    # Review and publication always see the whole frozen selection: citation support,
+    # counterevidence and cross-section checks are unchanged by incremental drafting.
     if enabled(execution):
         publication = _mark_retired(
-            deliver_batches(pipeline, execution, llm, company, sources, selected, targets, retained, guard), retired)
+            deliver_batches(pipeline, execution, llm, company, sources, drafting, targets, retained, guard,
+                            draft_sources=draft_sources, seed=seed), retired)
     else:
-        draft = draft_batches(execution, llm, generator.SYSTEM + GUIDANCE, company, sources, selected, targets)
-        publication = _mark_retired(
-            publish_draft(pipeline, execution, llm, draft, sources, selected, targets, retained, guard), retired)
+        draft = draft_batches(execution, llm, generator.SYSTEM + GUIDANCE, company, draft_sources, drafting, targets,
+                              seed=seed)
+        if incremental_drafting.seed_stands(execution, seed):
+            publication = _mark_retired(seed_kept(execution, drafting, targets), retired)
+        else:
+            publication = _mark_retired(
+                publish_draft(pipeline, execution, llm, draft, sources, drafting, targets, retained, guard), retired)
     execution.checkpoint_chunked(PUBLICATION, publication)
     return publication
+
+
+def seed_kept(execution, selected, targets):
+    """Drafting stopped before any new material: the seed is a published version, not a candidate.
+
+    It is not reviewed or published again (that would spend a review on unchanged text).
+    Nothing new is covered, so the next round reads all of this round's new material.
+    """
+    from project_watch.studio.section_analysis import SECTIONS
+    sections = {name: dict(status='unchanged', reason='drafting stopped before new material; published version kept')
+                if name in targets else dict(status='unchanged', reason='no new relevant material for this section')
+                for name in SECTIONS}
+    return dict(status='partial', targets=targets, snapshot_id=selected['id'], sections=sections, published=[],
+                coverage=execution.read_checkpoint(COVERAGE) or selected['coverage'])
 
 
 def _mark_retired(publication, retired):
@@ -435,7 +490,8 @@ def publish_draft(pipeline, execution, llm, draft, sources, selected, targets, r
                     # else: the reviewed section without its summary still stands; the
                     # rewrite is not resent.
             result = section_analysis.publish(pipeline, execution, selected, raw, sources, {name: outcome}, guard,
-                                              targets=[name]) if outcome['status'] == 'approved' else {}
+                                              targets=[name], traversal=incremental_drafting.traversal(execution)
+                                              ) if outcome['status'] == 'approved' else {}
             saved_section = dict(outcome=outcome, published=bool(result.get('published')),
                                  raw=raw.get(name) if result.get('published') else None)
             execution.checkpoint_chunked(key, saved_section)
@@ -794,6 +850,7 @@ def run(pipeline, execution):
     freeze_section_scope(execution, batch, fresh=fresh)
     freeze_draft_batch(execution, batch, fresh=fresh)
     freeze_summary_policy(execution, batch, fresh=fresh)
+    incremental_drafting.freeze(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
     # A frozen request may block judgment delivery, not independent round cleanup.
     # Keep the failure under the same boundary that owns section publication.

@@ -469,8 +469,12 @@ def _reviewed_head_of_this_job(execution, pid, name):
     return record.get('job_id') == execution.job['id'] and bool((record.get('analysis') or {}).get('summary'))
 
 
-def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targets=SECTIONS):
-    """Publish only independently approved sections, preserving prior heads."""
+def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targets=SECTIONS, traversal=None):
+    """Publish only independently approved sections, preserving prior heads.
+
+    ``traversal`` records which drafted prefix the candidate reflects (not part of the
+    version's identity); a later incremental round reads only material beyond it.
+    """
     pid = execution.job['project_id']
     generator = pipeline.insight_generator
     accepted = {}
@@ -548,6 +552,8 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
                 snapshot_id=context['id'], job_id=execution.job['id'], generated_at=now(),
                 parent_version_id=previous[0] if previous else None, evidence_ids=evidence_ids,
                 review=outcomes[name], numbered={ref: sources[ref] for ref in outcomes[name]['refs']})
+            if traversal is not None:
+                record['traversal'] = traversal
             db.execute('INSERT INTO studio_insight_versions VALUES (?,?,?,?,?,?)',
                        (identity, pid, key, signature, json.dumps(record, ensure_ascii=False), record['generated_at']))
             db.execute('INSERT INTO studio_insight_heads VALUES (?,?,?) ON CONFLICT(project_id,artifact_key) DO UPDATE SET version_id=excluded.version_id',

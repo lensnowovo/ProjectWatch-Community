@@ -1031,12 +1031,19 @@ export interface DiscoveredSourcePage {
 }
 
 /** The rewritten pipeline's latest round: collected → analysed → reported. */
+/** Analysis material read. An incremental round carries what the published judgments already covered and reads the rest. */
+export interface AnalysisCoverage {
+  candidates: number; selected_materials: number; fragments: number; processed_fragments: number; remaining_fragments?: number;
+  mode?: 'incremental'; carried_fragments?: number; new_fragments?: number; drafted_fragments?: number; blocked?: boolean;
+  excluded: { reason: string }[];
+}
+
 export interface RoundStage {
   job_id: string; status: string; stage: string; started_at: string | null; finished_at: string | null; error: string;
   result: null | {
     status: 'complete' | 'partial' | 'failed' | 'waiting_for_model' | string;
     outcomes?: Record<string, number>; patent_documents?: string[]; bodies_read?: number;
-    coverage?: { candidates: number; selected_materials: number; fragments: number; processed_fragments: number; remaining_fragments?: number; excluded: { reason: string }[] };
+    coverage?: AnalysisCoverage;
     published?: string[]; items_reviewed?: number; follow_through?: Record<string, string>; new_events?: number;
   };
 }
