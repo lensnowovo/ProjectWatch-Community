@@ -91,6 +91,9 @@ def model_answer(system, user, state):
                                 {'id': ids[1], 'status': 'weakened', 'signals': [{'item': 'not-given', 'why': '编造'}]}],
                 'unforeseen': [{'text': '出现新技术路线', 'items': [items[0]]}, {'text': '无依据', 'items': []}],
                 'explore': [{'query': 'Synthetic Rival 新靶点', 'reason': '新竞品'}]}
+    if '开篇摘要准备素材' in system:  # page summary extraction: nothing summary-worthy in synthetic material
+        state['page_extractions'] = state.get('page_extractions', 0) + 1
+        return {'points': []}
     if '一级市场投资研究员' in system:
         extraction = '只是全部素材中的一批' in system
         # Drafts count the section drafts themselves; extraction reads feed one of them.

@@ -111,7 +111,7 @@ def _shape_error(message):
     return ModelError(message, code='model_output_invalid_shape')
 
 
-def _clean(value, targets, codes):
+def _clean(value, targets, codes, fields=None):
     """Keep well-formed points on requested fields citing allowed codes; drop the rest."""
     if isinstance(value, dict):
         value = value.get('points')
@@ -122,7 +122,7 @@ def _clean(value, targets, codes):
         if not isinstance(point, dict):
             continue
         section, field, text = point.get('section'), point.get('field'), point.get('text')
-        if section not in targets or field not in FIELDS.get(section, ()):
+        if section not in targets or field not in (fields or FIELDS).get(section, ()):
             continue
         if not isinstance(text, str) or not text.strip():
             continue
@@ -239,9 +239,9 @@ def _extract(execution, llm, system, company, sources, context, targets, progres
     return points, drafted, drafted < len(sources)
 
 
-def _order(points, targets):
-    rank = {name: i for i, name in enumerate(targets)}
-    return sorted(points, key=lambda p: (rank[p['section']], FIELDS[p['section']].index(p['field'])))
+def _order(points, targets, fields=None):
+    rank, fields = {name: i for i, name in enumerate(targets)}, fields or FIELDS
+    return sorted(points, key=lambda p: (rank[p['section']], fields[p['section']].index(p['field'])))
 
 
 def _weight(point):
@@ -250,13 +250,14 @@ def _weight(point):
                           ensure_ascii=False)) + 2
 
 
-def _budget():
-    return POOL_CHARS - min(2000, POOL_CHARS // 4)  # room for section and field keys
+def _budget(pool=None):
+    pool = pool or POOL_CHARS
+    return pool - min(2000, pool // 4)  # room for section and field keys
 
 
-def _groups(points):
+def _groups(points, pool=None):
     groups, current, used = [], [], 0
-    budget = _budget()
+    budget = _budget(pool)
     for point in points:
         if current and used + _weight(point) > budget:
             groups.append(current)
@@ -266,11 +267,11 @@ def _groups(points):
     return groups + ([current] if current else [])
 
 
-def _trim(points, targets):
+def _trim(points, targets, pool=None):
     """The strongest candidates that fit one request, in their original order."""
-    if _size(points, targets) <= POOL_CHARS:
+    if _size(points, targets) <= (pool or POOL_CHARS):
         return points
-    budget, used, keep = _budget(), 0, set()
+    budget, used, keep = _budget(pool), 0, set()
     for i in sorted(range(len(points)), key=lambda i: WEIGHTS.index(points[i]['weight'])):
         if used + _weight(points[i]) <= budget:
             keep.add(i)
@@ -278,27 +279,28 @@ def _trim(points, targets):
     return [points[i] for i in sorted(keep)]
 
 
-def _consolidate(execution, llm, company, targets, points):
+def _consolidate(execution, llm, company, targets, points, *, fields=None, pool=None, prompt=None):
     """Merge candidates in rounds until they fit one synthesis request."""
-    prompt = MERGE_SYSTEM + '\n' + _POINTS
-    points = _order(points, targets)
+    prompt = prompt or MERGE_SYSTEM + '\n' + _POINTS
+    pool = pool or POOL_CHARS
+    points = _order(points, targets, fields)
     for level in range(MAX_LEVELS):
-        if _size(points, targets) <= POOL_CHARS:
+        if _size(points, targets) <= pool:
             break
-        groups = _groups(points)
+        groups = _groups(points, pool)
         requests = [(MERGE + ':' + str(level) + ':' + str(i) + ':' + digest([targets, group])[:24], prompt,
                      json.dumps(dict(company=company, candidates=_nested(group, targets)), ensure_ascii=False),
                      _codes(group), 8192) for i, group in enumerate(groups)]
-        results = _send(execution, llm, requests, lambda value, codes: _clean(value, targets, codes))
+        results = _send(execution, llm, requests, lambda value, codes: _clean(value, targets, codes, fields))
         merged = []
         for (key, *_), group in zip(requests, groups, strict=True):
             value = results[key]
             merged.extend(value if isinstance(value, list) else group)  # an unmerged group passes up as is
-        merged = _order(merged, targets)
+        merged = _order(merged, targets, fields)
         if _size(merged, targets) >= _size(points, targets):
             break
         points = merged
-    return _trim(points, targets)
+    return _trim(points, targets, pool)
 
 
 def _restrict_refs(value, allowed):

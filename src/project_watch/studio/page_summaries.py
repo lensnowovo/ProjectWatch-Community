@@ -7,7 +7,13 @@ An unsuccessful page retains its old publication; journals retain every request.
 import json
 from contextlib import closing
 
-from project_watch.studio import analyze_job, judgment_review, material_snapshot, section_analysis
+from project_watch.studio import (
+    analyze_job,
+    judgment_review,
+    material_snapshot,
+    page_drafting,
+    section_analysis,
+)
 from project_watch.studio.llm import ModelError
 from project_watch.studio.store import digest, now
 
@@ -476,16 +482,16 @@ def recover_saved_page(execution, page):
         return _publish(db, execution, context, page, value, sources, outcome)
 
 
-def publish(execution, context, page, value, sources, outcome):
+def publish(execution, context, page, value, sources, outcome, extra=None):
     if outcome['status'] != 'approved':
         return False
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         material_snapshot._guard(execution, db)
-        return _publish(db, execution, context, page, value, sources, outcome)
+        return _publish(db, execution, context, page, value, sources, outcome, extra)
 
 
-def _publish(db, execution, context, page, value, sources, outcome):
+def _publish(db, execution, context, page, value, sources, outcome, extra=None):
     if outcome['status'] != 'approved':
         return False
     if 'selected' in outcome:
@@ -524,7 +530,8 @@ def _publish(db, execution, context, page, value, sources, outcome):
         raise ValueError('summary evidence changed')
     record = dict(id=identity, page=page, generated_at=now(), raw=value, review=outcome,
                   snapshot_id=context['id'], job_id=execution.job['id'], evidence_ids=eids,
-                  parent_version_id=old[0] if old else None, internal_sources=context.get('internal_sources', {}), numbered={r: sources[r] for r in refs})
+                  parent_version_id=old[0] if old else None, internal_sources=context.get('internal_sources', {}), numbered={r: sources[r] for r in refs},
+                  **(extra or {}))
     db.execute('INSERT INTO studio_insight_versions VALUES (?,?,?,?,?,?)',
                (identity, pid, key, signature, json.dumps(record, ensure_ascii=False), record['generated_at']))
     db.execute('INSERT INTO studio_insight_heads VALUES (?,?,?) ON CONFLICT(project_id,artifact_key) DO UPDATE SET version_id=excluded.version_id',
@@ -594,6 +601,7 @@ def _default_targets(execution, internal):
 
 def run(pipeline, execution, *, targets=None):
     internal = execution.job.get('kind') == 'internal_page_summary'
+    whole = not targets
     targets = tuple(targets) if targets else _default_targets(execution, internal)
     if not targets or len(set(targets)) != len(targets) or any(t not in CONTRACTS for t in targets):
         raise ValueError('invalid summary targets')
@@ -618,6 +626,8 @@ def run(pipeline, execution, *, targets=None):
     modern = bool(protocol and protocol.get('version') == 1)
     mode_key = PROTOCOL + ':retain-candidates'
     if original is None:
+        # Only a whole public reading started under the current protocol reads incrementally.
+        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and whole and not internal)
         execution.checkpoint(mode_key, True)
         execution.checkpoint(PROTOCOL + ':grouped', True)
         execution.checkpoint(PROTOCOL + ':progressive', True)
@@ -683,7 +693,21 @@ def run(pipeline, execution, *, targets=None):
         attempted = execution.read_checkpoint(PROTOCOL + ':early-attempted') or [] if modern else []
         reviewer = analyze_job._reviewer(pipeline, execution, llm, guard)
         revisions = {page: {} for page in targets}
-        for index, batch in enumerate(analyze_job.source_batches(sources)):
+        extracting = page_drafting.enabled(execution)
+        unchanged, pools = set(), {}
+        if extracting:
+            draft, unchanged, failed, pools, unread = page_drafting.draft(
+                execution, llm, company, sources, targets, CONTRACTS, SYSTEM, guard, validate=validate, prefix=PREFIX,
+                binding=protocol['binding'])
+            if unread:
+                # Pages were written from part of the material; the rest is read next time.
+                draft_failure = {'stage': page_drafting.EXTRACT, 'code': 'material_unread', 'unread': unread}
+            if failed:
+                failures.update(failed)
+                execution.checkpoint(PROTOCOL + ':page-failures', failures)
+            for page, candidate in draft.items():
+                revisions[page][digest(candidate)] = candidate
+        for index, batch in enumerate([] if extracting else analyze_job.source_batches(sources)):
             active = targets
             previous = draft
             if modern:
@@ -772,18 +796,19 @@ def run(pipeline, execution, *, targets=None):
                 execution.yield_if_due()
         reviewer = analyze_job._reviewer(pipeline, execution, llm, guard)
         outcomes, published = {p: 'failed' for p in failures}, list(early)
-        queues = {page: list(revisions[page].values()) or [draft.get(page)] for page in targets if page not in failures}
+        outcomes.update({p: 'unchanged' for p in unchanged})
+        queues = {page: list(revisions[page].values()) or [draft.get(page)] for page in targets
+                  if page not in failures and page not in unchanged}
         if modern:
             # Later drafts can add new facts after an early publication. Review
             # those candidates too, but never repeat an identical full verdict.
             if packed:
-                newest = [(page, next((c for c in reversed(queues[page]) if c), None))
-                          for page in targets if page not in failures]
+                newest = [(page, next((c for c in reversed(queues[page]) if c), None)) for page in queues]
                 prefetch_verdicts([(page, c) for page, c in newest if c and unreviewed(page, c)],
                                   sources, reviewer, verdicts, guard, hold)
                 outcomes.update({page: 'failed' for page in failures})
             for page in targets:
-                if page in failures:
+                if page in failures or page in unchanged:
                     continue
                 outcomes[page] = 'rejected'
                 candidates = [c for c in reversed(queues[page]) if c]
@@ -796,7 +821,8 @@ def run(pipeline, execution, *, targets=None):
                                                                           verdicts):
                         outcomes[page] = outcome['status']
                         guard()
-                        accepted = publish(execution, context, page, candidate, sources, outcome)
+                        accepted = publish(execution, context, page, candidate, sources, outcome,
+                                           extra={'pool': pools[page]} if page in pools else None)
                         if accepted:
                             published.append(page)
                         if reviewed:
@@ -862,7 +888,7 @@ def run(pipeline, execution, *, targets=None):
                 if publish(execution, context, page, candidate, sources, outcome):
                     published.append(page)
                     queues[page].clear()
-        result = dict(status='completed' if not draft_failure and not failures and all(s in ('approved', 'no_material') for s in outcomes.values()) else 'partial',
+        result = dict(status='completed' if not draft_failure and not failures and all(s in ('approved', 'no_material', 'unchanged') for s in outcomes.values()) else 'partial',
                       pages=outcomes, published=list(dict.fromkeys(published)), snapshot_id=context['id'])
         if failures:
             result['failures'] = failures
