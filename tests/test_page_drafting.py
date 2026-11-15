@@ -253,7 +253,7 @@ def test_an_unwrapped_page_with_long_sentences_is_kept_with_its_facts(project, m
         value = wrapped(system, user, **kwargs)
         if SYNTHESIS not in system:
             return value
-        [(page, body)] = value.items()
+        [(_, body)] = value.items()
         ref = body['sentences'][0]['refs']
         body['sentences'] = [dict(text=f'第{i}句' + '合成试验仍在招募受试者。' * 9, refs=ref) for i in range(3)]
         return body  # a single page answered without its page key
