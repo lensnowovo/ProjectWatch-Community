@@ -243,3 +243,22 @@ def test_a_resumed_job_reports_the_page_it_published_without_new_requests(projec
     again = pages.run(project.pipeline, execution)
     assert len(project.calls) == sent
     assert again['published'] == ['trials'] and again['pages']['trials'] == 'approved'
+
+
+def test_an_unwrapped_page_with_long_sentences_is_kept_with_its_facts(project, monkeypatch):
+    project.add(2)
+    wrapped = project.respond
+
+    def unwrapped(system, user, **kwargs):
+        value = wrapped(system, user, **kwargs)
+        if SYNTHESIS not in system:
+            return value
+        [(page, body)] = value.items()
+        ref = body['sentences'][0]['refs']
+        body['sentences'] = [dict(text=f'第{i}句' + '合成试验仍在招募受试者。' * 9, refs=ref) for i in range(3)]
+        return body  # a single page answered without its page key
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=unwrapped), None))
+    _, result, _ = project.summarize()
+    assert result['published'] == ['trials'] and 'failures' not in result
+    head = project.summary_head()
+    assert len(head['raw']['sentences']) == 2 and head['raw']['details'][0]['text'].startswith('第2句')

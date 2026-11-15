@@ -25,6 +25,7 @@ SYNTHESIS = 'page-summary-v2:synth'
 FIELD = 'facts'
 POOL_CHARS = 16000  # serialized facts per page for one merge or synthesis request
 PRIOR_SCAN = 20
+SENTENCE_CHARS = 260  # page_summaries.validate's limit on the opening sentences
 
 _POINTS = '输出 JSON：{"points": [{"section": "页面键", "field": "facts", "text": "…", "refs": ["S12"], "weight": "high"}]}'
 
@@ -45,7 +46,9 @@ MERGE_SYSTEM = '''你整理某一页开篇摘要的候选事实。candidates 来
 SYNTHESIS_NOTE = '''
 本次输入不是原文素材，而是从全部素材逐批提取、整理过的本页候选事实 candidates（附来源编号和重要性 weight）；
 sources 给出各编号的日期和标题。只写 page_contracts 中的这一页：综合全部候选，优先 weight 为 high 的，
-同一事实只写一次，数字以最新且口径一致的为准。不得引入候选之外的事实；refs 只能使用候选中出现的编号。'''
+同一事实只写一次，数字以最新且口径一致的为准。不得引入候选之外的事实；refs 只能使用候选中出现的编号。
+sentences 只写最重要的两至三句，合计严格不超过260字（含标点）；参数、编号和其余事实放入 details。
+输出 JSON 对象，唯一的键是该页面键，值为该页内容。'''
 
 
 def _key(source):
@@ -104,6 +107,20 @@ def _index(sources, codes):
     return {code: ' | '.join(filter(None, [str(sources[code].get('date') or '')[:10],
                                            str(sources[code].get('title') or '')[:60]]))
             for code in sorted(codes, key=lambda c: int(c[1:]) if c[1:].isdigit() else 0) if code in sources}
+
+
+def _fit(value):
+    """Opening sentences over the length limit move, last first, to the front of details (two stay).
+
+    Live syntheses wrote three dense sentences of 300-460 characters; their facts are kept.
+    """
+    rows, details = value.get('sentences'), value.get('details', [])
+    if value.get('status') != 'ready' or not isinstance(rows, list) or not isinstance(details, list):
+        return value
+    rows, details = list(rows), list(details)
+    while len(rows) > 2 and sum(len(r.get('text') or '') for r in rows if isinstance(r, dict)) > SENTENCE_CHARS:
+        details.insert(0, rows.pop())
+    return {**value, 'sentences': rows, 'details': details}
 
 
 def draft(execution, llm, company, sources, targets, contracts, system, guard, *, validate, prefix, binding):
@@ -186,10 +203,13 @@ def draft(execution, llm, company, sources, targets, contracts, system, guard, *
 
     def accept(value, scope):
         page, allowed = scope
-        value = value.get(page) if isinstance(value, dict) else None
+        if isinstance(value, dict) and page in value:
+            value = value[page]
+        elif not (isinstance(value, dict) and 'status' in value):
+            value = None  # a single page is often answered unwrapped; anything else is not a page
         if not isinstance(value, dict):
             raise sd._shape_error('page summary draft must be an object')
-        value = sd._restrict_refs(value, allowed)
+        value = _fit(sd._restrict_refs(value, allowed))
         try:
             validate(page, value, sources)
         except ValueError as exc:
