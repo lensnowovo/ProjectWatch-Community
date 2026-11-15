@@ -67,6 +67,8 @@ sources 给出各编号的日期和标题。若提供 published，它是各板�
 - verdict 和 summary 要综合全部论点，不能只依据其中一小部分。
 - 不得引入候选与 published 之外的事实；refs 只能使用其中出现的编号。
 - position.peers 从 peers 候选和竞品动态中选取；chain.outline 的 players 只能用 players 候选里的公司。"""
+KEEP_NOTE = """
+- candidates 中标有 "published": true 的论点来自已发布版本，已经核实：除非被更新的候选取代或推翻，必须保留（可合并改写，保留其来源编号）。"""
 
 
 def _rules(system):
@@ -103,7 +105,7 @@ def freeze(execution, batch, *, fresh):
                 if (sibling or {}).get('mode') != 'extract':
                     mode = 'cumulative'
                     break
-    execution.checkpoint(MODE, {'mode': mode, 'version': 1})
+    execution.checkpoint(MODE, {'mode': mode, 'version': 2})
 
 
 def _shape_error(message):
@@ -111,7 +113,7 @@ def _shape_error(message):
     return ModelError(message, code='model_output_invalid_shape')
 
 
-def _clean(value, targets, codes):
+def _clean(value, targets, codes, fields=None):
     """Keep well-formed points on requested fields citing allowed codes; drop the rest."""
     if isinstance(value, dict):
         value = value.get('points')
@@ -122,7 +124,7 @@ def _clean(value, targets, codes):
         if not isinstance(point, dict):
             continue
         section, field, text = point.get('section'), point.get('field'), point.get('text')
-        if section not in targets or field not in FIELDS.get(section, ()):
+        if section not in targets or field not in (fields or FIELDS).get(section, ()):
             continue
         if not isinstance(text, str) or not text.strip():
             continue
@@ -239,9 +241,9 @@ def _extract(execution, llm, system, company, sources, context, targets, progres
     return points, drafted, drafted < len(sources)
 
 
-def _order(points, targets):
-    rank = {name: i for i, name in enumerate(targets)}
-    return sorted(points, key=lambda p: (rank[p['section']], FIELDS[p['section']].index(p['field'])))
+def _order(points, targets, fields=None):
+    rank, fields = {name: i for i, name in enumerate(targets)}, fields or FIELDS
+    return sorted(points, key=lambda p: (rank[p['section']], fields[p['section']].index(p['field'])))
 
 
 def _weight(point):
@@ -250,13 +252,14 @@ def _weight(point):
                           ensure_ascii=False)) + 2
 
 
-def _budget():
-    return POOL_CHARS - min(2000, POOL_CHARS // 4)  # room for section and field keys
+def _budget(pool=None):
+    pool = pool or POOL_CHARS
+    return pool - min(2000, pool // 4)  # room for section and field keys
 
 
-def _groups(points):
+def _groups(points, pool=None):
     groups, current, used = [], [], 0
-    budget = _budget()
+    budget = _budget(pool)
     for point in points:
         if current and used + _weight(point) > budget:
             groups.append(current)
@@ -266,11 +269,11 @@ def _groups(points):
     return groups + ([current] if current else [])
 
 
-def _trim(points, targets):
+def _trim(points, targets, pool=None):
     """The strongest candidates that fit one request, in their original order."""
-    if _size(points, targets) <= POOL_CHARS:
+    if _size(points, targets) <= (pool or POOL_CHARS):
         return points
-    budget, used, keep = _budget(), 0, set()
+    budget, used, keep = _budget(pool), 0, set()
     for i in sorted(range(len(points)), key=lambda i: WEIGHTS.index(points[i]['weight'])):
         if used + _weight(points[i]) <= budget:
             keep.add(i)
@@ -278,27 +281,28 @@ def _trim(points, targets):
     return [points[i] for i in sorted(keep)]
 
 
-def _consolidate(execution, llm, company, targets, points):
+def _consolidate(execution, llm, company, targets, points, *, fields=None, pool=None, prompt=None):
     """Merge candidates in rounds until they fit one synthesis request."""
-    prompt = MERGE_SYSTEM + '\n' + _POINTS
-    points = _order(points, targets)
+    prompt = prompt or MERGE_SYSTEM + '\n' + _POINTS
+    pool = pool or POOL_CHARS
+    points = _order(points, targets, fields)
     for level in range(MAX_LEVELS):
-        if _size(points, targets) <= POOL_CHARS:
+        if _size(points, targets) <= pool:
             break
-        groups = _groups(points)
+        groups = _groups(points, pool)
         requests = [(MERGE + ':' + str(level) + ':' + str(i) + ':' + digest([targets, group])[:24], prompt,
                      json.dumps(dict(company=company, candidates=_nested(group, targets)), ensure_ascii=False),
                      _codes(group), 8192) for i, group in enumerate(groups)]
-        results = _send(execution, llm, requests, lambda value, codes: _clean(value, targets, codes))
+        results = _send(execution, llm, requests, lambda value, codes: _clean(value, targets, codes, fields))
         merged = []
         for (key, *_), group in zip(requests, groups, strict=True):
             value = results[key]
             merged.extend(value if isinstance(value, list) else group)  # an unmerged group passes up as is
-        merged = _order(merged, targets)
+        merged = _order(merged, targets, fields)
         if _size(merged, targets) >= _size(points, targets):
             break
         points = merged
-    return _trim(points, targets)
+    return _trim(points, targets, pool)
 
 
 def _restrict_refs(value, allowed):
@@ -319,13 +323,48 @@ def _cited(value):
     return set()
 
 
+# Published list fields that carry cited points, by the candidate field they continue.
+SEED_FIELDS = {'position': {'for': 'for', 'against': 'against', 'competition_signals': 'signals', 'peers': 'peers'},
+               'technology': {'academic': 'academic', 'industry': 'industry', 'risks': 'risks'},
+               'industry': {'drivers': 'drivers', 'headwinds': 'headwinds'},
+               'operations': {'for': 'for', 'against': 'against'},
+               'chain': {'for': 'for', 'against': 'against'}}
+
+
+def _published_points(seed, targets):
+    """The published version's cited points, first in each field's candidates.
+
+    Given only as a separate ``published`` object, a live synthesis wrote every section from
+    the new candidates alone and kept none of the published evidence.
+    """
+    carried = {}
+    for name in targets:
+        section = (seed or {}).get(name)
+        if not isinstance(section, dict):
+            continue
+        for key, field in SEED_FIELDS.get(name, {}).items():
+            for item in section.get(key) or ():
+                text = item.get('text') or item.get('name') if isinstance(item, dict) else None
+                refs = [r for r in item.get('refs') or () if isinstance(r, str)] if isinstance(item, dict) else []
+                if isinstance(text, str) and text.strip() and refs:
+                    carried.setdefault(name, {}).setdefault(field, []).append(
+                        {'text': text, 'refs': refs, 'weight': 'high', 'published': True})
+    return carried
+
+
 def _synthesize(execution, llm, system, company, targets, points, seed, sources, context):
     allowed = _codes(points) | _cited(seed or {})
     index = {code: ' | '.join(filter(None, [str(sources[code].get('date') or '')[:10],
                                              str(sources[code].get('title') or '')[:60]]))
              for code in sorted(allowed, key=lambda c: int(c[1:]) if c[1:].isdigit() else 0) if code in sources}
+    candidates, note = _nested(points, targets), SYNTHESIS_NOTE
+    if seed and (execution.read_checkpoint(MODE) or {}).get('version', 1) >= 2:
+        note += KEEP_NOTE
+        for name, fields in _published_points(seed, targets).items():
+            for field, carried in fields.items():
+                candidates.setdefault(name, {})[field] = carried + candidates.get(name, {}).get(field, [])
     payload = dict(company=company, snapshot_id=context['id'], requested_sections=targets,
-                   candidates=_nested(points, targets), sources=index)
+                   candidates=candidates, sources=index)
     if seed:
         payload['published'] = seed
     key = SYNTHESIS + ':' + digest([context['id'], targets, points, seed or {}])[:24]
@@ -334,7 +373,7 @@ def _synthesize(execution, llm, system, company, targets, points, seed, sources,
         if not isinstance(value, dict):
             raise _shape_error('analysis draft must be an object')
         return _restrict_refs(value, allowed)
-    results = _send(execution, llm, [(key, system + SYNTHESIS_NOTE, json.dumps(payload, ensure_ascii=False),
+    results = _send(execution, llm, [(key, system + note, json.dumps(payload, ensure_ascii=False),
                                       allowed, 8192)], accept)
     value = results[key]
     return value if isinstance(value, dict) else None
