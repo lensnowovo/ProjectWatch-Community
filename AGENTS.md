@@ -21,6 +21,11 @@ is the source of truth for the independent PE/VC project monitoring product.
 - Run pytest, Node tests, lint, wheel build and fresh-install smoke after risky
   changes. Report
   skips and model/network limitations honestly.
+- CI is the merge gate, not the test loop. Iterate with targeted tests and run the
+  full local regression once per batch of changes. Live-test a branch build on the
+  isolated test instance without waiting for CI. Group related fixes into one PR so
+  CI runs once per batch, and keep working while it runs. If CI fails after a
+  branch build was installed, fix it or reinstall the main build.
 - Only the personal local/SQLite edition is supported; the PostgreSQL team alpha was removed.
 - UI is plain-language, neutral and information-first. No single-side decorative
   card bars; prioritize readable tables, chart evidence and whitespace.

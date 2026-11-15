@@ -1,4 +1,5 @@
 """Synthetic provider responses in the live response shapes. No provider bytes are committed."""
+import json
 import re
 
 
@@ -91,10 +92,17 @@ def model_answer(system, user, state):
                 'unforeseen': [{'text': '出现新技术路线', 'items': [items[0]]}, {'text': '无依据', 'items': []}],
                 'explore': [{'query': 'Synthetic Rival 新靶点', 'reason': '新竞品'}]}
     if '一级市场投资研究员' in system:
-        state['drafts'] += 1
+        extraction = '只是全部素材中的一批' in system
+        # Drafts count the section drafts themselves; extraction reads feed one of them.
+        state['extractions' if extraction else 'drafts'] = state.get('extractions' if extraction else 'drafts', 0) + 1
         if state.get('fail_draft'):
             state['fail_draft'] -= 1
             return 500
+        if extraction:  # per-batch extraction: one candidate per requested field
+            payload = json.loads(user)
+            first = next(iter(payload['materials']))
+            return {'points': [dict(section=name, field=fields[0], text='合成材料记录了研发进展。', refs=[first],
+                                    weight='high') for name, fields in payload['fields'].items()]}
         return dict(operations=section(), chain=section())
     return {}
 

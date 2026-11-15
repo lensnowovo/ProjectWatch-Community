@@ -153,7 +153,7 @@ def deliver_batches(pipeline, execution, llm, company, sources, selected, target
             # A different cumulative candidate must not sidestep this lost review.
             raise ModelError('已保存核验结果；未重发结果不明的请求', code='unknown_not_resent')
 
-    draft = analyze_job.draft_batches(
+    draft = analyze_job.draft_sections(
         execution, llm, pipeline.insight_generator.SYSTEM + analyze_job.GUIDANCE,
         company, sources if draft_sources is None else draft_sources, selected, targets, on_draft=deliver, seed=seed)
     from project_watch.studio.incremental_drafting import seed_stands
