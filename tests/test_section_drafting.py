@@ -113,6 +113,9 @@ def test_an_incremental_round_weighs_new_candidates_with_the_published_version(p
     assert len(extracted) == 2  # only the new material is read
     [synthesis] = [p for kind, p in calls if kind == SYNTHESIS]
     assert set(synthesis['published']) == set(TARGETS)
+    # The published points are candidates themselves, marked, so the synthesis keeps them.
+    carried = [p for p in synthesis['candidates']['chain']['for'] if p.get('published')]
+    assert len({ref for p in carried for ref in p['refs']}) == len(before)  # renumbered into this job's codes
     assert set(publication['published']) == set(TARGETS)
     assert len(cited(project.head('chain'))) == len(before) + 2  # nothing published earlier was dropped
 

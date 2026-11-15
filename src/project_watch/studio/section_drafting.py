@@ -67,6 +67,8 @@ sources 给出各编号的日期和标题。若提供 published，它是各板�
 - verdict 和 summary 要综合全部论点，不能只依据其中一小部分。
 - 不得引入候选与 published 之外的事实；refs 只能使用其中出现的编号。
 - position.peers 从 peers 候选和竞品动态中选取；chain.outline 的 players 只能用 players 候选里的公司。"""
+KEEP_NOTE = """
+- candidates 中标有 "published": true 的论点来自已发布版本，已经核实：除非被更新的候选取代或推翻，必须保留（可合并改写，保留其来源编号）。"""
 
 
 def _rules(system):
@@ -103,7 +105,7 @@ def freeze(execution, batch, *, fresh):
                 if (sibling or {}).get('mode') != 'extract':
                     mode = 'cumulative'
                     break
-    execution.checkpoint(MODE, {'mode': mode, 'version': 1})
+    execution.checkpoint(MODE, {'mode': mode, 'version': 2})
 
 
 def _shape_error(message):
@@ -321,13 +323,48 @@ def _cited(value):
     return set()
 
 
+# Published list fields that carry cited points, by the candidate field they continue.
+SEED_FIELDS = {'position': {'for': 'for', 'against': 'against', 'competition_signals': 'signals', 'peers': 'peers'},
+               'technology': {'academic': 'academic', 'industry': 'industry', 'risks': 'risks'},
+               'industry': {'drivers': 'drivers', 'headwinds': 'headwinds'},
+               'operations': {'for': 'for', 'against': 'against'},
+               'chain': {'for': 'for', 'against': 'against'}}
+
+
+def _published_points(seed, targets):
+    """The published version's cited points, first in each field's candidates.
+
+    Given only as a separate ``published`` object, a live synthesis wrote every section from
+    the new candidates alone and kept none of the published evidence.
+    """
+    carried = {}
+    for name in targets:
+        section = (seed or {}).get(name)
+        if not isinstance(section, dict):
+            continue
+        for key, field in SEED_FIELDS.get(name, {}).items():
+            for item in section.get(key) or ():
+                text = item.get('text') or item.get('name') if isinstance(item, dict) else None
+                refs = [r for r in item.get('refs') or () if isinstance(r, str)] if isinstance(item, dict) else []
+                if isinstance(text, str) and text.strip() and refs:
+                    carried.setdefault(name, {}).setdefault(field, []).append(
+                        {'text': text, 'refs': refs, 'weight': 'high', 'published': True})
+    return carried
+
+
 def _synthesize(execution, llm, system, company, targets, points, seed, sources, context):
     allowed = _codes(points) | _cited(seed or {})
     index = {code: ' | '.join(filter(None, [str(sources[code].get('date') or '')[:10],
                                              str(sources[code].get('title') or '')[:60]]))
              for code in sorted(allowed, key=lambda c: int(c[1:]) if c[1:].isdigit() else 0) if code in sources}
+    candidates, note = _nested(points, targets), SYNTHESIS_NOTE
+    if seed and (execution.read_checkpoint(MODE) or {}).get('version', 1) >= 2:
+        note += KEEP_NOTE
+        for name, fields in _published_points(seed, targets).items():
+            for field, carried in fields.items():
+                candidates.setdefault(name, {})[field] = carried + candidates.get(name, {}).get(field, [])
     payload = dict(company=company, snapshot_id=context['id'], requested_sections=targets,
-                   candidates=_nested(points, targets), sources=index)
+                   candidates=candidates, sources=index)
     if seed:
         payload['published'] = seed
     key = SYNTHESIS + ':' + digest([context['id'], targets, points, seed or {}])[:24]
@@ -336,7 +373,7 @@ def _synthesize(execution, llm, system, company, targets, points, seed, sources,
         if not isinstance(value, dict):
             raise _shape_error('analysis draft must be an object')
         return _restrict_refs(value, allowed)
-    results = _send(execution, llm, [(key, system + SYNTHESIS_NOTE, json.dumps(payload, ensure_ascii=False),
+    results = _send(execution, llm, [(key, system + note, json.dumps(payload, ensure_ascii=False),
                                       allowed, 8192)], accept)
     value = results[key]
     return value if isinstance(value, dict) else None
