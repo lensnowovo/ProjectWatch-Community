@@ -308,11 +308,13 @@ def test_an_automatic_round_redoes_only_the_sections_its_new_material_touches(en
     # A second automatic round brings nothing new: published sections are kept, not redrafted.
     pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
     work(pipeline, 'collect')
-    drafts = _state['drafts']
+    drafts, extractions = _state['drafts'], _state.get('extractions', 0)
     second = work(pipeline, 'analyze')
     outcomes = second.read_checkpoint(analyze_job.PUBLICATION)['sections']
     assert outcomes['operations']['status'] == 'retired' and outcomes['chain']['status'] == 'unchanged'
     assert _state['drafts'] in (drafts, drafts + 1)  # only never-published sections may be drafted
+    if _state['drafts'] == drafts:  # nothing drafted: no material was read for a draft either
+        assert _state.get('extractions', 0) == extractions
 
 
 @pytest.mark.parametrize('draft_protocol', [False, True])

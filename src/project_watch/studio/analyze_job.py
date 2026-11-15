@@ -264,6 +264,17 @@ def draft_batches(execution, llm, system, company, sources, context, targets, on
     return previous
 
 
+def draft_sections(execution, llm, system, company, sources, context, targets, on_draft=None, seed=None):
+    """Extract-then-synthesize for analyses that start under it; drafting already under way stays cumulative.
+
+    ``on_draft`` sees each cumulative draft; an extracted draft is a single final one.
+    """
+    from project_watch.studio import section_drafting
+    if section_drafting.extracting(execution):
+        return section_drafting.draft(execution, llm, system, company, sources, context, targets, seed=seed)
+    return draft_batches(execution, llm, system, company, sources, context, targets, on_draft=on_draft, seed=seed)
+
+
 SYNTHESIS_SUPPORT = """\n区分“多来源综合”与“事实只得到部分支持”：
 direct 表示字段中的每项事实与推理前提均有引文支持，并不要求某篇原文逐字写出整段总结。
 对已有事实作明确限于这些事实的综合比较或趋势判断，可以是 direct；不能仅因综合了多条来源就标 partial。
@@ -404,8 +415,8 @@ def sections(pipeline, execution, llm, context, affected=None):
             deliver_batches(pipeline, execution, llm, company, sources, drafting, targets, retained, guard,
                             draft_sources=draft_sources, seed=seed), retired)
     else:
-        draft = draft_batches(execution, llm, generator.SYSTEM + GUIDANCE, company, draft_sources, drafting, targets,
-                              seed=seed)
+        draft = draft_sections(execution, llm, generator.SYSTEM + GUIDANCE, company, draft_sources, drafting, targets,
+                               seed=seed)
         if incremental_drafting.seed_stands(execution, seed):
             publication = _mark_retired(seed_kept(execution, drafting, targets), retired)
         else:
@@ -781,7 +792,7 @@ def freeze_draft_batch(execution, batch, *, fresh):
                 previous = JobExecution(execution.store, {'id': row[0]})
                 failures = previous.read_checkpoint(FAILURES, db=db) or {}
                 # A wide draft cut off by the context window would fail the same way again.
-                overflow = any(name.startswith('draft:') and isinstance(value, dict)
+                overflow = any(name.startswith('draft:' + DRAFT) and isinstance(value, dict)
                                and value.get('code') == 'model_output_truncated'
                                for name, value in failures.items())
                 if previous.read_checkpoint(DRAFT_BATCH, db=db) != WIDE_BATCH or overflow:
@@ -849,6 +860,8 @@ def run(pipeline, execution):
     freeze_scope(execution)
     freeze_section_scope(execution, batch, fresh=fresh)
     freeze_draft_batch(execution, batch, fresh=fresh)
+    from project_watch.studio import section_drafting
+    section_drafting.freeze(execution, batch, fresh=fresh)
     freeze_summary_policy(execution, batch, fresh=fresh)
     incremental_drafting.freeze(execution, batch, fresh=fresh)
     from project_watch.studio.judgment_delivery import freeze_mode
