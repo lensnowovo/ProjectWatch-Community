@@ -149,9 +149,13 @@ class RelationshipStore:
         db.execute("INSERT INTO studio_relationship_history VALUES (?,?,?,?,?,?,?)",
                    (record["project_id"], record["scope_key"], record["origin"], record["version"],
                     record["visibility"], json.dumps(record), now()))
-        if record['origin'] == 'auto_research' and changed:
-            # A changed automatic relationship also changes a judgment's
-            # interpretation context. Existing rebuild rows coalesce the work.
+        # Analyses read automatic relationships only once supported (peers_for, commercial
+        # peers). A pending row that stays pending changes no judgment's context; staling
+        # every brief and section for it made each research round force full analysis.
+        consumed = record.get('support') == 'supported' or bool(
+            previous and json.loads(previous[0]).get('support') == 'supported')
+        if record['origin'] == 'auto_research' and changed and consumed:
+            # Existing rebuild rows coalesce the work.
             self.objects.evidence.dependencies.on_relationship_corrected(record['project_id'], db=db)
 
     def _rows(self, table, project_id, include_internal=True, *, db=None):

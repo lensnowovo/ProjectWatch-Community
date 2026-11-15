@@ -47,7 +47,8 @@ def sync(pipeline, project_id, *, guard=None):
         groups.setdefault((relation['peer_id'], relation['role']), []).append(relation)
     # Use the override-aware projection, not raw candidate rows. A candidate
     # needs a current located company identity, but not a proven competitor role.
-    for row in pipeline.relationships.page(project_id, include_internal=False):
+    relationships = pipeline.relationships.page(project_id, include_internal=False)
+    for row in relationships:
         if (row['subject_id'] != primary[0] or row.get('status') != 'current'
                 or row.get('scope_identity_changed') or row.get('support') == 'disputed'
                 or row['relation_type'] == 'unrelated'):
@@ -68,7 +69,9 @@ def sync(pipeline, project_id, *, guard=None):
         project = store.get_project(project_id, db=db) or {}
         if not project.get('activated') or project.get('status') != 'active':
             return result
-        if pipeline.evidence.dependencies._generation(db, project_id) != generation:
+        # Pending relationship writes no longer bump the generation; compare the rows read.
+        if (pipeline.evidence.dependencies._generation(db, project_id) != generation
+                or pipeline.relationships.page(project_id, include_internal=False, db=db) != relationships):
             return {**result, 'superseded': True}
         mappings = { (r['peer_id'], r['role']): dict(r) for r in db.execute(
             'SELECT * FROM studio_relation_delivery WHERE project_id=?', (project_id,)) }
