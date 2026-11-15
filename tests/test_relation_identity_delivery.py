@@ -71,6 +71,32 @@ def test_located_competitor_candidate_enters_trial_without_supported_promotion(t
     assert sync(p, pid)['added'] == 0
 
 
+def test_delivery_stands_down_when_a_pending_relationship_changes_mid_run(tmp_path):
+    """Pending writes no longer bump the generation; delivery must still not act on rows it read before."""
+    p, pid, _ = commercial_fixture(tmp_path)
+    with p.store._connect() as db:
+        fact = json.loads(db.execute('SELECT record FROM studio_fact_records WHERE project_id=?', (pid,)).fetchone()[0])
+    scope = {'subject_id': fact['subject_id'], 'peer_id': fact['attributes']['peer_id'],
+             'subject_product_id': None, 'peer_product_id': None}
+    p.relationships.save_candidate(pid, scope, relation_type='direct', rationale='Synthetic candidate')
+    page, calls = p.relationships.page, []
+
+    def racing_page(*args, **kwargs):
+        rows = page(*args, **kwargs)
+        if not calls:
+            p.relationships.save_candidate(pid, scope, relation_type='unrelated', rationale='Synthetic correction')
+        calls.append(1)
+        return rows
+
+    generation = p.evidence.dependencies.generation(pid)
+    p.relationships.page = racing_page
+    assert sync(p, pid).get('superseded')
+    assert p.evidence.dependencies.generation(pid) == generation
+    p.relationships.page = page
+    sync(p, pid)
+    assert not any(w['relation_type'] == 'competitor' for w in p.monitoring_plan.items(pid))
+
+
 def test_unlocated_competitor_name_does_not_create_monitoring(tmp_path):
     from project_watch.studio.monitoring_contracts import ObjectInput
     p, pid, _ = commercial_fixture(tmp_path)

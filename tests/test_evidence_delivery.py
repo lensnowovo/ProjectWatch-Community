@@ -49,6 +49,18 @@ def test_identical_assessment_does_not_keep_invalidating_judgment(tmp_path):
     assert service.evidence.dependencies.generation(pid) > generation
 
 
+def test_pending_relationships_do_not_stale_analyses_until_one_is_supported(tmp_path):
+    service, pid, scope, _ = setup_pair(tmp_path)
+    generation = service.evidence.dependencies.generation(pid)
+    pending = assess_relation(service, pid, scope, 'direct')
+    assert pending['support'] == 'pending'
+    service.relationships.save_assessment(pid, pending)
+    service.relationships.save_assessment(pid, assess_relation(service, pid, scope, 'substitute'))
+    assert service.evidence.dependencies.generation(pid) == generation
+    service.relationships.save_assessment(pid, assess_relation(service, pid, scope, 'direct', review=reviewer))
+    assert service.evidence.dependencies.generation(pid) > generation
+
+
 def commercial_fixture(tmp_path, *, read_scope='full', role='customer', stage='trial'):
     from test_studio_evidence_versions import sample
 
