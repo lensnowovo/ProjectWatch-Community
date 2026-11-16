@@ -634,7 +634,8 @@ def run(pipeline, execution, *, targets=None):
     mode_key = PROTOCOL + ':retain-candidates'
     if original is None:
         # Only a whole public reading started under the current protocol reads incrementally.
-        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and whole and not internal)
+        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and whole and not internal,
+                             binding=protocol['binding'] if modern else None)
         execution.checkpoint(mode_key, True)
         execution.checkpoint(PROTOCOL + ':grouped', True)
         execution.checkpoint(PROTOCOL + ':progressive', True)
@@ -823,11 +824,13 @@ def run(pipeline, execution, *, targets=None):
                     outcomes[page] = 'no_material'
                     continue
                 try:
-                    last = None
+                    verified = []
                     for candidate, outcome, reviewed in candidate_reviews(execution, context, page, candidates,
                                                                           sources, reviewer, protocol['binding'], guard,
                                                                           verdicts):
-                        outcomes[page], last = outcome['status'], outcome
+                        outcomes[page] = outcome['status']
+                        # The newest candidate with verified details drives a repair (candidates come newest first).
+                        verified = verified or ((outcome.get('selected') or {}).get('details') or [])
                         guard()
                         accepted = publish(execution, context, page, candidate, sources, outcome,
                                            extra={'pool': pools[page]} if page in pools else None)
@@ -837,7 +840,6 @@ def run(pipeline, execution, *, targets=None):
                             execution.yield_if_due()
                         if accepted:
                             break
-                    verified = ((last or {}).get('selected') or {}).get('details') or []
                     if extracting and outcomes[page] == 'rejected' and verified:
                         # Every opening sentence failed but details passed: write the opening once
                         # from those details and review it again in full.

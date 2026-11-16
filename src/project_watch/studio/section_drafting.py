@@ -22,6 +22,7 @@ MERGE = 'analyze_merge_v1'
 SYNTHESIS = 'analyze_synthesis_v1'
 PARALLEL = 3  # independent requests of one job sent at the same time
 FAILURE_LIMIT = 2  # after this many failed extractions, send no more (provider trouble)
+REFUSAL_LIMIT = 5  # content refusals are per material, but this many stop the rest too
 POOL_CHARS = 48000  # serialized candidates per merge or synthesis request
 MAX_LEVELS = 4
 WEIGHTS = ('high', 'medium', 'low')
@@ -180,14 +181,15 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
             pending.append(request)
     # A content refusal repeats for that material whatever happens; it is not provider trouble and
     # does not count toward stopping the remaining requests.
-    failed = sum(value is FAILED and failures.get('draft:' + key, {}).get('code') != 'model_content_rejected'
-                 for key, value in results.items())
+    refusals = sum(value is FAILED and failures.get('draft:' + key, {}).get('code') == 'model_content_rejected'
+                   for key, value in results.items())
+    failed = sum(value is FAILED for value in results.values()) - refusals
     waves = [pending[:1]] + [pending[i:i + PARALLEL] for i in range(1, len(pending), PARALLEL)]
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         for items in waves:
             if not items:
                 continue
-            if failure_limit is not None and failed >= failure_limit:
+            if failure_limit is not None and (failed >= failure_limit or refusals >= REFUSAL_LIMIT):
                 break
             wave = [(request, pool.submit(llm.json, request[1], request[2], max_tokens=request[4],
                                           repair_invalid=False)) for request in items]
@@ -202,7 +204,9 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
                         continue
                     failures['draft:' + key] = {'status': 'blocked', 'code': exc.code}
                     results[key] = FAILED
-                    failed += exc.code != 'model_content_rejected'
+                    refused = exc.code == 'model_content_rejected'
+                    refusals += refused
+                    failed += not refused
                     continue
                 execution.checkpoint_chunked(key, {'value': value})
                 results[key] = value

@@ -113,7 +113,7 @@ def project(tmp_path, monkeypatch):
 def test_a_later_job_reads_only_new_material_and_keeps_earlier_facts(project):
     project.add(4)
     first, result, calls = project.summarize()
-    assert first.read_checkpoint(pd.MODE) == {'version': 1, 'enabled': True, 'prior': None}
+    assert {k: v for k, v in first.read_checkpoint(pd.MODE).items() if k != 'binding'} == {'version': 1, 'enabled': True, 'prior': None}
     assert len(of(calls, EXTRACT)) == 2 and result['published'] == ['trials']
     assert result['pages']['papers'] == 'no_material'
     before = read(calls)
@@ -361,23 +361,47 @@ def test_facts_saved_under_other_prompt_wording_are_still_carried(project, monke
     assert third.read_checkpoint(pd.MODE)['prior'] is None and len(of(calls, EXTRACT)) == 1
 
 
-def test_refused_material_counts_as_read_and_does_not_stop_the_rest(project, monkeypatch):
+def test_refused_material_is_reread_alone_and_only_a_lone_refusal_counts_as_read(project, monkeypatch):
     project.add(12)
     plain = project.respond
-    refused = []
+    sent, poison = [], set()
 
-    def refuse_first_two(system, user, **kwargs):
-        if EXTRACT in system and len(refused) < 2:
-            refused.append(1)
-            raise ModelError('synthetic refusal', code='model_content_rejected')
+    def refuse(system, user, **kwargs):
+        if EXTRACT in system:
+            materials = json.loads(user)['materials']
+            sent.append(len(materials))
+            if not poison:
+                poison.add(next(iter(materials.values()))['evidence_version_id'])  # one source the provider refuses
+            if any(m['evidence_version_id'] in poison for m in materials.values()):
+                raise ModelError('synthetic refusal', code='model_content_rejected')
         return plain(system, user, **kwargs)
-    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=refuse_first_two), None))
-    _, result, calls = project.summarize()
-    assert len(refused) == 2 and len(of(calls, EXTRACT)) == 4  # all six batches sent; two refused
-    assert 'draft_failure' not in result
-    project.add(1)
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=refuse), None))
+    _, result, _ = project.summarize()
+    assert sent == [2] * 6  # a refusal does not stop the other batches
+    assert result['draft_failure']['unread'] == 2  # the refused batch's two sources are reported, not hidden
+    sent.clear()
+    _, result, _ = project.summarize()
+    assert sorted(sent) == [1, 1] and 'draft_failure' not in result  # read one at a time; the lone refusal is read
+    sent.clear()
     _, _, calls = project.summarize()
-    assert len(of(calls, EXTRACT)) == 1  # only the new material; refused material is not retried
+    assert sent == [] and not of(calls, EXTRACT)  # nothing retried
+
+
+def test_too_many_refusals_stop_the_remaining_batches(project, monkeypatch):
+    from project_watch.studio import section_drafting as sd
+    project.add(20)
+    sent = []
+
+    def refuse_all(system, user, **kwargs):
+        if EXTRACT in system:
+            sent.append(1)
+            raise ModelError('synthetic refusal', code='model_content_rejected')
+        return project.respond(system, user, **kwargs)
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=refuse_all), None))
+    _, result, _ = project.summarize()
+    assert sd.REFUSAL_LIMIT <= len(sent) < 10  # ten batches; the rest are not sent once refusals pile up
+    assert result['draft_failure']['unread'] == 20
+
 
 
 def test_an_opening_rejected_in_review_is_rewritten_once_from_verified_details(project, monkeypatch):
@@ -411,3 +435,16 @@ def test_an_opening_rejected_in_review_is_rewritten_once_from_verified_details(p
     assert result['published'] == ['trials'] and result['status'] == 'completed'
     head = project.summary_head()
     assert [r['text'] for r in head['raw']['sentences']] == ['重写：合成试验仍在招募。'] and head['raw']['details']
+
+
+def test_a_newer_fact_state_that_does_not_match_is_not_skipped_for_an_older_one(project, monkeypatch):
+    project.add(2)
+    first, _, _ = project.summarize()
+    state = first.read_checkpoint(pd.STATE)
+    first.checkpoint_chunked(pd.STATE, {k: v for k, v in state.items() if k != 'facts_version'})  # legacy
+    project.add(1)
+    second, _, _ = project.summarize()
+    assert second.read_checkpoint(pd.MODE)['prior'] == first.job['id']
+    monkeypatch.setitem(pages.CONTRACTS, 'trials', pages.CONTRACTS['trials'] + '（定义已改）')
+    third, _, _ = project.summarize()
+    assert third.read_checkpoint(pd.MODE)['prior'] is None  # the legacy state behind the newer one is not used
