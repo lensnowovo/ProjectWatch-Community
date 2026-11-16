@@ -311,3 +311,36 @@ def test_long_openings_are_fitted_without_another_request(project, monkeypatch):
     head = project.summary_head()
     assert [r['text'][:3] for r in head['raw']['sentences']] == ['第0句']
     assert head['raw']['details'][0]['text'].startswith('第1句')
+
+
+def test_a_merge_reply_with_a_placeholder_page_key_keeps_the_page_facts(project, monkeypatch):
+    monkeypatch.setattr(pd, 'POOL_CHARS', 600)
+    project.add(12)
+    plain = project.respond
+
+    def placeholder(system, user, **kwargs):
+        value = plain(system, user, **kwargs)
+        if MERGE in system:  # the model copies the schema's example key instead of the page's
+            value['points'] = [{**p, 'section': '页面键'} for p in value['points']]
+        return value
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=placeholder), None))
+    _, result, calls = project.summarize()
+    assert of(calls, MERGE) and result['published'] == ['trials']
+    [synthesis] = of(calls, SYNTHESIS)
+    assert synthesis['candidates']
+
+
+def test_an_empty_merge_reply_never_erases_the_group(project, monkeypatch):
+    monkeypatch.setattr(pd, 'POOL_CHARS', 600)
+    project.add(12)
+    plain = project.respond
+
+    def empty(system, user, **kwargs):
+        value = plain(system, user, **kwargs)
+        if MERGE in system:
+            value['points'] = []
+        return value
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=empty), None))
+    _, result, calls = project.summarize()
+    [synthesis] = of(calls, SYNTHESIS)
+    assert synthesis['candidates'] and result['published'] == ['trials']
