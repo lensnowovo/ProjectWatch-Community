@@ -508,3 +508,32 @@ def test_new_jobs_skip_the_retired_page_but_started_ones_keep_their_list(host):
     # A saved list always wins.
     execution.checkpoint(pages.PROTOCOL + ':targets', ['trials', 'operations'])
     assert pages._default_targets(execution, internal=False) == ('trials', 'operations')
+
+
+def test_a_detail_goes_with_a_removed_sentence_only_when_it_cites_its_source(tmp_path):
+    research, unit, ingest = fixtures.host.__wrapped__(tmp_path)
+    second = trial(url='https://clinicaltrials.gov/study/NCT00000002')
+    second['extra'] = {**second['extra'], 'source_identity': 'clinical:NCT00000002', 'nct_id': 'NCT00000002'}
+    ingest(unit, [trial(), second])
+    with closing(research.store._connect()) as db, db:
+        db.execute("UPDATE studio_items SET triaged=1,relevant=1 WHERE project_id=?", (research.project_id,))
+    saved = material_snapshot.capture(research.execution)
+    context = material_snapshot.read(research.store, research.project_id, saved['id'])
+    sources = section_analysis.numbered(context)
+    assert set(sources) == {'S1', 'S2'}
+    value = dict(status='ready', sentences=[dict(text='Synthetic study 正在招募受试者。', refs=['S1']),
+                                            dict(text='另一项研究同样在招募。', refs=['S2']),
+                                            dict(text='两项研究均处于入组阶段。', refs=['S1', 'S2'])],
+                 details=[dict(text='第一项登记状态为 RECRUITING。', refs=['S1']),
+                          dict(text='第二项登记状态为 RECRUITING。', refs=['S2'])])
+
+    def check(system, payload):
+        response = dict(checks=[dict(field=f, status='supported', inference='direct', reason='synthetic',
+                                     evidence=[dict(ref=ref, quote='RECRUITING')])
+                                for f, ref in zip(payload['fields'], ['S1', 'S2', 'S2', 'S1', 'S2'], strict=True)])
+        response['checks'][0]['status'] = 'insufficient'  # the first sentence goes
+        response['checks'][1]['standalone'] = response['checks'][2]['standalone'] = True
+        return response
+    outcome = pages.evaluate('trials', value, sources, check)
+    assert [r['text'] for r in outcome['selected']['sentences']] == ['另一项研究同样在招募。', '两项研究均处于入组阶段。']
+    assert [r['text'] for r in outcome['selected']['details']] == ['第二项登记状态为 RECRUITING。']

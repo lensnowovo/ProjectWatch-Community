@@ -164,6 +164,7 @@ def reviewed_fields(page, value, sources, response, counter):
     blocked = {issue['field'] for issue in issues}
     checks = {c['field']: c for c in response['checks']}
     selected = {'status': 'ready', 'sentences': [], 'details': []}
+    removed = set()  # sources cited by opening sentences that were not selected
     for field, row in fields.items():
         check = checks[field]
         refs = list(dict.fromkeys(w['ref'] for w in check['evidence'] if isinstance(w.get('ref'), str)))
@@ -171,12 +172,18 @@ def reviewed_fields(page, value, sources, response, counter):
         if (field in blocked or check['status'] != 'supported' or check.get('inference') in ('partial', 'related')
                 or check.get('standalone') is False or not set(refs).intersection(row['refs'])):
             issues.append({'field': field, 'code': 'summary_not_supported'})
+            if group == 'sentences':
+                removed.update(row['refs'])
             continue
-        # Without an explicit independence verdict a later sentence may depend
-        # on a removed premise. Likewise detached details can describe it.
-        required = int(field.split('.')[2]) if group == 'sentences' else len(rows)
-        if len(selected['sentences']) < required and check.get('standalone') is not True:
+        # Without an explicit independence verdict a later sentence may depend on a removed
+        # premise. A detail can describe one only when it cites the same source: other supported
+        # details stay (dropping every unmarked detail behind any removed sentence halved them).
+        if check.get('standalone') is not True and (
+                len(selected['sentences']) < int(field.split('.')[2]) if group == 'sentences'
+                else not selected['sentences'] or removed.intersection(row['refs'])):
             issues.append({'field': field, 'code': 'missing_context'})
+            if group == 'sentences':
+                removed.update(row['refs'])
             continue
         selected[group].append(dict(text=row['text'], refs=refs))
     return dict(status='approved' if selected['sentences'] else 'rejected', issues=issues,
