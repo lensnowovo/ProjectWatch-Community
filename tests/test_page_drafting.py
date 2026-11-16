@@ -274,18 +274,40 @@ def test_opening_sentences_still_too_long_are_condensed_once(project, monkeypatc
             rows = json.loads(user)['sentences']
             condensing.append(rows)
             return {'sentences': [dict(text='合成试验仍在招募。', refs=rows[0]['refs']),
-                                  dict(text='研究处于入组阶段。', refs=rows[1]['refs'])]}
+                                  dict(text='研究处于入组阶段。', refs=rows[0]['refs'])]}
         value = plain(system, user, **kwargs)
         if SYNTHESIS in system:
             [(_, body)] = value.items()
             ref = body['sentences'][0]['refs']
-            body['sentences'] = [dict(text=f'第{i}句' + '合成试验仍在招募受试者。' * 12, refs=ref) for i in range(3)]
+            body['sentences'] = [dict(text=f'第{i}句' + '合成试验仍在招募受试者。' * 25, refs=ref) for i in range(3)]
             body['details'].append(dict(text='引用了候选之外的来源。', refs=['S999']))  # loses its only citation
         return value
     monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=long_then_short), None))
     _, result, _ = project.summarize()
-    assert len(condensing) == 1 and len(condensing[0]) == 2  # the third sentence already moved to details
+    assert len(condensing) == 1 and len(condensing[0]) == 1  # the others moved to details; one sentence is too long alone
     assert result['published'] == ['trials'] and 'failures' not in result
     head = project.summary_head()
     assert [r['text'] for r in head['raw']['sentences']] == ['合成试验仍在招募。', '研究处于入组阶段。']
     assert all(r['text'] != '引用了候选之外的来源。' for r in head['raw']['details'])
+
+
+def test_long_openings_are_fitted_without_another_request(project, monkeypatch):
+    project.add(2)
+    plain = project.respond
+    sent = []
+
+    def long_sentences(system, user, **kwargs):
+        sent.append(system)
+        value = plain(system, user, **kwargs)
+        if SYNTHESIS in system:
+            [(_, body)] = value.items()
+            ref = body['sentences'][0]['refs']
+            body['sentences'] = [dict(text=f'第{i}句' + '合成试验仍在招募受试者。' * 15, refs=ref) for i in range(2)]
+        return value
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=long_sentences), None))
+    _, result, _ = project.summarize()
+    assert not any('压缩某一页开篇摘要' in system for system in sent)
+    assert result['published'] == ['trials']
+    head = project.summary_head()
+    assert [r['text'][:3] for r in head['raw']['sentences']] == ['第0句']
+    assert head['raw']['details'][0]['text'].startswith('第1句')

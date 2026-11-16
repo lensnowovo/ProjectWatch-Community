@@ -118,7 +118,7 @@ def validate(page, value, sources, *, published=False):
     rows = value.get('sentences')
     if value.get('status') == 'no_material' and rows == [] and value.get('details', []) == []:
         return []
-    if value.get('status') != 'ready' or not isinstance(rows, list) or not (1 if published else 2) <= len(rows) <= 3:
+    if value.get('status') != 'ready' or not isinstance(rows, list) or not 1 <= len(rows) <= 3:
         raise ValueError('invalid page sentences')
     details = value.get('details', [])
     if not isinstance(details, list):

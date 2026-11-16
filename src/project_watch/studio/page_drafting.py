@@ -57,7 +57,7 @@ def _key(source):
     return digest([source.get('evidence_version_id'), source.get('text')])[:24]
 
 
-CONDENSE_SYSTEM = '''你压缩某一页开篇摘要的正文。sentences 合计超过260字。请改写为两句、合计不超过170字（含标点），每句不超过85字；
+CONDENSE_SYSTEM = '''你压缩某一页开篇摘要的正文。sentences 超过260字。请改写为一至两句、合计不超过170字（含标点），每句不超过85字；
 只保留最重要的判断，以及主体、产品、阶段和期间，次要的数字和例子删去；不得新增事实，不得改动数字；每句 refs 只能使用原句中出现的编号。
 输出 JSON：{"sentences": [{"text": "…", "refs": ["S1"]}]}'''
 
@@ -116,15 +116,17 @@ def _index(sources, codes):
 
 
 def _fit(value):
-    """Opening sentences over the length limit move, last first, to the front of details (two stay).
+    """Opening sentences over the length limit move, last first, to the front of details (one stays).
 
-    Live syntheses wrote three dense sentences of 300-460 characters; their facts are kept.
+    Live syntheses wrote dense openings of 300-460 characters, and a model asked to shorten them
+    overshot by a quarter; their facts are kept in details. Only a single sentence over the limit
+    on its own is sent back to be condensed.
     """
     rows, details = value.get('sentences'), value.get('details', [])
     if value.get('status') != 'ready' or not isinstance(rows, list) or not isinstance(details, list):
         return value
     rows, details = list(rows), list(details)
-    while len(rows) > 2 and sum(len(r.get('text') or '') for r in rows if isinstance(r, dict)) > SENTENCE_CHARS:
+    while len(rows) > 1 and sum(len(r.get('text') or '') for r in rows if isinstance(r, dict)) > SENTENCE_CHARS:
         details.insert(0, rows.pop())
     return {**value, 'sentences': rows, 'details': details}
 
@@ -245,7 +247,7 @@ def draft(execution, llm, company, sources, targets, contracts, system, guard, *
         else:
             failures[page] = key
 
-    # Opening sentences still too long after moving one to details: one request rewrites them shorter.
+    # A single opening sentence still over the limit: one request rewrites it shorter.
     long = [page for page in written if page in drafts and _long(drafts[page])]
     shorter = [(CONDENSE + ':' + page + ':' + digest(drafts[page])[:24], CONDENSE_SYSTEM,
                 json.dumps(dict(page_contract=contracts[page], sentences=drafts[page]['sentences']), ensure_ascii=False),

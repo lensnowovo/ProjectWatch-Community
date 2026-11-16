@@ -308,8 +308,9 @@ def test_concise_body_and_details_have_separate_evidence_checks(host):
     assert 'trials.details.0.text' in fields
     assert shown['trials']['details'][0]['text'] == draft()['details'][0]['text']
     assert 'RECRUITING' not in shown['trials']['text']
+    # One opening sentence is enough: over-long openings keep their first sentence, the rest move to details.
+    assert pages.validate('trials', dict(status='ready', sentences=draft()['sentences'][:1]), host[2])
     for value in [
-        dict(status='ready', sentences=draft()['sentences'][:1]),
         dict(status='ready', sentences=[dict(text='x'*261, refs=['S1']), draft()['sentences'][1]]),
         dict(status='no_material', sentences=[], details=draft()['details']),
         {**draft(), 'details':[dict(text='Unsupported parameter', refs=['missing'])]},
