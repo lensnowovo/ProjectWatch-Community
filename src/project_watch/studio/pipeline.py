@@ -2163,18 +2163,21 @@ class Pipeline:
             if project and project['activated'] and project['status'] == 'paused':
                 # Parked with the finished batches checkpointed; resume continues at this batch.
                 raise ModelError('项目已暂停，恢复后继续', code='project_paused')
-            current = current_inputs()
-            if (inputs['binding'] != self.model_binding() or not project or not project['activated']
-                    or project['status'] != 'active' or not current):
+            if inputs['binding'] != self.model_binding() or not project or not project['activated'] or project['status'] != 'active':
                 raise ModelError('分析输入或授权已变化，请按当前资料重新开始')
-            if current['input_version'] != inputs['input_version']:
-                # Only the material moved on: a newer job covers it.
-                raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
             stage = f'{prefix}_proposal_{index}'
             proposal = execution.read_checkpoint(stage) if execution else None
             if proposal is None and execution and len(batches) == 1:
                 proposal = execution.read_checkpoint(prefix + '_proposal')  # completed legacy single batch
             if proposal is None:
+                # Before paying for a batch, confirm the material has not moved on. A saved batch is
+                # replayed without rebuilding every input (seconds each); applying checks it again.
+                current = current_inputs()
+                if not current:
+                    raise ModelError('分析输入或授权已变化，请按当前资料重新开始')
+                if current['input_version'] != inputs['input_version']:
+                    # Only the material moved on: a newer job covers it.
+                    raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
                 def extract(parts=parts):
                     return llm.json(system, json.dumps(payload({**inputs, 'parts': parts}), ensure_ascii=False), max_tokens=8000)
                 if execution and isolate_failures:
@@ -2454,6 +2457,9 @@ class Pipeline:
             self._execution_state.current = previous_execution
 
 
+ANALYSIS_MIN_SECONDS = 30  # least time between input-change scheduling passes
+
+
 class StudioWorker:
     """Background job runner; schedules internal and external work.
 
@@ -2561,7 +2567,13 @@ class StudioWorker:
         for project_id in sig.due_external(store, self.pipeline.monitor, settings.refresh_hours):
             spine.request_round(store, project_id, 'scheduled', automatic=True)
         stamp = self._analysis_input_stamp(settings)
-        changed = stamp != self._analysis_stamp or time.monotonic() - self._analysis_checked_at >= 60
+        # data_version moves on any other connection's write, heartbeats included, so it changed on
+        # nearly every 5 s pass: rebuilding every project's details, business and competition inputs
+        # each time kept a core busy and slowed running jobs about twentyfold. A change is acted on
+        # at most every ANALYSIS_MIN_SECONDS; the 60 s fallback stays.
+        elapsed = time.monotonic() - self._analysis_checked_at
+        changed = ((stamp != self._analysis_stamp and (self._analysis_stamp is None or elapsed >= ANALYSIS_MIN_SECONDS))
+                   or elapsed >= 60)
         projects = store.list_projects()
         if changed:
             for project in projects:

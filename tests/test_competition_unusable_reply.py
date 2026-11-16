@@ -190,3 +190,30 @@ def test_a_partial_profile_is_replaced_by_a_later_complete_read(tmp_path):
     # A complete record for the same input version is final.
     again = profiles.apply(pid, current, None, batch_outputs=[{'products': []}], unread_batches=1)
     assert again == complete
+
+
+def test_saved_batches_replay_without_rebuilding_inputs(tmp_path):
+    pipeline, pid, inputs = _batches(tmp_path)
+    execution = _Checkpoints()
+    pipeline._execution_state.current = execution
+    builds = []
+
+    def current():
+        builds.append(1)
+        return inputs
+    try:
+        pipeline._extract_all_parts(pid, inputs, _Model(None, ''), 'system', lambda value: {'parts': value['parts']},
+                                    'peer_x', current)
+        assert len(builds) == 3  # checked before each paid batch
+        builds.clear()
+        moved = {**inputs, 'input_version': 'v2'}
+        proposals = pipeline._extract_all_parts(pid, inputs, _Model(None, ''), 'system',
+                                                lambda value: {'parts': value['parts']}, 'peer_x', lambda: moved)
+        assert builds == [] and [p['batch'] for p in proposals] == [0, 1, 2]  # replayed, nothing rebuilt or sent
+        execution.data.pop('peer_x_proposal_2')
+        with pytest.raises(ModelError) as raised:  # a batch still to pay for checks the material first
+            pipeline._extract_all_parts(pid, inputs, _Model(None, ''), 'system',
+                                        lambda value: {'parts': value['parts']}, 'peer_x', lambda: moved)
+        assert raised.value.code == 'input_superseded'
+    finally:
+        pipeline._execution_state.current = None

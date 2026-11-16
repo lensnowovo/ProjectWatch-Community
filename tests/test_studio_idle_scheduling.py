@@ -23,7 +23,6 @@ def scheduled(tmp_path, monkeypatch):
     calls = []
     for kind in ('business', 'details', 'competition'):
         monkeypatch.setattr(p, 'schedule_' + kind, lambda pid, kind=kind: calls.append(kind))
-    monkeypatch.setattr(p, 'schedule_insight', lambda *_: None)
     worker = StudioWorker(p)
     try:
         yield p, pid, settings, worker, calls
@@ -57,3 +56,26 @@ def test_manual_worker_observer_closed_on_app_shutdown(tmp_path):
         assert worker._analysis_db is not None
     assert worker._analysis_db is None
     assert worker._analysis_stamp is None
+
+
+def test_a_data_change_reschedules_at_most_every_thirty_seconds(scheduled):
+    from project_watch.studio import pipeline as module
+    p, _pid, _settings, worker, calls = scheduled
+    worker.schedule()
+    assert sorted(calls) == ['business', 'competition', 'details']  # the first pass always runs
+    calls.clear()
+
+    def write():  # any other connection's commit (a heartbeat, a checkpoint) moves data_version
+        with p.store._connect() as db:
+            db.execute("INSERT INTO studio_state VALUES ('synthetic_touch',?) ON CONFLICT(key) DO UPDATE "
+                       "SET value=excluded.value", (str(len(calls)) + str(worker._analysis_checked_at),))
+    write()
+    worker.schedule()
+    assert calls == []  # within the interval nothing is rebuilt
+    worker._analysis_checked_at -= module.ANALYSIS_MIN_SECONDS
+    worker.schedule()
+    assert sorted(calls) == ['business', 'competition', 'details']
+    calls.clear()
+    worker._analysis_checked_at -= 60  # without any change the periodic pass still runs
+    worker.schedule()
+    assert sorted(calls) == ['business', 'competition', 'details']
