@@ -178,7 +178,10 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
             results[key] = FAILED
         else:
             pending.append(request)
-    failed = sum(value is FAILED for value in results.values())
+    # A content refusal repeats for that material whatever happens; it is not provider trouble and
+    # does not count toward stopping the remaining requests.
+    failed = sum(value is FAILED and failures.get('draft:' + key, {}).get('code') != 'model_content_rejected'
+                 for key, value in results.items())
     waves = [pending[:1]] + [pending[i:i + PARALLEL] for i in range(1, len(pending), PARALLEL)]
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         for items in waves:
@@ -199,7 +202,7 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
                         continue
                     failures['draft:' + key] = {'status': 'blocked', 'code': exc.code}
                     results[key] = FAILED
-                    failed += 1
+                    failed += exc.code != 'model_content_rejected'
                     continue
                 execution.checkpoint_chunked(key, {'value': value})
                 results[key] = value

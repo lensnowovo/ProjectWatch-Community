@@ -65,8 +65,26 @@ CONDENSE_SYSTEM = '''你压缩某一页开篇摘要的正文。sentences 超过2
 输出 JSON：{"sentences": [{"text": "…", "refs": ["S1"]}]}'''
 
 
+# Bump when the meaning of a saved fact changes, so later jobs stop carrying old ones. Prompt wording
+# is deliberately not part of it: a format fix to the prompts made every project re-read everything.
+FACTS_VERSION = 1
+
+
 def _signature(targets, contracts):
-    return digest([VERSION, list(targets), {t: contracts[t] for t in targets}, EXTRACT_SYSTEM, MERGE_SYSTEM])
+    return digest([VERSION, FACTS_VERSION, list(targets), {t: contracts[t] for t in targets}])
+
+
+def _carries(state, signature, targets):
+    """Facts this job may carry: the same pages, page definitions and fact version.
+
+    States saved before FACTS_VERSION existed hashed the prompt text instead; their facts have the
+    same meaning, so the same page list is enough.
+    """
+    if not isinstance(state, dict):
+        return False
+    if 'facts_version' in state:
+        return state['facts_version'] == FACTS_VERSION and state.get('signature') == signature
+    return FACTS_VERSION == 1 and state.get('version') == VERSION and sorted(state.get('pages') or ()) == sorted(targets)
 
 
 def enabled(execution):
@@ -89,7 +107,7 @@ def freeze(execution, targets, contracts, *, allowed):
                               (STATE, job['project_id'], job['kind'], job['id'], job['id'], PRIOR_SCAN)).fetchall()
             for (job_id,) in rows:
                 state = JobExecution(execution.store, {'id': job_id}).read_checkpoint(STATE, db=db)
-                if isinstance(state, dict) and state.get('signature') == signature:
+                if _carries(state, signature, targets):
                     prior = job_id
                     break
     execution.checkpoint(MODE, {'version': VERSION, 'enabled': bool(allowed), 'prior': prior})
@@ -181,10 +199,15 @@ def draft(execution, llm, company, sources, targets, contracts, system, guard, *
     results = sd._send(execution, llm, requests, lambda value, codes: sd._clean(value, targets, codes, fields),
                        failure_limit=sd.FAILURE_LIMIT)
     found, missed = [], 0
+    refused = {key for key, outcome in (execution.read_checkpoint(FAILURES) or {}).items()
+               if outcome.get('code') == 'model_content_rejected'}
     for (key, *_), batch in zip(requests, batches, strict=True):
         if isinstance(results[key], list):
             covered |= {keys[code] for code in batch}
             found.extend(results[key])
+        elif 'draft:' + key in refused:
+            # The provider refuses this material every time: read, with no facts, rather than retried each round.
+            covered |= {keys[code] for code in batch}
         else:
             missed += len(batch)
 
@@ -202,7 +225,8 @@ def draft(execution, llm, company, sources, targets, contracts, system, guard, *
                                prompt=MERGE_SYSTEM)
         pools[page] = pool
         kept[page] = [dict(text=p['text'], refs=[keys[c] for c in p['refs']], weight=p['weight']) for p in pool]
-    execution.checkpoint_chunked(STATE, {'version': VERSION, 'signature': _signature(targets, contracts),
+    execution.checkpoint_chunked(STATE, {'version': VERSION, 'facts_version': FACTS_VERSION,
+                                         'signature': _signature(targets, contracts),
                                          'fragments': sorted(covered), 'pages': kept})
 
     # What a page is written from: its facts, and how they are written (prompt, contract, model binding).

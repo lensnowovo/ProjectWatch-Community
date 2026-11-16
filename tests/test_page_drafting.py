@@ -344,3 +344,37 @@ def test_an_empty_merge_reply_never_erases_the_group(project, monkeypatch):
     _, result, calls = project.summarize()
     [synthesis] = of(calls, SYNTHESIS)
     assert synthesis['candidates'] and result['published'] == ['trials']
+
+
+def test_facts_saved_under_other_prompt_wording_are_still_carried(project, monkeypatch):
+    project.add(2)
+    first, _, _ = project.summarize()
+    state = first.read_checkpoint(pd.STATE)
+    legacy = {k: v for k, v in state.items() if k != 'facts_version'}
+    legacy['signature'] = 'a digest of older prompt text'
+    first.checkpoint_chunked(pd.STATE, legacy)  # as saved before FACTS_VERSION existed
+    monkeypatch.setattr(pd, 'EXTRACT_SYSTEM', pd.EXTRACT_SYSTEM + '\n（措辞调整）')
+    second, _, calls = project.summarize()
+    assert second.read_checkpoint(pd.MODE)['prior'] == first.job['id'] and not of(calls, EXTRACT)
+    monkeypatch.setattr(pd, 'FACTS_VERSION', pd.FACTS_VERSION + 1)  # a change in what a fact means
+    third, _, calls = project.summarize()
+    assert third.read_checkpoint(pd.MODE)['prior'] is None and len(of(calls, EXTRACT)) == 1
+
+
+def test_refused_material_counts_as_read_and_does_not_stop_the_rest(project, monkeypatch):
+    project.add(12)
+    plain = project.respond
+    refused = []
+
+    def refuse_first_two(system, user, **kwargs):
+        if EXTRACT in system and len(refused) < 2:
+            refused.append(1)
+            raise ModelError('synthetic refusal', code='model_content_rejected')
+        return plain(system, user, **kwargs)
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=refuse_first_two), None))
+    _, result, calls = project.summarize()
+    assert len(refused) == 2 and len(of(calls, EXTRACT)) == 4  # all six batches sent; two refused
+    assert 'draft_failure' not in result
+    project.add(1)
+    _, _, calls = project.summarize()
+    assert len(of(calls, EXTRACT)) == 1  # only the new material; refused material is not retried
