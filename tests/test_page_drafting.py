@@ -378,3 +378,36 @@ def test_refused_material_counts_as_read_and_does_not_stop_the_rest(project, mon
     project.add(1)
     _, _, calls = project.summarize()
     assert len(of(calls, EXTRACT)) == 1  # only the new material; refused material is not retried
+
+
+def test_an_opening_rejected_in_review_is_rewritten_once_from_verified_details(project, monkeypatch):
+    project.add(2)
+    plain, base = project.respond, project._reviewer
+    repairs = []
+
+    def respond(system, user, **kwargs):
+        if '为某一页重写开篇正文' in system:
+            facts = json.loads(user)['facts']
+            repairs.append(facts)
+            return {'sentences': [dict(text='重写：合成试验仍在招募。', refs=facts[0]['refs'])]}
+        return plain(system, user, **kwargs)
+
+    def reviewer(*args):
+        review = base(*args)
+
+        def strict(system, payload):
+            response = review(system, payload)
+            for check in response.get('checks', []):
+                text = payload['fields'].get(check['field'], '')
+                if '.sentences.' in check['field'] and not text.startswith('重写'):
+                    check.update(status='insufficient', evidence=[])  # the written openings fail
+            return response
+        strict.prepare = review.prepare
+        return strict
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=respond), None))
+    monkeypatch.setattr(pages.analyze_job, '_reviewer', reviewer)
+    _, result, _ = project.summarize()
+    assert len(repairs) == 1 and result['pages']['trials'] == 'repaired_approved'
+    assert result['published'] == ['trials'] and result['status'] == 'completed'
+    head = project.summary_head()
+    assert [r['text'] for r in head['raw']['sentences']] == ['重写：合成试验仍在招募。'] and head['raw']['details']
