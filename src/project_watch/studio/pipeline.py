@@ -388,6 +388,8 @@ def guard_filing(item: dict, result: dict, names: list[str]) -> dict:
 # Each triaged item needs roughly 150–250 output tokens (summary, impact, tags). 20 items stay well
 # inside the budget; a truncated answer is split and retried rather than failing the update.
 TRIAGE_BATCH = 20
+# A screening batch ending in one of these stays visible unassessed; the round's other batches go on.
+TRIAGE_ISOLATED = frozenset({'model_content_rejected', 'request_outcome_unknown', 'unknown_not_resent', 'model_timeout'})
 LANDSCAPE_MIN_HOURS = 6  # competition/industry views refresh after new related events, at most this often
 TRIAGE_MAX_TOKENS = 8000
 
@@ -1350,13 +1352,20 @@ class Pipeline:
             try:
                 answered = self._triage_results(llm, context, batch, internal_evidence=internal_evidence)
             except ModelError as exc:
-                # Never resent or split: the refused batch stays visible, marked unassessed.
-                if exc.code != 'model_content_rejected':
+                # Never resent or split: the batch stays visible, marked unassessed, and the other
+                # batches are still screened. A reply cut off mid-stream (outcome unknown) or timed
+                # out used to end screening for the round, and its remaining items were never
+                # screened afterwards. Other errors (account, backoff, budget, pause) still stop.
+                if exc.code not in TRIAGE_ISOLATED:
                     raise
+                refused = exc.code == 'model_content_rejected'
                 self.store.save_triage([{"id": b["id"], "relevant": True, "importance": "routine",
                                          "summary": b["title"][:200],
-                                         "impact": "模型服务拒绝分析这批资料，未经 AI 筛选；原样保留供你查看",
-                                         "triage_binding": {"version": 1, "status": "model_rejected"}} for b in batch])
+                                         "impact": ("模型服务拒绝分析这批资料，未经 AI 筛选；原样保留供你查看" if refused
+                                                    else "模型回复中断，未经 AI 筛选；原样保留供你查看，未自动重发"),
+                                         "triage_binding": {"version": 1, "status": "model_rejected" if refused else "model_cut_off",
+                                                            **({} if refused else {"code": exc.code})}}
+                                        for b in batch])
                 continue
             for r in answered:
                 if isinstance(r, dict) and r.get("id") in by_id:

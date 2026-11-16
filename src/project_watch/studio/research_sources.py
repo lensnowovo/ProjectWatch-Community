@@ -27,7 +27,8 @@ class SourceRevisionChanged(ValueError):
 # Kept visible but not reviewed: the model's reply could not be bound to the
 # source (missing quote, title/quote mismatch, duplicate id), no model was
 # configured, or the provider refused the batch.
-UNREVIEWED = frozenset({'missing_binding', 'title_mismatch', 'quote_mismatch', 'duplicate_id', 'no_model', 'model_rejected'})
+UNREVIEWED = frozenset({'missing_binding', 'title_mismatch', 'quote_mismatch', 'duplicate_id', 'no_model', 'model_rejected',
+                        'model_cut_off'})
 
 
 def review_state(triaged, raw_extra):

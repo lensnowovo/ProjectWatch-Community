@@ -125,3 +125,31 @@ def test_a_failed_open_batch_is_marked_and_not_resent_on_resume(tmp_path):
     pipeline._execution_state.current = JobExecution(pipeline.store, job)
     assert pipeline.prefilter_bodies(*args) == first
     assert llm.calls == 1
+
+
+@pytest.mark.parametrize('code', ['request_outcome_unknown', 'unknown_not_resent', 'model_timeout'])
+def test_a_cut_off_triage_batch_stays_unassessed_and_the_rest_is_screened(tmp_path, code):
+    import re
+
+    store, project, pipeline = _setup(tmp_path, 25)
+
+    class CutOnce:
+        ready = True
+
+        def __init__(self):
+            self.calls = 0
+
+        def json(self, system, user, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise ModelError('synthetic stream cut', code=code)
+            ids, titles = re.findall(r"id=([0-9a-f]+)", user), re.findall(r"标题：(.*)", user)
+            return {"results": [{"id": i, "source_title": t, "source_quote": t, "relevant": True,
+                                 "importance": "notable", "summary": "s", "impact": "i"}
+                                for i, t in zip(ids, titles, strict=True)]}
+    llm = CutOnce()
+    pipeline.triage(project.id, llm, store.get_project(project.id), {"competitors": []}, lambda _: None)
+    items = store.list_items(project_id=project.id, include_dismissed=True)
+    assert llm.calls == 2 and store.untriaged(project.id) == []  # the cut batch is not resent
+    assert sum('中断' in i['impact'] for i in items) == 20
+    assert sum(i['importance'] == 'notable' for i in items) == 5

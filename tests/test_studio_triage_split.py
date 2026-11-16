@@ -107,7 +107,7 @@ def test_malformed_singleton_is_not_silently_assessed(tmp_path):
     assert model.calls == [1] and len(store.untriaged(project.id)) == 1
 
 
-@pytest.mark.parametrize("code", ["model_access_denied", "request_outcome_unknown", "provider_backoff", "request_budget"])
+@pytest.mark.parametrize("code", ["model_access_denied", "provider_backoff", "request_budget"])
 def test_non_content_errors_are_not_bisected(tmp_path, code):
     store, project, pipeline = _setup(tmp_path, 5)
 

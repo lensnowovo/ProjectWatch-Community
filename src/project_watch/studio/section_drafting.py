@@ -281,6 +281,16 @@ def _trim(points, targets, pool=None):
     return [points[i] for i in sorted(keep)]
 
 
+def _single(value, targets, fields=None):
+    """A merge over one target belongs to it (and to its only field), whatever the reply called them."""
+    points = value.get('points') if isinstance(value, dict) else value
+    if len(targets) != 1 or not isinstance(points, list):
+        return value
+    only = (fields or FIELDS).get(targets[0], ())
+    fixed = {'section': targets[0], **({'field': only[0]} if len(only) == 1 else {})}
+    return [{**p, **fixed} if isinstance(p, dict) else p for p in points]
+
+
 def _consolidate(execution, llm, company, targets, points, *, fields=None, pool=None, prompt=None):
     """Merge candidates in rounds until they fit one synthesis request."""
     prompt = prompt or MERGE_SYSTEM + '\n' + _POINTS
@@ -293,11 +303,13 @@ def _consolidate(execution, llm, company, targets, points, *, fields=None, pool=
         requests = [(MERGE + ':' + str(level) + ':' + str(i) + ':' + digest([targets, group])[:24], prompt,
                      json.dumps(dict(company=company, candidates=_nested(group, targets)), ensure_ascii=False),
                      _codes(group), 8192) for i, group in enumerate(groups)]
-        results = _send(execution, llm, requests, lambda value, codes: _clean(value, targets, codes, fields))
+        results = _send(execution, llm, requests, lambda value, codes: _clean(_single(value, targets, fields), targets, codes, fields))
         merged = []
         for (key, *_), group in zip(requests, groups, strict=True):
             value = results[key]
-            merged.extend(value if isinstance(value, list) else group)  # an unmerged group passes up as is
+            # An unmerged group passes up as is, and so does one whose merge kept nothing: a reply
+            # that named its points wrongly once erased a page's every fact.
+            merged.extend(value if isinstance(value, list) and value else group)
         merged = _order(merged, targets, fields)
         if _size(merged, targets) >= _size(points, targets):
             break

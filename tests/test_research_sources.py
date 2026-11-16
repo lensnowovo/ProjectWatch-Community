@@ -195,6 +195,7 @@ def test_review_state_separates_confirmed_from_unreviewed_fallbacks():
     assert review_state(False, bound) == 'pending'
     assert review_state(True, bound) == 'confirmed'
     assert review_state(True, '{}') == 'confirmed'  # triaged before bindings existed
-    for status in ('quote_mismatch', 'title_mismatch', 'missing_binding', 'duplicate_id', 'no_model', 'model_rejected'):
+    for status in ('quote_mismatch', 'title_mismatch', 'missing_binding', 'duplicate_id', 'no_model', 'model_rejected',
+                   'model_cut_off'):
         assert review_state(True, json.dumps({'triage_binding': {'status': status}})) == 'unreviewed'
     assert review_state(True, 'not json') == 'confirmed'
