@@ -22,6 +22,7 @@ MODE = 'page-summary-v2:extract-mode'
 STATE = 'page-summary-v2:extracted'
 EXTRACT = 'page-summary-v2:x'
 SYNTHESIS = 'page-summary-v2:synth'
+CONDENSE = 'page-summary-v2:condense'
 FIELD = 'facts'
 POOL_CHARS = 16000  # serialized facts per page for one merge or synthesis request
 PRIOR_SCAN = 20
@@ -54,6 +55,11 @@ sentences 只写最重要的两至三句，合计严格不超过260字（含标�
 def _key(source):
     """A source's identity across jobs: the same evidence version with the same text."""
     return digest([source.get('evidence_version_id'), source.get('text')])[:24]
+
+
+CONDENSE_SYSTEM = '''你压缩某一页开篇摘要的正文。sentences 合计超过260字。请改写为两至三句、合计不超过220字（含标点），
+保留最重要的判断，以及主体、产品、阶段和期间；不得新增事实，不得改动数字；每句 refs 只能使用原句中出现的编号。
+输出 JSON：{"sentences": [{"text": "…", "refs": ["S1"]}]}'''
 
 
 def _signature(targets, contracts):
@@ -121,6 +127,21 @@ def _fit(value):
     while len(rows) > 2 and sum(len(r.get('text') or '') for r in rows if isinstance(r, dict)) > SENTENCE_CHARS:
         details.insert(0, rows.pop())
     return {**value, 'sentences': rows, 'details': details}
+
+
+def _cited_only(value):
+    """Rows left without a citation (all of theirs were outside the candidates) are dropped."""
+    out = dict(value)
+    for group in ('sentences', 'details'):
+        rows = value.get(group)
+        if isinstance(rows, list):
+            out[group] = [r for r in rows if not (isinstance(r, dict) and isinstance(r.get('refs'), list) and not r['refs'])]
+    return out
+
+
+def _long(value):
+    return value.get('status') == 'ready' and sum(
+        len(r.get('text') or '') for r in value.get('sentences') or () if isinstance(r, dict)) > SENTENCE_CHARS
 
 
 def draft(execution, llm, company, sources, targets, contracts, system, guard, *, validate, prefix, binding):
@@ -209,18 +230,48 @@ def draft(execution, llm, company, sources, targets, contracts, system, guard, *
             value = None  # a single page is often answered unwrapped; anything else is not a page
         if not isinstance(value, dict):
             raise sd._shape_error('page summary draft must be an object')
-        value = _fit(sd._restrict_refs(value, allowed))
+        value = _fit(_cited_only(sd._restrict_refs(value, allowed)))
         try:
             validate(page, value, sources)
         except ValueError as exc:
-            raise sd._shape_error(str(exc)) from exc
+            if not _long(value):  # over the length limit is the one thing a condensing request repairs
+                raise sd._shape_error(str(exc)) from exc
         return value
     results = sd._send(execution, llm, requests, accept)
-    blocked = execution.read_checkpoint(FAILURES) or {}
     failures = {}
     for (key, _, _, (page, _), _) in requests:
         if isinstance(results[key], dict):
             drafts[page] = results[key]
         else:
-            failures[page] = (blocked.get('draft:' + key) or {}).get('code', 'request_outcome_unknown')
+            failures[page] = key
+
+    # Opening sentences still too long after moving one to details: one request rewrites them shorter.
+    long = [page for page in written if page in drafts and _long(drafts[page])]
+    shorter = [(CONDENSE + ':' + page + ':' + digest(drafts[page])[:24], CONDENSE_SYSTEM,
+                json.dumps(dict(page_contract=contracts[page], sentences=drafts[page]['sentences']), ensure_ascii=False),
+                (page, sd._cited(drafts[page]['sentences'])), 2048) for page in long]
+
+    def condensed(value, scope):
+        page, allowed = scope
+        rows = value.get('sentences') if isinstance(value, dict) else None
+        if not isinstance(rows, list):
+            raise sd._shape_error('condensed sentences must be a list')
+        candidate = _cited_only({**drafts[page], 'sentences': sd._restrict_refs(rows, allowed)})
+        try:
+            validate(page, candidate, sources)
+        except ValueError as exc:
+            raise sd._shape_error(str(exc)) from exc
+        return candidate
+    if shorter:
+        guard()
+        results.update(sd._send(execution, llm, shorter, condensed))
+    for key, *_, (page, _), _ in shorter:
+        drafts.pop(page)
+        if isinstance(results[key], dict):
+            drafts[page] = results[key]
+        else:
+            failures[page] = key
+    blocked = execution.read_checkpoint(FAILURES) or {}
+    failures = {page: (blocked.get('draft:' + key) or {}).get('code', 'request_outcome_unknown')
+                for page, key in failures.items()}
     return drafts, unchanged, failures, {page: digests[page] for page in drafts}, missed

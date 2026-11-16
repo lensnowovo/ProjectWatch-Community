@@ -262,3 +262,30 @@ def test_an_unwrapped_page_with_long_sentences_is_kept_with_its_facts(project, m
     assert result['published'] == ['trials'] and 'failures' not in result
     head = project.summary_head()
     assert len(head['raw']['sentences']) == 2 and head['raw']['details'][0]['text'].startswith('第2句')
+
+
+def test_opening_sentences_still_too_long_are_condensed_once(project, monkeypatch):
+    project.add(2)
+    plain = project.respond
+    condensing = []
+
+    def long_then_short(system, user, **kwargs):
+        if '压缩某一页开篇摘要' in system:
+            rows = json.loads(user)['sentences']
+            condensing.append(rows)
+            return {'sentences': [dict(text='合成试验仍在招募。', refs=rows[0]['refs']),
+                                  dict(text='研究处于入组阶段。', refs=rows[1]['refs'])]}
+        value = plain(system, user, **kwargs)
+        if SYNTHESIS in system:
+            [(_, body)] = value.items()
+            ref = body['sentences'][0]['refs']
+            body['sentences'] = [dict(text=f'第{i}句' + '合成试验仍在招募受试者。' * 12, refs=ref) for i in range(3)]
+            body['details'].append(dict(text='引用了候选之外的来源。', refs=['S999']))  # loses its only citation
+        return value
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=long_then_short), None))
+    _, result, _ = project.summarize()
+    assert len(condensing) == 1 and len(condensing[0]) == 2  # the third sentence already moved to details
+    assert result['published'] == ['trials'] and 'failures' not in result
+    head = project.summary_head()
+    assert [r['text'] for r in head['raw']['sentences']] == ['合成试验仍在招募。', '研究处于入组阶段。']
+    assert all(r['text'] != '引用了候选之外的来源。' for r in head['raw']['details'])

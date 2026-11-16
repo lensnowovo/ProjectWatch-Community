@@ -71,9 +71,11 @@ class EvidenceStore:
         self.store = store
         with closing(store._connect()) as db, db:
             db.executescript(SCHEMA)
+            # Every source's latest version has a head. Grouped over the (project_id, source_key, ...)
+            # unique index: the correlated MAX form took 4 minutes per start on 16k versions.
             db.execute("INSERT OR IGNORE INTO studio_evidence_heads SELECT e.project_id,e.source_key,e.id "
-                       "FROM studio_evidence_versions e WHERE e.seq=(SELECT MAX(v.seq) FROM studio_evidence_versions v "
-                       "WHERE v.project_id=e.project_id AND v.source_key=e.source_key)")
+                       "FROM (SELECT MAX(seq) AS seq FROM studio_evidence_versions GROUP BY project_id,source_key) g "
+                       "JOIN studio_evidence_versions e ON e.seq=g.seq")
             db.execute("INSERT OR IGNORE INTO studio_evidence_cursor VALUES (1,?)", (secrets.token_hex(32),))
             self._cursor_secret = db.execute("SELECT secret FROM studio_evidence_cursor").fetchone()[0].encode()
         from project_watch.studio.dependencies import DependencyStore
