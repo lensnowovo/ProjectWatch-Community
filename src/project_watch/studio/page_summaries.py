@@ -634,7 +634,8 @@ def run(pipeline, execution, *, targets=None):
     mode_key = PROTOCOL + ':retain-candidates'
     if original is None:
         # Only a whole public reading started under the current protocol reads incrementally.
-        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and whole and not internal)
+        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and whole and not internal,
+                             binding=protocol['binding'] if modern else None)
         execution.checkpoint(mode_key, True)
         execution.checkpoint(PROTOCOL + ':grouped', True)
         execution.checkpoint(PROTOCOL + ':progressive', True)
@@ -823,10 +824,13 @@ def run(pipeline, execution, *, targets=None):
                     outcomes[page] = 'no_material'
                     continue
                 try:
+                    verified = []
                     for candidate, outcome, reviewed in candidate_reviews(execution, context, page, candidates,
                                                                           sources, reviewer, protocol['binding'], guard,
                                                                           verdicts):
                         outcomes[page] = outcome['status']
+                        # The newest candidate with verified details drives a repair (candidates come newest first).
+                        verified = verified or ((outcome.get('selected') or {}).get('details') or [])
                         guard()
                         accepted = publish(execution, context, page, candidate, sources, outcome,
                                            extra={'pool': pools[page]} if page in pools else None)
@@ -836,6 +840,23 @@ def run(pipeline, execution, *, targets=None):
                             execution.yield_if_due()
                         if accepted:
                             break
+                    if extracting and outcomes[page] == 'rejected' and verified:
+                        # Every opening sentence failed but details passed: write the opening once
+                        # from those details and review it again in full.
+                        guard()
+                        repaired = page_drafting.repair(execution, llm, page, CONTRACTS[page], verified, sources,
+                                                        validate)
+                        if repaired is not None:
+                            for candidate, outcome, reviewed in candidate_reviews(
+                                    execution, context, page, [repaired], sources, reviewer, protocol['binding'],
+                                    guard, verdicts):
+                                outcomes[page] = 'repaired_' + outcome['status'] if outcome['status'] == 'approved'                                     else outcome['status']
+                                guard()
+                                if publish(execution, context, page, candidate, sources, outcome,
+                                           extra={'pool': pools[page]} if page in pools else None):
+                                    published.append(page)
+                                if reviewed:
+                                    execution.yield_if_due()
                 except ModelError as exc:
                     hold(page, exc)
                     outcomes[page] = 'failed'
@@ -895,7 +916,7 @@ def run(pipeline, execution, *, targets=None):
                 if publish(execution, context, page, candidate, sources, outcome):
                     published.append(page)
                     queues[page].clear()
-        result = dict(status='completed' if not draft_failure and not failures and all(s in ('approved', 'no_material', 'unchanged') for s in outcomes.values()) else 'partial',
+        result = dict(status='completed' if not draft_failure and not failures and all(s in ('approved', 'repaired_approved', 'no_material', 'unchanged') for s in outcomes.values()) else 'partial',
                       pages=outcomes, published=list(dict.fromkeys(published)), snapshot_id=context['id'])
         if failures:
             result['failures'] = failures
