@@ -18,18 +18,18 @@ def connect(path):
 def slow_writer(db):
     with db:
         db.execute('INSERT INTO t VALUES (1)')
-        time.sleep(0.12)
+        time.sleep(1.2)
 
 
 def test_a_slow_write_transaction_is_logged_with_its_origin(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr(write_fencing, 'SLOW_WRITE_SECONDS', 0.1)
+    monkeypatch.setattr(write_fencing, 'SLOW_WRITE_SECONDS', 1.0)
     db = connect(tmp_path / 'db.sqlite3')
     with caplog.at_level(logging.WARNING, logger=write_fencing.__name__):
         with db:
             db.execute('INSERT INTO t VALUES (0)')  # quick: not logged
         slow_writer(db)
         db.execute('INSERT INTO t VALUES (2)')
-        time.sleep(0.12)
+        time.sleep(1.2)
         db.rollback()
     messages = [r.getMessage() for r in caplog.records]
     assert len(messages) == 2 and all('write transaction held' in m for m in messages)
