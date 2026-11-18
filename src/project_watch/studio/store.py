@@ -1521,10 +1521,12 @@ class StudioStore:
 
         with closing(self._connect()) as db, db:
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (job_id,)).fetchone()
-            round_job = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN ('collect','analyze','report')",
+            round_job = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN "
+                                   "('collect','analyze','report','page_summary','internal_page_summary')",
                                    (job_id,)).fetchone()
             if unknown and not error and not round_job:
-                # Round jobs finish with their unclear requests recorded per source/section.
+                # Round jobs finish with their unclear requests recorded per source/section, and page
+                # summaries per page: a live summary that published 9 of 11 pages showed as failed.
                 error = 'request_outcome_unknown: 已保留已有结果，结果不明的请求不会自动重发'
             model_failure = db.execute("SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND c.kind='model' "
                                        f"AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE} LIMIT 1",
