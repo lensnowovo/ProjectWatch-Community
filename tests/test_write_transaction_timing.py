@@ -73,3 +73,14 @@ def test_other_database_errors_still_fail_the_job(tmp_path, monkeypatch):
     monkeypatch.setattr(p, 'run', lambda job: (_ for _ in ()).throw(sqlite3.OperationalError('no such table: x')))
     assert worker.step()
     assert tuple(status(p, job['id'])) == ('failed', '内部错误：OperationalError')
+
+
+def test_a_long_read_transaction_is_not_timed(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(write_fencing, 'SLOW_WRITE_SECONDS', 0.05)
+    db = connect(tmp_path / 'db.sqlite3')
+    with caplog.at_level(logging.WARNING, logger=write_fencing.__name__):
+        db.execute('BEGIN')  # a consistent read: no write lock under WAL
+        db.execute('SELECT * FROM t').fetchall()
+        time.sleep(0.08)
+        db.rollback()
+    assert not caplog.records

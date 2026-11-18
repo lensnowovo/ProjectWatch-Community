@@ -46,8 +46,15 @@ class FencedConnection(sqlite3.Connection):
     keep_open = False
     _write_began = None
 
-    def _began(self):
-        if self._write_began is None and self.in_transaction:
+    def _began(self, sql):
+        # Only the write lock blocks other writers (WAL): it is taken by BEGIN IMMEDIATE/EXCLUSIVE or
+        # the first write in a deferred transaction. A read transaction (plain BEGIN) is not timed.
+        if self._write_began is not None or not self.in_transaction:
+            return
+        operation = _operation(sql)
+        immediate = operation == 'BEGIN' and re.match(r'\s*BEGIN\s+(IMMEDIATE|EXCLUSIVE)', sql, re.I)
+        if immediate or operation not in {'', 'SELECT', 'EXPLAIN', 'PRAGMA', 'BEGIN', 'SAVEPOINT', 'RELEASE',
+                                          'ROLLBACK', 'COMMIT', 'END', 'WITH'}:
             self._write_began = (time.monotonic(), traceback.extract_stack(limit=10)[:-2])
 
     def _ended(self, closing=False):
@@ -94,7 +101,7 @@ class FencedConnection(sqlite3.Connection):
         try:
             return super().execute(sql, parameters)
         finally:
-            self._began()
+            self._began(sql)
             self._ended()
 
     def executemany(self, sql, parameters):
@@ -102,7 +109,7 @@ class FencedConnection(sqlite3.Connection):
         try:
             return super().executemany(sql, parameters)
         finally:
-            self._began()
+            self._began(sql)
             self._ended()
 
     def cursor(self, factory=FencedCursor):
