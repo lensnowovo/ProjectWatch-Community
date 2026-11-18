@@ -145,9 +145,20 @@ class ReviewFieldAliases:
             checks = value.get('checks')
             if not isinstance(checks, list):
                 raise ValueError('review_checks_required')
+            support = self.payload.get('phase') != 'counterevidence'
+            garbled = support and any(not isinstance(row, dict) for row in checks)
+            if garbled:
+                # Live replies occasionally flatten one check into loose strings. Only the fields
+                # left without a check are affected: they are recorded as not verified.
+                checks = value['checks'] = [row for row in checks if isinstance(row, dict)]
             for row in checks:
                 if not isinstance(row, dict):
                     raise ValueError('review_check_invalid')
+                if support and row.get('status') == 'partial':
+                    # The reviewer used the inference label as a status (about 1% of live
+                    # replies). Partial support is not support.
+                    row['status'] = 'insufficient'
+                    row.setdefault('inference', 'partial')
                 row['field'] = original(row.get('field'))
                 for witness in row.get('evidence', []) if isinstance(row.get('evidence'), list) else []:
                     if not isinstance(witness, dict) or 'quote_id' not in witness:
@@ -158,6 +169,11 @@ class ReviewFieldAliases:
                     # An unknown ID is an unverifiable citation, judged per field in validate_review.
                     witness['ref'], witness['quote'] = (span['ref'], span['quote']) if span else (witness.get('ref'), '')
                     del witness['quote_id']
+            if garbled:
+                covered = {row['field'] for row in checks}
+                checks.extend({'field': path, 'status': 'insufficient', 'inference': 'related',
+                               'reason': 'review reply for this field was malformed; not verified', 'evidence': []}
+                              for path in self.reverse.values() if path not in covered)
         return value
 
 
@@ -249,6 +265,10 @@ def validate_review(value, payload):
         if not isinstance(path, str) or path not in payload['fields'] or path in seen:
             raise ValueError('review_field_coverage_invalid')
         seen.add(path)
+        if status == 'partial':
+            # Saved before decoding mapped it (see ReviewFieldAliases.decode): partial support is not support.
+            row['status'] = status = 'insufficient'
+            row.setdefault('inference', 'partial')
         if status not in ('supported', 'not_factual', 'contradicted', 'insufficient'):
             raise ValueError('review_status_invalid')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
