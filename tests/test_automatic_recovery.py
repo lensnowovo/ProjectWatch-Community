@@ -1,4 +1,5 @@
 """Fault injection with isolated storage; no provider calls or production data."""
+import errno
 import hashlib
 import socket
 import threading
@@ -150,11 +151,21 @@ def test_historical_5xx_is_not_implicitly_replayed(env):
     assert not sent
 
 
+def _winerror(code):
+    error = OSError(code, 'synthetic Windows socket error')
+    error.winerror = code
+    return error
+
+
 @pytest.mark.parametrize('reason,expected', [
     (socket.gaierror(-2, 'synthetic'), 'connection_not_sent'),
     (ConnectionRefusedError(), 'connection_not_sent'),
     (TimeoutError(), 'connection_failed'),
     (ConnectionResetError(), 'connection_failed'),
+    (OSError(errno.EADDRINUSE, 'no free local port'), 'connection_not_sent'),  # only connect() raises these
+    (OSError(errno.EADDRNOTAVAIL, 'address not available'), 'connection_not_sent'),
+    (_winerror(10048), 'connection_not_sent'),
+    (OSError(errno.ENOBUFS, 'no buffer space'), 'connection_failed'),  # can also come from a send
 ])
 def test_transport_only_classifies_proven_pre_send_errors(monkeypatch, reason, expected):
     def open_request(*a, **kw):
