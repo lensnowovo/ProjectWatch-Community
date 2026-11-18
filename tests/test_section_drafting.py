@@ -217,3 +217,10 @@ def test_a_truncated_synthesis_does_not_narrow_the_next_batch_size(project):
     retry = job('running')
     a.freeze_draft_batch(retry, 'b9', fresh=True)
     assert retry.read_checkpoint(a.DRAFT_BATCH) == a.WIDE_BATCH
+
+
+def test_a_wave_cut_off_at_once_counts_once_and_the_rest_is_still_read(project):
+    project.add(12)  # six batches: one alone, then waves of three
+    project.fail = {(EXTRACT, 2), (EXTRACT, 3), (EXTRACT, 4)}  # a network drop cuts the whole first wave
+    project.run('b1')
+    assert len(project.of(EXTRACT)) == 6  # one strike: the last wave is still sent

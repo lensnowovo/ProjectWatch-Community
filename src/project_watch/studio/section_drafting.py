@@ -183,7 +183,12 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
     # does not count toward stopping the remaining requests.
     refusals = sum(value is FAILED and failures.get('draft:' + key, {}).get('code') == 'model_content_rejected'
                    for key, value in results.items())
-    failed = sum(value is FAILED for value in results.values()) - refusals
+    # Failures of one wave are one strike: a network drop cuts every request in flight at once, and
+    # counting each of them stopped a live round after one blip with 196 of 744 fragments read.
+    # Failures saved before waves were recorded count one each.
+    struck = {failures['draft:' + key].get('wave') or key for key, value in results.items()
+              if value is FAILED and failures.get('draft:' + key, {}).get('code') != 'model_content_rejected'}
+    failed = len(struck)
     waves = [pending[:1]] + [pending[i:i + PARALLEL] for i in range(1, len(pending), PARALLEL)]
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         for items in waves:
@@ -203,11 +208,14 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
                         error = error or exc
                         continue
                     # The validation message says which rule an unusable reply broke (diagnostics only).
-                    failures['draft:' + key] = {'status': 'blocked', 'code': exc.code, 'reason': str(exc)[:300]}
+                    failures['draft:' + key] = {'status': 'blocked', 'code': exc.code, 'reason': str(exc)[:300],
+                                                'wave': items[0][0]}
                     results[key] = FAILED
-                    refused = exc.code == 'model_content_rejected'
-                    refusals += refused
-                    failed += not refused
+                    if exc.code == 'model_content_rejected':
+                        refusals += 1
+                    else:
+                        struck.add(items[0][0])
+                        failed = len(struck)
                     continue
                 execution.checkpoint_chunked(key, {'value': value})
                 results[key] = value
