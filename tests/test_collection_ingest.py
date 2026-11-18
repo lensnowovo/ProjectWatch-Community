@@ -247,3 +247,26 @@ def test_failed_source_does_not_block_two_saved_candidates_or_recollect_on_reope
     reopened = CollectionLedger(research.execution, p)
     assert run_collection(reopened, collect=collect, ingest=ingest, guard=research.guard) == coverage
     assert sorted(calls) == ['source-a', 'source-b', 'source-c']
+
+
+def test_two_sources_with_one_url_in_one_unit_stay_one_item(host):
+    research, unit, ingest = host
+    same_url = _item('web', 'Synthetic search hit', trial()['url'], source='Synthetic', snippet='Search excerpt')
+    result = ingest(unit, [trial(), same_url])
+    assert len(rows(research, 'studio_items')) == 1  # the second adopts the item the first created in this write
+    assert len({ref['item_id'] for ref in result['evidence_refs']}) == 1
+
+
+def test_legacy_lookup_does_not_scan_items_inside_the_write(host, monkeypatch):
+    research, unit, ingest = host
+    research.store.add_items(research.project_id, 'trial', [trial(url=f'https://n.example/{i}') for i in range(30)])
+    statements = []
+    original = CollectionIngest._legacy_index
+
+    def counted(self, db=None):
+        statements.append(db is None)
+        return original(self, db)
+    monkeypatch.setattr(CollectionIngest, '_legacy_index', counted)
+    ingest(unit, [trial(url=f'https://new.example/{i}') | {'extra': {'source_identity': f'clinical:N{i}', 'nct_id': f'N{i}',
+                                                                      'status': 'RECRUITING'}} for i in range(5)])
+    assert statements == [True]  # built once per unit, before the write lock

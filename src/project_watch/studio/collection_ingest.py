@@ -6,7 +6,7 @@ events. DSH still has to assess these candidates before publishing judgments.
 import hashlib
 import json
 import uuid
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -86,6 +86,22 @@ def _record(item):
     return identity, text, raw is not None
 
 
+def _remember(index, item_id, key, url, extra):
+    # NULL never equals anything in SQL, so neither does a missing key, URL or identifier here.
+    if key is not None:
+        index['key'].setdefault(key, set()).add(item_id)
+    if url is not None:
+        index['url'].setdefault(url, set()).add(item_id)
+    try:
+        data = json.loads(extra) if isinstance(extra, str) and extra else (extra if isinstance(extra, dict) else {})
+    except ValueError:
+        data = {}
+    for field in ('nct_id', 'openalex_id', 'source_identity'):
+        value = data.get(field) if isinstance(data, dict) else None
+        if value is not None and not isinstance(value, (dict, list)):
+            index[field].setdefault(value, set()).add(item_id)
+
+
 class CollectionIngest:
     def __init__(self, execution, *, admit_materials=True):
         self.execution, self.store = execution, execution.store
@@ -132,6 +148,7 @@ class CollectionIngest:
         observed = min(times, key=_time) if times else unit['window_end']
         _time(observed)
         refs, skipped = [], []
+        self._legacy = self._legacy_index()  # read before the write lock; matches are re-read inside it
         with self.store.write_scope(self.execution._guard), closing(self.store._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             self.execution._guard(db)
@@ -151,6 +168,15 @@ class CollectionIngest:
         return dict(saved_count=len(refs), evidence_refs=refs, skipped_count=len(skipped),
                     skipped=skipped, **counts)
 
+    def _legacy_index(self, db=None):
+        """This project's items by key, URL and legacy identifiers (nct_id, openalex_id, source_identity)."""
+        index = {name: {} for name in ('key', 'url', 'nct_id', 'openalex_id', 'source_identity')}
+        with (nullcontext(db) if db is not None else closing(self.store._connect())) as connection:
+            for item_id, key, url, extra in connection.execute(
+                    'SELECT id, key, url, extra FROM studio_items WHERE project_id=?', (self.project_id,)):
+                _remember(index, item_id, key, url, extra)
+        return index
+
     def _save(self, db, unit, item, identity, text, structured, observed):
         source = db.execute('SELECT * FROM studio_collection_sources WHERE project_id=? AND identity=?',
                             (self.project_id, identity)).fetchone()
@@ -162,10 +188,13 @@ class CollectionIngest:
             # multiple historical diffs must never be collapsed into one snapshot.
             field, identifier = ('nct_id', identity[9:]) if identity.startswith('clinical:') else (
                 ('openalex_id', identity[9:]) if identity.startswith('openalex:') else ('source_identity', identity))
-            matches = db.execute(
-                "SELECT * FROM studio_items WHERE project_id=? AND (key=? OR url=? OR "
-                "json_extract(CASE WHEN json_valid(extra) THEN extra ELSE '{}' END,?)=?)",
-                (self.project_id, item_key(item['url'], item['title']), item['url'], '$.' + field, identifier)).fetchall()
+            # The same match as one OR-query with json_extract, which scanned every project item for each
+            # new item (245 ms on 9.5k items) inside the write lock and made other jobs time out.
+            legacy = getattr(self, '_legacy', None) or self._legacy_index(db)
+            ids = (legacy['key'].get(item_key(item['url'], item['title']), set()) | legacy['url'].get(item['url'], set())
+                   | legacy[field].get(identifier, set()))
+            matches = [row for row in (db.execute('SELECT * FROM studio_items WHERE project_id=? AND id=?',
+                                                  (self.project_id, item_id)).fetchone() for item_id in sorted(ids)) if row]
             if len(matches) > 1:
                 raise HttpError('ambiguous_collection_identity')
             existing = matches[0] if matches else None
@@ -210,6 +239,8 @@ class CollectionIngest:
                        'collected_at,extra) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                        (item_id, self.project_id, key, category, item['title'], item['url'], item['source'],
                         item['snippet'], item.get('published_at'), now(), _json(item.get('extra', {}))))
+            if getattr(self, '_legacy', None) is not None:
+                _remember(self._legacy, item_id, key, item['url'], item.get('extra', {}))  # as the SQL would now see it
         elif not historical and operation == 'updated':
             from project_watch.studio.event_revisions import record as record_event
 
@@ -221,6 +252,8 @@ class CollectionIngest:
                        'WHERE id=? AND project_id=?',
                        (item['title'], item['url'], item['source'], item['snippet'], item.get('published_at'),
                         _json(extra), item_id, self.project_id))
+            if getattr(self, '_legacy', None) is not None:
+                _remember(self._legacy, item_id, existing['key'], item['url'], extra)
             if existing['event_id']:
                 record_event(db, self.project_id, existing['event_id'])
         if not older_source:
