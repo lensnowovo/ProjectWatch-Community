@@ -7,6 +7,7 @@ proxy from settings overrides it. Responses are size-capped.
 
 from __future__ import annotations
 
+import errno
 import http.client
 import json
 import os
@@ -313,6 +314,18 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise HttpError('unsafe_redirect')
 
 
+
+# Errors only connect() raises, before any byte can leave: no usable local address or port (Windows
+# 10048/10049, POSIX EADDRINUSE/EADDRNOTAVAIL). A burst of 940 collection requests exhausted local
+# ports and these were recorded as unknown outcomes although nothing was sent. ENOBUFS is not here:
+# it can also come from a send.
+_LOCAL_SOCKET_ERRORS = frozenset({10048, 10049, errno.EADDRINUSE, errno.EADDRNOTAVAIL})
+
+
+def _local_socket_failure(reason):
+    return isinstance(reason, OSError) and not isinstance(reason, TimeoutError) and (
+        getattr(reason, 'winerror', None) in _LOCAL_SOCKET_ERRORS or reason.errno in _LOCAL_SOCKET_ERRORS)
+
 def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Transport:
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else system_proxies()
 
@@ -382,7 +395,8 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
             unconnected = (control is not None and trace.data.get('stage') == 'connect'
                            and 'connected_ms' not in trace.data)
             if (phase == "connect_or_headers" and not getattr(redirect, "seen_redirect", False)
-                    and (unconnected or isinstance(reason, (socket.gaierror, ConnectionRefusedError)))):
+                    and (unconnected or isinstance(reason, (socket.gaierror, ConnectionRefusedError))
+                         or _local_socket_failure(reason))):
                 raise HttpError("connection_not_sent", transport_phase=phase,
                                 failure_kind='timeout' if isinstance(reason, TimeoutError) else 'transport_error',
                                 diagnostics=trace.data) from exc
