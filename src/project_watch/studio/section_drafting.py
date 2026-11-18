@@ -202,7 +202,8 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
                     if exc.code not in ISOLATABLE:
                         error = error or exc
                         continue
-                    failures['draft:' + key] = {'status': 'blocked', 'code': exc.code}
+                    # The validation message says which rule an unusable reply broke (diagnostics only).
+                    failures['draft:' + key] = {'status': 'blocked', 'code': exc.code, 'reason': str(exc)[:300]}
                     results[key] = FAILED
                     refused = exc.code == 'model_content_rejected'
                     refusals += refused

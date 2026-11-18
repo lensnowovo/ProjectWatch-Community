@@ -214,6 +214,20 @@ def parse_proposal(data):
     return Proposal.model_construct(**parsed), rejected, unquantified, issues
 
 
+def _parse_batch(response):
+    """One of several batches' proposals; a malformed envelope counts as one rejected batch.
+
+    A live details job saved 214 batch answers and then failed outright, every answer wasted,
+    because one envelope did not validate. Rows are already rejected one by one the same way.
+    """
+    try:
+        return parse_proposal(response)
+    except ValidationError as exc:
+        codes = sorted({e['type'] for e in exc.errors(include_input=False, include_context=False)})
+        return Proposal.model_construct(**{key: [] for key in Proposal.model_fields}), 1, set(), [
+            {'group': 'envelope', 'codes': ['batch_invalid', *codes], 'count': 0}]
+
+
 class StructuredFacts:
     def __init__(self, pipeline):
         self.pipeline = pipeline
@@ -305,7 +319,9 @@ class StructuredFacts:
 
     def apply(self, project_id, inputs, data, *, guard=None, batch_outputs=None):
         responses = [data] if batch_outputs is None else batch_outputs
-        parsed = [parse_proposal(response) for response in responses]
+        # A single answer with a wrong envelope still fails. Among many batches one such answer is
+        # counted as a rejected batch, so the others are not thrown away with it.
+        parsed = [_parse_batch(response) if len(responses) > 1 else parse_proposal(response) for response in responses]
         # Every row/envelope has already passed the existing per-request parser.
         # The complete document can contain more than twelve facts of each kind.
         proposal = Proposal.model_construct(**{key: [item for result in parsed for item in getattr(result[0], key)]
