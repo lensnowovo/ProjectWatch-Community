@@ -61,7 +61,9 @@ def run_collection(ledger, *, collect, ingest, guard):
             if exc.code in STOP:
                 raise
             if exc.code in NOT_SENT:
-                ledger.record(receipt | dict(reason=exc.code))
+                ledger.record(receipt | dict(reason=exc.code,
+                                             provider_hashes=getattr(exc, 'provider_hashes', []) or
+                                             ([exc.provider_hash] if getattr(exc, 'provider_hash', '') else [])))
             elif exc.code == 'request_outcome_unknown':
                 ledger.record(receipt | dict(outcome='unknown', reason=exc.code))
             elif exc.code == 'request_budget':
@@ -136,6 +138,10 @@ def _offline(ledger, waiting):
         return False
     if any(r['reason'] == 'connection_not_sent' for r in waiting):
         return True
+    waiting_ids = {r['unit_id'] for r in waiting}
+    providers = {provider for r in ledger.receipts if r['unit_id'] in waiting_ids
+                 for provider in r.get('provider_hashes', [])}
     with closing(ledger.execution.store._connect()) as db:
-        return db.execute('SELECT 1 FROM studio_provider_backoff WHERE status=0 AND retry_after>? LIMIT 1',
-                          (now(),)).fetchone() is not None
+        return any(db.execute('SELECT 1 FROM studio_provider_backoff WHERE provider=? AND status=0 '
+                              'AND retry_after>?', (provider, now())).fetchone()
+                   for provider in providers)

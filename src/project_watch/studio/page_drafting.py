@@ -144,8 +144,10 @@ def freeze(execution, targets, contracts, *, allowed, binding=None):
                 if _carries(state, signature, targets):
                     prior = job_id
                     break
-                if isinstance(state, dict) and 'facts_version' in state:
-                    break  # newer facts mean something else now; never fall back to older ones
+                if (isinstance(state, dict) and 'facts_version' in state
+                        and (state['facts_version'] != FACTS_VERSION or set(state.get('pages') or ()) == set(targets))):
+                    break  # incompatible facts/contracts for this scope; do not use older ones
+                # Another page scope is independent, not an invalidation of these facts.
     execution.checkpoint(MODE, {'version': VERSION, 'enabled': bool(allowed), 'prior': prior, 'binding': binding})
 
 

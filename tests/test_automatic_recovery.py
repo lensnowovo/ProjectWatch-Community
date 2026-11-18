@@ -1,4 +1,5 @@
 """Fault injection with isolated storage; no provider calls or production data."""
+import hashlib
 import socket
 import threading
 import urllib.error
@@ -13,6 +14,78 @@ from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import HttpError, Response, urllib_transport
 from project_watch.studio.llm import ModelError
 from project_watch.studio.pipeline import StudioWorker
+
+
+def test_manual_recovery_only_clears_providers_the_active_project_waited_for(env):
+    from project_watch.studio import spine
+    store, pid = env
+    work = job(store, pid, 'collect')
+    target, other, limited = [hashlib.sha256(s.encode()).hexdigest() for s in ('target', 'other', 'limited')]
+    with store._connect() as db:
+        db.executemany('INSERT INTO studio_provider_backoff VALUES (?,?,?)',
+                       [(target, '2999-01-01', 0), (other, '2999-01-01', 0), (limited, '2999-01-01', 429)])
+    # No call row exists: the wait was inherited from another project's request.
+    with pytest.raises(dispatch.NotSent):
+        work.call('search', 'query', lambda: pytest.fail('blocked request was sent'), provider='target')
+    with pytest.raises(dispatch.NotSent):
+        work.call('search', 'limited-query', lambda: pytest.fail('blocked request was sent'), provider='limited')
+    receipt(store, work.job['id'], 'model', 'old-unknown', 'unknown')
+    before = rows(store)
+    assert spine.request_round(store, pid, 'manual')['id'] == work.job['id']
+    with store._connect() as db:
+        assert {r[0] for r in db.execute('SELECT provider FROM studio_provider_backoff')} == {other, limited}
+    assert rows(store) == before
+
+
+def test_manual_recovery_without_active_work_does_not_clear_historical_providers(env):
+    from project_watch.studio import spine
+    store, pid = env
+    work = job(store, pid, 'collect')
+    def disconnected():
+        raise HttpError('connection_not_sent')
+    with pytest.raises(HttpError):
+        work.call('search', 'query', disconnected, provider='historical')
+    store.finish(work.job['id'], error='synthetic', lease_token=work.job['lease_token'])
+    spine.request_round(store, pid, 'manual')
+    with store._connect() as db:
+        assert db.execute('SELECT count(*) FROM studio_provider_backoff').fetchone()[0] == 1
+
+
+def test_news_retains_secondary_provider_identity_for_offline_recovery(env, monkeypatch):
+    from test_collection_plan import plan
+
+    from project_watch.studio.collection_ledger import CollectionLedger
+    from project_watch.studio.collection_runner import run_collection, settle_not_sent
+    from project_watch.studio.http import Http
+    from project_watch.studio.settings import SearchConfig
+    from project_watch.studio.sources import Collectors
+    from project_watch.studio.store import now
+
+    store, pid = env
+    work = job(store, pid, 'collect')
+    bing = hashlib.sha256(b'bing').hexdigest()
+    search = hashlib.sha256(b'search').hexdigest()
+    with store._connect() as db:
+        db.execute('INSERT INTO studio_provider_backoff VALUES (?,?,429)', (bing, '2999-01-01'))
+    collectors = Collectors(Http(lambda *a: pytest.fail('unexpected transport')),
+                            SearchConfig(provider='deepseek', api_key='synthetic'))
+    monkeypatch.setattr(collectors, 'bing_news', lambda query: work.call(
+        'search', 'bing-query', lambda: pytest.fail('rate-limited request sent'), provider='bing'))
+    def disconnected():
+        raise HttpError('connection_not_sent')
+    monkeypatch.setattr(collectors, '_provider_search', lambda *a, **kw: work.call(
+        'search', 'search-query', disconnected, provider='search'))
+    ledger = CollectionLedger(work, plan(round_id=work.job['id'], project_id=pid, at=now()))
+    coverage = run_collection(ledger, collect=lambda unit: collectors.news(unit['query'], search_count=1),
+                              ingest=lambda *a: pytest.fail('no payload to ingest'), guard=lambda: None)
+    assert set(ledger.receipts[0]['provider_hashes']) == {bing, search}
+    with pytest.raises(HttpError, match='connection_not_sent'):
+        settle_not_sent(ledger, coverage)
+    # An unchanged retry only meets backoffs; it must still retain both identities.
+    coverage = run_collection(ledger, collect=lambda unit: collectors.news(unit['query'], search_count=1),
+                              ingest=lambda *a: pytest.fail('no payload to ingest'), guard=lambda: None)
+    with pytest.raises(HttpError, match='connection_not_sent'):
+        settle_not_sent(ledger, coverage)
 
 
 @pytest.fixture

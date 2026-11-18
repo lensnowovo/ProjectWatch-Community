@@ -73,7 +73,8 @@ def project_jobs(store, project_id, *, worker='running'):
         dismissed = {r[0].removeprefix('task_dismissed:') for r in db.execute(
             "SELECT key FROM studio_state WHERE key LIKE 'task_dismissed:%'")}
         return [{**{key: row[key] for key in ('id', 'kind', 'status', 'stage', 'error', 'created_at', 'finished_at')},
-                 'summary_subject': row['input_version'][5:] if row['input_version'].startswith('page:') else None,
+                 'summary_subject': (row['input_version'][5:] if row['input_version'].startswith('page:') else
+                                     'competition' if row['input_version'].startswith('competition-summary:') else None),
                  'dismissed': row['id'] in dismissed, 'runtime': projection(db, row, worker=worker)} for row in rows]
 
 

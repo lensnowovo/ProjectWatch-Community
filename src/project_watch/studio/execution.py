@@ -229,7 +229,17 @@ class JobExecution:
             # One rule for every job kind, no cross-job holds (see dispatch.py).
             if self.allowed_call_kinds is not None and kind not in self.allowed_call_kinds:
                 raise HttpError("call_kind_not_permitted")
-            dispatch.check(db, self.job, kind, logical_key, provider_hash)
+            try:
+                dispatch.check(db, self.job, kind, logical_key, provider_hash)
+            except dispatch.NotSent as exc:
+                if exc.code in ('provider_backoff', 'model_rate_limited'):
+                    # Remember which provider this job actually waited for, including when
+                    # another job caused the backoff and this job has no call row yet.
+                    exc.provider_hash = provider_hash
+                    db.execute('INSERT OR REPLACE INTO studio_job_checkpoints VALUES (?,?,?)',
+                               (self.job['id'], dispatch.PROVIDER_WAIT + provider_hash, '{}'))
+                    db.commit()  # no request was admitted; retain only the wait association
+                raise
             db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version,request_limit) "
                        "VALUES (?,?,?,?,'started',?,1,?)", (self.job["id"], key, kind, provider_hash, now(), None))
             db.execute('UPDATE studio_job_calls SET deadline_at=? WHERE job_id=? AND call_key=?',
@@ -271,6 +281,7 @@ class JobExecution:
                 db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
                            ("not_sent" if not_sent else "failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
                 if not_sent:
+                    exc.provider_hash = provider_hash
                     db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
                     db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,0) ON CONFLICT(provider) "
                                "DO UPDATE SET retry_after=excluded.retry_after,status=0",
@@ -292,10 +303,13 @@ class JobExecution:
                     # The provider took the request and its stream broke off. A model request
                     # changes nothing outside this job, so it is sent once more under a new key;
                     # a second break of the same logical request stays unknown and holds.
+                    batch = dispatch.batch_of(self.job)
                     resend = not db.execute(
                         "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
-                        "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status='unknown' AND c.retryable=? LIMIT 1",
-                        (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND)).fetchone()
+                        "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status IN ('unknown','resent') AND c.retryable=? "
+                        "AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' AND j.input_version IN (?,?))) LIMIT 1",
+                        (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND, self.job['id'],
+                         batch, 'collect:' + (batch or ''), dispatch.REDO_PREFIX + (batch or ''))).fetchone()
                     if resend:
                         db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
                                    (dispatch.CUT_RESEND, self.job["id"], key))

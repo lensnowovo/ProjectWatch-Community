@@ -363,3 +363,24 @@ def test_a_long_outage_settles_the_round_as_before(env, monkeypatch):
     result = execution.read_checkpoint(collect_job.RESULT)
     assert result['status'] == 'failed'
     assert {r['reason'] for r in result['not_collected']} <= {'connection_not_sent', 'provider_backoff'}
+
+
+def test_an_unrelated_connection_backoff_does_not_make_rate_limited_sources_offline(env):
+    from project_watch.studio.http import HttpError
+    pipeline, pid, sent, _ = env
+    _offline(pipeline, sent)
+    pipeline.store.enqueue(pid, 'collect', input_version='scheduled:' + now())
+    first = pipeline.store.claim()
+    with pytest.raises(HttpError, match='connection_not_sent'):
+        pipeline.run(first)
+    assert pipeline.store.defer_recoverable(first, 'connection_not_sent')
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_provider_backoff SET status=429,retry_after='2999-01-01'")
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('unrelated-provider','2999-01-01',0)")
+        db.execute('UPDATE studio_jobs SET retry_after=NULL WHERE id=?', (first['id'],))
+    attempts = len(sent)
+    resumed = pipeline.store.claim()
+    pipeline.run(resumed)  # rate-limited sources settle; no unrelated global offline hold
+    result = JobExecution(pipeline.store, resumed).read_checkpoint(collect_job.RESULT)
+    assert result['status'] == 'failed'
+    assert len(sent) == attempts

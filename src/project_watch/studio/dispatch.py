@@ -58,6 +58,19 @@ class NotSent(HttpError):
     """Definitely not dispatched; never an unknown outcome."""
 
 
+PROVIDER_WAIT = 'provider-wait:'  # followed by a hash, never a URL or credential
+
+
+def clear_connection_backoff(db, project_id):
+    """Manual recovery touches only providers used/waited on by this project's active jobs."""
+    db.execute("DELETE FROM studio_provider_backoff WHERE status=0 AND provider IN ("
+               "SELECT c.provider FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
+               "WHERE j.project_id=? AND j.status IN ('queued','running') UNION "
+               "SELECT substr(c.stage, ?) FROM studio_job_checkpoints c JOIN studio_jobs j ON j.id=c.job_id "
+               "WHERE j.project_id=? AND j.status IN ('queued','running') AND c.stage LIKE ?)",
+               (project_id, len(PROVIDER_WAIT) + 1, project_id, PROVIDER_WAIT + '%'))
+
+
 def month_start(at=None):
     moment = at or datetime.now(UTC)
     return moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
