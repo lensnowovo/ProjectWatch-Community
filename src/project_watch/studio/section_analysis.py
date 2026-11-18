@@ -586,6 +586,13 @@ def project(store, pid, baseline):
         if not rows:
             return baseline
         records = [json.loads(row[0]) for row in rows]
+        # Completion follows the scope of the latest published job, not today's global
+        # defaults. Old five-section jobs and their saved results keep their contract.
+        from project_watch.studio.analyze_job import SECTION_SCOPE
+        from project_watch.studio.execution import JobExecution
+        latest = max(records, key=lambda record: (record['generated_at'], record['id']))
+        scope = JobExecution(store, {'id': latest['job_id']}).read_checkpoint(SECTION_SCOPE, db=db) or {}
+        required = set(SECTIONS) - set(scope.get('retired', ()))
         result = dict(baseline or {})
         analysis = {**records[0]['empty_analysis'], **(result.get('analysis') or {})}
         meta, references, source_counts = {}, {}, {}
@@ -650,7 +657,8 @@ def project(store, pid, baseline):
         analysis['cited'] = list(references.values())
         result.update(analysis=analysis, section_versions=meta, generated_at=max(r['generated_at'] for r in records),
                       total=len(references), counts=source_counts, model='saved-material-analysis',
-                      status='current' if len(meta) == len(SECTIONS) and all(m['status'] == 'current' for m in meta.values()) else 'partial',
+                      status='current' if required and all(meta.get(name, {}).get('status') == 'current'
+                                                          for name in required) else 'partial',
                       publication_policy='per-section-v1')
         result.pop('artifact_key', None)
         return result

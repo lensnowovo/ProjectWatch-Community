@@ -1,8 +1,34 @@
 """Synthetic regressions for effect-first live findings; no paid calls."""
 import json
 
+import pytest
+
 from project_watch.studio import events
 from project_watch.studio import insight_generation as gen
+
+
+@pytest.mark.parametrize('text', [
+    '按研究机构收入口径，2025年全球工业设备收入份额12.3%居第一。',
+    '研究机构口径2025上半年出货份额30%居第一，另一机构收入口径12.3%全球第一。',
+    '2025年公司工业设备出货市占率21%全球第一。',
+])
+def test_dated_quantified_metric_rank_does_not_require_magic_sample_words(text):
+    assert not gen.judgment_issues({'position': {'summary': text}})
+
+
+@pytest.mark.parametrize('text', [
+    '2025年收入份额20%，公司全球领先。',
+    '2025年收入份额20%，公司全球第一。',
+    '公司收入份额20%全球第一。',
+    '2025年公司收入和出货份额20%全球第一。',
+    '2025年获批后公司收入份额20%全球第一。',
+    '2025年公司收入份额20%全球领先。',
+    '2025年公司收入份额20%全球第一，另一家公司整体全球第一。',
+    '2025年公司收入份额20%全球第一、研发能力全球第一。',
+    '2025年公司收入份额20%全球第一且研发能力全球第一。',
+])
+def test_quantified_rank_does_not_excuse_unscoped_or_mixed_claims(text):
+    assert gen.judgment_issues({'position': {'summary': text}})
 
 
 def test_collection_clock_is_only_for_grouping_not_event_occurrence():

@@ -36,6 +36,13 @@ def apply(host, raw, review=reviewer):
     return result, insight.load(research.store, research.project_id)
 
 
+def active_parts():
+    result = {s: part() for s in section_analysis.SECTIONS if s != 'operations'}
+    result['technology']['academic'] = result['technology'].pop('for')
+    result['industry']['drivers'] = result['industry'].pop('for')
+    return result
+
+
 def test_bad_reference_rejects_only_its_section_and_preserves_sources(host):
     result, view = apply(host, dict(operations=part(), chain=part('N404')))
     assert result['status'] == 'partial' and result['published'] == ['operations']
@@ -47,6 +54,45 @@ def test_bad_reference_rejects_only_its_section_and_preserves_sources(host):
     research, context, _ = host
     assert material_snapshot.read(research.store, research.project_id, context['id']) == context
     assert not research.store.list_events(project_id=research.project_id)
+
+
+@pytest.mark.parametrize('retired', [None, [], ['operations']])
+def test_completion_uses_the_published_jobs_frozen_section_scope(host, retired):
+    from project_watch.studio.analyze_job import SECTION_SCOPE
+    research, _, _ = host
+    if retired is not None:
+        research.execution.checkpoint(SECTION_SCOPE, {'retired': retired})
+    _, view = apply(host, active_parts())
+    assert view['status'] == ('current' if retired else 'partial')
+    if not retired:
+        _, complete = apply(host, {'operations': part()})
+        assert complete['status'] == 'current'
+
+
+def test_retired_stale_result_is_preserved_without_blocking_active_sections(host):
+    from project_watch.studio.analyze_job import SECTION_SCOPE
+    from project_watch.studio.execution import JobExecution
+    research, _, _ = host
+    _, old = apply(host, {'operations': part()})
+    research.store.finish(research.execution.job['id'], lease_token=research.execution.job['lease_token'])
+    research.store.enqueue(research.project_id, 'analyze', input_version='collect:new-scope')
+    research.execution = JobExecution(research.store, research.store.claim())
+    saved = material_snapshot.capture(research.execution)
+    context = material_snapshot.read(research.store, research.project_id, saved['id'])
+    host = research, context, section_analysis.numbered(context)
+    research.execution.checkpoint(SECTION_SCOPE, {'retired': ['operations']})
+    _, view = apply(host, active_parts())
+    assert view['status'] == 'current'
+    assert view['analysis']['operations'] == old['analysis']['operations']
+    assert view['section_versions']['operations'] == old['section_versions']['operations']
+    with research.store._connect() as db:
+        db.execute("UPDATE studio_analysis_dependencies SET status='stale',record=json_set(record,'$.status','stale') WHERE project_id=? AND artifact_key=?",
+                   (research.project_id, section_analysis.PREFIX + 'operations'))
+    assert insight.load(research.store, research.project_id)['status'] == 'current'
+    with research.store._connect() as db:
+        db.execute("UPDATE studio_analysis_dependencies SET status='stale',record=json_set(record,'$.status','stale') WHERE project_id=? AND artifact_key=?",
+                   (research.project_id, section_analysis.PREFIX + 'chain'))
+    assert insight.load(research.store, research.project_id)['status'] == 'partial'
 
 
 def test_unreferenced_counterevidence_blocks_an_otherwise_supported_summary(host):

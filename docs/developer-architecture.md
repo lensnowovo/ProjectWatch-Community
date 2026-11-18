@@ -80,6 +80,12 @@
 - 新闻涉及内部计划的影响句必须有当前、获准使用的内部引文。未获支持的影响句被移除，新闻摘要保留并记录原因。技术路线从原始标题、摘录或引用提取，不从模型生成的关系分类句造词；标题阶段线索保留否定、计划和主体限定。
 
 
+## 恢复与完成状态边界（2026-11-17）
+
+- 断流自动重发资格在同一任务、或同一采集批次的分析任务之间只消费一次；中间收到 429/503 等完整错误响应、旧断流记录改为 `resent`，都不会重置资格。后续独立轮次有自己的资格，不因请求文字相同而沿用上一轮计数。旧 unknown 的保护不变。
+- 断网判定只查看本轮仍在等待的采集单元实际使用的服务；一条新闻查询使用多个服务时保留全部相关服务哈希。手动恢复只清理本项目活动任务实际调用或等待过的服务的连接退避，不清除无关服务、历史任务的退避或 429 等限流退避。等待关联通过任务检查点保存，不包含地址、密钥或请求正文。
+- 当前判断的汇总完成状态按照最新已发布任务冻结的栏目清单计算；停用的栏目不阻碍其他栏目完成。旧五栏目任务仍按五栏目计算，历史结果和版本不改写，活动栏目失效或未发布仍为部分完成。
+
 ## GLM 新请求传输（2026-11-08）
 
 - 官方 GLM-5.3-flash 的新任务使用 SSE，逐行接收并记录首片段、末片段及传输字节数；收到结束原因与 `[DONE]` 后才生成完整响应回执，JSON 与证据核验沿用原逻辑。已收到响应头后半途断流或以文档外结束原因结束的模型请求记为 unknown，并对同一逻辑请求在本项目内自动重发一次（`retryable=2`，新日志键 `:429:1`）：模型请求只生成文字，重发的代价只是再计费一次，与所有者手动重试相同。重发收到回答后，原记录改为 `resent`（计入用量，不再算未决）。第二次断流、响应头前失败、重复结束事件、缺少结束原因、错误事件、本端取消（所有者停止或执行权失效）和非模型请求仍保持 unknown 等待处理。半截结果从不发布。思考片段不进入产品摘要。GLM 文档列出的结束原因 `sensitive`、`network_error`、`model_context_window_exceeded` 是明确的“无可用结果”，分别记为内容拒绝、未完成和超出上限的完整回执（可重放、不重发、可在独立步骤隔离），不是 unknown；文档外的结束原因仍为 unknown，诊断只记录该枚举词。断流诊断另记已收到的回答与思考字数，以及各自末尾 4000 字中不重复 20 字片段的占比（低值说明模型在循环输出），只记数字，不记文字。
@@ -127,3 +133,12 @@
 - 页面摘要复核逐句选取：未通过的句子不显示；核查未判定能独立成立的后续句子在前面有句子被删时一并不显示（可能依赖被删的前提）。细节只在引用了被删句子的同一来源、或开头句子全部被删时才随之不显示；其余已核实的细节照常显示。此前任何一句被删都会删掉全部未标记的细节，实测已发布页面因此少了约六分之一的已核实细节。
 - 整体页面摘要（新读法）复核后若开头句全部未通过、但有已核实的细节，只用这些细节重写一次开头（`page-summary-v2:repair`），再按全部证据重新复核，通过则发布（`repaired_approved`）。实测写作常把多个来源拼成一句并加入因果推断，开头句被判依据不足，细节却多能通过，整页因此无法发布。复核标准不变。
 - 整体页面摘要的开头超过 260 字时，程序把句子从后往前移入细节，最少保留一句（起草与发布都允许一句开头）；只有剩下的一句本身仍超长时才请求模型压缩一次。实测模型无法按字数要求改写（要求 220 字得到 273、288 字），不能依赖它满足长度。
+# Acceptance follow-up contracts (2026-11-17)
+
+Automatic `competition-summary:` jobs publish only the competition page and expose
+that scope in runtime status. Fresh automatic competition jobs use fact-first page
+drafting; explicit manual and previously frozen jobs retain their existing protocol.
+Fact-cache lookup skips other page scopes of the same fact version, while incompatible
+versions or same-scope contracts stop fallback. Evidence review is unchanged.
+The global-comparison guard accepts dated, quantified single-metric ranks without
+requiring magic sample wording, but never substitutes scope checks for source support.

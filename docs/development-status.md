@@ -1,4 +1,70 @@
-# Development snapshot — 2026-11-10
+# Acceptance follow-up — 2026-11-17
+
+Focused offline fixes following the isolated live acceptance:
+
+- Automatic competition-only summary jobs expose their actual page scope to the UI,
+  so other pages do not report an unrelated summary failure/no-result state.
+- Dated, quantified single-metric rankings no longer require fixed “comparable sample”
+  wording. Independent evidence review remains mandatory; unbounded leadership,
+  mixed metrics and a second unqualified ranking remain blocked.
+- New automatic competition summary jobs use the existing fact extraction/synthesis
+  path. Saved jobs retain their frozen mode and request identities. Interleaved page
+  scopes do not discard the previous same-scope fact cache.
+
+Read-only replay reproduced the old scope-rule rejection and its removal on the
+same saved summary. It did not write results, call a model or replay an unknown.
+The technical-route judgment remains unpublished: its initial review response was
+malformed and the subsequent split review supported only part of the composite
+route claim. An unsupported drive-type qualifier prevented acceptance of the whole
+sentence. These fixes do not declare that missing judgment complete; the remaining
+step is to narrow and re-review that assertion, not repeat collection.
+
+Independent review identified cache interleaving and compound-ranking edge cases;
+both were fixed with regressions. Final batch validation: 5,099 backend tests passed
+and 8 skipped (parser-image/OCR fixtures and symlink privileges); 78 root Node and
+360 frontend tests passed. TypeScript, Ruff, architecture boundaries and whitespace
+checks passed. A freshly installed wheel matched all 302 product files and passed
+native imports, upgrade/reopen and the synthetic installed journey. The latter's
+chain-only analysis remains intentionally partial, not a real four-section pass.
+No production deployment or public release is part of this follow-up.
+
+# Recovery boundary fixes — 2026-11-17
+
+The maintainer authorized three focused fixes on top of merged PR #33. No real instance,
+project data, model configuration or old unknown request was changed.
+
+- A cut-stream resend remains consumed after an intervening 429/503 response, including
+  sibling analyses of the same collection batch. Independent later rounds keep their own allowance.
+- Collection offline detection uses the providers of the waiting units, including both
+  services behind a news query. Manual recovery clears only connection backoffs associated
+  with this project's active jobs, preserving unrelated providers and rate limits.
+- Aggregate judgment status follows the latest published job's frozen section scope.
+  Retired sections no longer prevent completion; legacy five-section jobs and stored
+  results are preserved, and missing/stale active sections still make the result partial.
+
+An independent review found the later-round resend and multi-provider news edge cases;
+both were addressed with regression tests.
+
+Validation:
+- Full offline backend regression: 5,081 passed, 8 skipped, no failures (parallel
+  and serial phases combined). Skips concern unavailable parser-image/OCR fixtures
+  and Windows symlink privileges.
+- After the final search-error metadata forwarding correction, all 118 affected
+  collection, recovery and source tests passed again. The full run began before
+  that correction; its result and this final targeted rerun are separate evidence.
+- Node checks: 78 root and 360 frontend tests passed. TypeScript, Ruff, whitespace
+  checks and architecture boundaries passed (261 modules, no violations).
+- The final wheel was rebuilt and installed in an isolated environment. All 302
+  product files matched; native imports, legacy upgrade/reopen and the synthetic
+  installed journey passed. Its intentionally chain-only analysis is partial and
+  does not represent complete real-provider or desktop acceptance.
+- No real provider calls, production installation, GitHub push or public release.
+
+Evidence is outside Git under `D:/02-Dev/_tools/pw-validation/`, in the
+`recovery-boundaries-*-20261117` directories. Final wheel SHA-256:
+`9458a59f21da480b45290e4ef048f6aee6b96e47a6f8acb7fe01fd9058bbf54d`.
+
+## Historical development snapshot — 2026-11-10
 
 This branch consolidates the current local development state. It is not a release
 or a claim that full regression has passed. Tests were stopped at the maintainer's

@@ -633,8 +633,10 @@ def run(pipeline, execution, *, targets=None):
     modern = bool(protocol and protocol.get('version') == 1)
     mode_key = PROTOCOL + ':retain-candidates'
     if original is None:
-        # Only a whole public reading started under the current protocol reads incrementally.
-        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and whole and not internal,
+        # Automatic peer refreshes use the same fact-first path as a whole reading.
+        # Existing jobs keep their saved mode/targets and request identities.
+        peer_refresh = execution.job.get('input_version', '').startswith('competition-summary:')
+        page_drafting.freeze(execution, targets, CONTRACTS, allowed=modern and (whole or peer_refresh) and not internal,
                              binding=protocol['binding'] if modern else None)
         execution.checkpoint(mode_key, True)
         execution.checkpoint(PROTOCOL + ':grouped', True)

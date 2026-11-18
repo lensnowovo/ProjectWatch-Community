@@ -74,8 +74,8 @@ class Summaries(Research):
         review.prepare = lambda payload: {'issues': [], 'receipts': []}
         return review
 
-    def summarize(self, *, targets=None):
-        job = legacy_job(self.store, self.pid, 'page_summary', status='running', input_version='analyze:x')
+    def summarize(self, *, targets=None, version='analyze:x'):
+        job = legacy_job(self.store, self.pid, 'page_summary', status='running', input_version=version)
         execution = JobExecution(self.store, job)
         start = len(self.calls)
         result = pages.run(self.pipeline, execution, targets=targets)
@@ -190,7 +190,7 @@ def test_withdrawn_material_leaves_the_carried_facts(project):
     assert gone not in cited(project.summary_head())
 
 
-def test_single_page_and_competition_jobs_keep_the_cumulative_reading(project):
+def test_manual_single_page_jobs_keep_the_cumulative_reading(project):
     project.add(2)
     calls = []
 
@@ -199,6 +199,55 @@ def test_single_page_and_competition_jobs_keep_the_cumulative_reading(project):
         return {}
     project.pipeline.tools = lambda **kw: (None, None, SimpleNamespace(json=cumulative), None)
     execution, _, _ = project.summarize(targets=('competition',))
+    assert execution.read_checkpoint(pd.MODE)['enabled'] is False
+    assert calls and 'previous_draft' in calls[0]
+
+
+def test_automatic_peer_summary_extracts_once_and_reuses_unchanged_facts(project, monkeypatch):
+    project.add(6)
+    original = project.respond
+
+    def peer(system, user, **kwargs):
+        answer = original(system, user, **kwargs)
+        if EXTRACT in system:
+            for point in answer['points']:
+                point['section'] = 'competition'
+        return answer
+
+    monkeypatch.setattr(project.pipeline, 'tools', lambda **kw: (None, None, SimpleNamespace(json=peer), None))
+    first, result, calls = project.summarize(targets=('competition',), version='competition-summary:first')
+    assert first.read_checkpoint(pd.MODE)['enabled'] is True
+    assert len(of(calls, EXTRACT)) == 3 and len(of(calls, SYNTHESIS)) == 1
+    assert result['published'] == ['competition']
+    assert len(pages.read(project.store, project.pid)['competition']['text']) > 0
+    second, again, calls = project.summarize(targets=('competition',), version='competition-summary:next')
+    assert second.read_checkpoint(pd.MODE)['prior'] == first.job['id']
+    assert calls == [] and again['pages']['competition'] == 'unchanged'
+
+
+def test_peer_refresh_does_not_invalidate_the_previous_whole_reading(project):
+    project.add(4)
+    whole, _, _ = project.summarize()
+    peer, _, _ = project.summarize(targets=('competition',), version='competition-summary:between')
+    assert peer.read_checkpoint(pd.MODE)['enabled'] is True
+    following, result, calls = project.summarize()
+    assert following.read_checkpoint(pd.MODE)['prior'] == whole.job['id']
+    assert calls == [] and result['pages']['trials'] == 'unchanged'
+
+
+def test_existing_peer_summary_keeps_its_frozen_cumulative_requests(project):
+    project.add(2)
+    job = legacy_job(project.store, project.pid, 'page_summary', status='running', input_version='competition-summary:old')
+    execution = JobExecution(project.store, job)
+    execution.checkpoint(pd.MODE, {'version': 1, 'enabled': False, 'prior': None})
+    calls = []
+
+    def cumulative(system, user, **kwargs):
+        calls.append(json.loads(user))
+        return {}
+
+    project.pipeline.tools = lambda **kw: (None, None, SimpleNamespace(json=cumulative), None)
+    pages.run(project.pipeline, execution, targets=('competition',))
     assert execution.read_checkpoint(pd.MODE)['enabled'] is False
     assert calls and 'previous_draft' in calls[0]
 

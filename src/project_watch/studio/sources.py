@@ -205,6 +205,12 @@ class SearchCache:
             return hits, False
 
 
+def _provider_hashes(errors):
+    return sorted({provider for error in errors
+                   for provider in [getattr(error, 'provider_hash', ''), *getattr(error, 'provider_hashes', [])]
+                   if provider})
+
+
 class Collectors:
     def __init__(self, http: Http, search: SearchConfig, registry: RegistryConfig | None = None,
                  *, search_cache: SearchCache | None = None) -> None:
@@ -345,6 +351,10 @@ class Collectors:
                     raise
                 errors.append(exc)
         if errors and not items:
+            if isinstance(errors[0], HttpError):
+                # One news unit may use several services. Keep their identities when
+                # propagating the first error, so recovery does not inspect global backoffs.
+                errors[0].provider_hashes = _provider_hashes(errors)
             raise errors[0]
         seen, out = set(), []
         for item in items:
@@ -430,13 +440,16 @@ class Collectors:
                     "request_outcome_unknown", "connection_failed", "response_too_large",
                     "unsafe_redirect", "request_budget", "provider_backoff"
                 ):
+                    exc.provider_hashes = _provider_hashes([*errors, exc])
                     raise  # Do not route an uncertain/held paid request to a second provider.
                 error = HttpError(getattr(exc, "code", "invalid_search_response"),
                                   status=getattr(exc, "status", None))
+                error.provider_hashes = _provider_hashes([exc])
                 errors.append(error)
                 self.search_checks.append({"provider": provider, "ok": False,
                                            "code": error.code, "status": error.status})
         if errors and not successes:
+            errors[0].provider_hashes = _provider_hashes(errors)
             raise errors[0]
         return results
 

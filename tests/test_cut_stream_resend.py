@@ -61,6 +61,52 @@ def test_a_second_cut_of_the_same_request_holds_for_the_owner(env):
     assert [c[1:] for c in calls(store)] == [('unknown', dispatch.CUT_RESEND), ('unknown', 0)]
 
 
+@pytest.mark.parametrize('status', [429, 503])
+def test_an_intervening_provider_error_does_not_reset_the_single_resend(env, status):
+    store, pid = env
+    work, sent = job(store, pid, 'analyze'), []
+    with pytest.raises(HttpError, match='stream_cut_resend'):
+        work.call('model', 'same', cut())
+    work.call('model', 'same', lambda: Response(status, {}, b'{}'))
+    with store._connect() as db:
+        db.execute("UPDATE studio_provider_backoff SET retry_after='2000-01-01T00:00:00+00:00'")
+    with pytest.raises(HttpError, match='connection_failed'):
+        work.call('model', 'same', cut())
+    with pytest.raises(dispatch.NotSent, match='unknown_not_resent'):
+        work.call('model', 'same', ok(sent))
+    assert not sent
+    assert [c[1:] for c in calls(store)] == [(dispatch.RESENT, dispatch.CUT_RESEND),
+                                            ('completed', 1), ('unknown', 0)]
+
+
+def test_a_sibling_cannot_reset_a_resend_after_a_completed_error(env):
+    store, pid = env
+    first = analysis(store, pid, 'collect:bounded-resend')
+    with pytest.raises(HttpError, match='stream_cut_resend'):
+        first.call('model', 'same', cut())
+    first.call('model', 'same', lambda: Response(429, {}, b'{}'))
+    with store._connect() as db:
+        db.execute("UPDATE studio_provider_backoff SET retry_after='2000-01-01T00:00:00+00:00'")
+        db.execute("UPDATE studio_jobs SET status='failed',lease_token='' WHERE id=?", (first.job['id'],))
+    retry = analysis(store, pid, 'collect:bounded-resend')
+    with pytest.raises(HttpError, match='connection_failed'):
+        retry.call('model', 'same', cut())
+    assert calls(store)[-1][1:] == ('unknown', 0)
+
+
+def test_a_later_batch_has_its_own_resend_even_when_request_bytes_repeat(env):
+    store, pid = env
+    first = analysis(store, pid, 'collect:first-round')
+    with pytest.raises(HttpError, match='stream_cut_resend'):
+        first.call('model', 'same', cut())
+    first.call('model', 'same', ok([]))
+    store.finish(first.job['id'], lease_token=first.job['lease_token'])
+    later = analysis(store, pid, 'collect:later-round')
+    with pytest.raises(HttpError, match='stream_cut_resend'):
+        later.call('model', 'same', cut())
+    assert calls(store)[-1][1:] == ('unknown', dispatch.CUT_RESEND)
+
+
 def test_a_failure_before_any_response_header_still_holds(env):
     store, pid = env
     work, sent = job(store, pid, 'analyze'), []

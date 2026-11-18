@@ -215,3 +215,13 @@ def test_explicit_new_output_can_improve_partial_result_without_losing_prior_fac
     assert set(first['fact_ids']).issubset(second['fact_ids']) and len(second['fact_ids']) == 3
     assert second['rejected'] == 0 and second['unquantified'] == 1 and second['status'] == 'partial'
     assert pipeline.structured_facts.apply(pid, inputs, proposal) == second
+
+
+def test_one_malformed_batch_among_many_is_rejected_not_fatal(tmp_path):
+    pipeline, pid, inputs, proposal = mixed_output(tmp_path)
+    alone = pipeline.structured_facts.apply(pid, inputs, proposal)
+    pipeline2, pid2, inputs2, proposal2 = mixed_output(tmp_path / 'again')
+    result = pipeline2.structured_facts.apply(pid2, inputs2, None, batch_outputs=[proposal2, {'events': 'not-list'}])
+    assert len(result['fact_ids']) == len(alone['fact_ids']) and result['status'] == 'partial'
+    assert result['rejected'] == alone['rejected'] + 1
+    assert any('batch_invalid' in issue['codes'] for issue in result['validation_issues'])

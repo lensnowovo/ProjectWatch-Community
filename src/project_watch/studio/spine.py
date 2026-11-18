@@ -1,6 +1,7 @@
 """Entry for the rewritten pipeline's job kinds. One path per kind; no legacy admission."""
 from contextlib import closing, nullcontext
 
+from project_watch.studio import dispatch
 from project_watch.studio.store import now
 
 ROUND_KINDS = ('collect', 'analyze', 'report')
@@ -26,7 +27,7 @@ def request_round(store, project_id, reason, *, automatic=False, db=None):
             # without a request.
             conn.execute("UPDATE studio_jobs SET retry_after=NULL WHERE project_id=? AND status='queued' "
                          "AND started_at IS NOT NULL AND retry_after>?", (project_id, now()))
-            conn.execute('DELETE FROM studio_provider_backoff WHERE status=0')
+            dispatch.clear_connection_backoff(conn, project_id)
         active = conn.execute("SELECT * FROM studio_jobs WHERE project_id=? AND kind IN ('collect','analyze','report') "
                               "AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1", (project_id,)).fetchone()
         if active:
@@ -35,7 +36,7 @@ def request_round(store, project_id, reason, *, automatic=False, db=None):
                 # An owner's 更新 resumes a round waiting for the network now. Only
                 # connection backoffs are cleared: nothing was sent, so nothing can repeat.
                 conn.execute('UPDATE studio_jobs SET retry_after=NULL WHERE id=?', (active['id'],))
-                conn.execute('DELETE FROM studio_provider_backoff WHERE status=0')
+                dispatch.clear_connection_backoff(conn, project_id)
                 active = conn.execute('SELECT * FROM studio_jobs WHERE id=?', (active['id'],)).fetchone()
             return dict(active)
         return store.enqueue(project_id, 'collect', automatic=automatic, input_version=f'{reason}:{now()}', db=conn)

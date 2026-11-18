@@ -7,6 +7,16 @@ from test_studio_agent_instance import make_service
 from project_watch.studio.runtime_health import project_jobs, stage_phase
 
 
+@pytest.mark.parametrize(('version', 'subject'), [
+    ('competition-summary:synthetic-job', 'competition'),
+    ('page:papers', 'papers'), ('analyze:synthetic-batch', None),
+])
+def test_summary_projection_uses_the_same_page_scope_as_dispatch(tmp_path, version, subject):
+    service, pid = make_service(tmp_path / 'synthetic.sqlite3')
+    service.store.enqueue(pid, 'page_summary', input_version=version)
+    assert project_jobs(service.store, pid)[0]['summary_subject'] == subject
+
+
 @pytest.mark.parametrize(('text', 'phase'), [
     ('检索公司新闻', 'collect'), ('阅读 4 篇报道正文', 'read'),
     ('生成当前判断', 'judge'), ('更新跟踪问题', 'judge'),

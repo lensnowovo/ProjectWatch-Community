@@ -630,6 +630,30 @@ def _financial_comparison_period_conflict(clause: str) -> bool:
     return False
 
 
+def _quantified_ranking(clause):
+    """Recognize a dated, single-metric rank, not a claim of overall leadership.
+
+    This only checks scope. Source support is still checked independently. A
+    market-share statement need not use the literal phrase 'comparable sample'.
+    Each ranked clause must name its own metric; adjacent prose cannot lend it one.
+    """
+    if not re.search(r'20\d{2}(?:年|上半年|下半年|[一二三四]季度)', clause):
+        return False
+    ranked = [part for part in re.split(r'[，,；;]', clause)
+              if re.search(r'(?:全球|世界|国际).{0,12}(?:领先|第一|首位)|领先全球', part)]
+    for part in ranked:
+        if len(re.findall(r'(?:全球|世界|国际).{0,12}?(?:领先|第一|首位)|领先全球', part)) != 1:
+            return False
+        if '领先' in part or not re.search(r'\d+(?:\.\d+)?\s*[%％]', part):
+            return False
+        if not re.search(r'份额|市占率|口径', part):
+            return False
+        metrics = [bool(re.search(p, part)) for p in (r'收入|营收', r'销量|出货')]
+        if sum(metrics) != 1 or re.search(r'获批|注册|植入|入组|综合|整体', part):
+            return False
+    return bool(ranked)
+
+
 def judgment_issues(data):
     """Reject known scope/assumption defects; this is not general fact checking."""
     issues = []
@@ -655,7 +679,7 @@ def judgment_issues(data):
                         r'注册|获批|上市许可', r'植入例数|受试者人数|临床入组', r'销量|出货量', r'营收|收入规模')]
                     bounded = (sum(dimensions) == 1 and re.search(r'20\d{2}年', clause)
                                and re.search(r'已披露|已检索|可比样本|对比样本', clause))
-                    if not bounded:
+                    if not bounded and not _quantified_ranking(clause):
                         issues.append({'field': path, 'code': 'unbounded_global_comparison',
                                        'hint': '限定同一期间、单一指标和可比样本；不能由获批先发推出公司全球领先。无跨企业证据时仅写具体进展。'})
                 forecast = ('意向' in clause and re.search(r'(?:预计|预期|估算|测算|折算|推算).{0,12}(?:收入|营收)', clause))
