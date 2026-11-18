@@ -7,8 +7,16 @@ connection escaping its worker scope cannot become an unfenced writer.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
+import time
+import traceback
+
+_log = logging.getLogger(__name__)
+# Other connections wait 10 s for the write lock, then fail their statement. A transaction held
+# this long is logged with where it began, so the holder behind a "database is locked" is known.
+SLOW_WRITE_SECONDS = 5.0
 
 
 def _operation(sql):
@@ -36,8 +44,37 @@ class FencedCursor(sqlite3.Cursor):
 class FencedConnection(sqlite3.Connection):
     guard = None
     keep_open = False
+    _write_began = None
+
+    def _began(self, sql):
+        # Only the write lock blocks other writers (WAL): it is taken by BEGIN IMMEDIATE/EXCLUSIVE or
+        # the first write in a deferred transaction. A read transaction (plain BEGIN) is not timed.
+        if self._write_began is not None or not self.in_transaction:
+            return
+        operation = _operation(sql)
+        immediate = operation == 'BEGIN' and re.match(r'\s*BEGIN\s+(IMMEDIATE|EXCLUSIVE)', sql, re.I)
+        if immediate or operation not in {'', 'SELECT', 'EXPLAIN', 'PRAGMA', 'BEGIN', 'SAVEPOINT', 'RELEASE',
+                                          'ROLLBACK', 'COMMIT', 'END', 'WITH'}:
+            self._write_began = (time.monotonic(), traceback.extract_stack(limit=10)[:-2])
+
+    def _ended(self, closing=False):
+        if self._write_began is None or (self.in_transaction and not closing):
+            return
+        started, stack = self._write_began
+        self._write_began = None
+        held = time.monotonic() - started
+        if held >= SLOW_WRITE_SECONDS:
+            frames = [f for f in stack if 'project_watch' in f.filename and 'write_fencing' not in f.filename] or stack[-3:]
+            where = ' <- '.join(f'{f.filename.rsplit("project_watch", 1)[-1]}:{f.lineno} {f.name}' for f in reversed(frames))
+            _log.warning('write transaction held %.1f s, opened at %s', held, where)
+
+    def rollback(self):
+        super().rollback()
+        self._ended()
 
     def close(self):
+        if not self.keep_open:
+            self._ended(closing=True)  # closing discards an open transaction
         # A read session's shared connection outlives each borrower's closing();
         # what the borrower left uncommitted is discarded, as a real close would.
         if not self.keep_open:
@@ -61,11 +98,19 @@ class FencedConnection(sqlite3.Connection):
 
     def execute(self, sql, parameters=()):
         self.before_statement(sql)
-        return super().execute(sql, parameters)
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            self._began(sql)
+            self._ended()
 
     def executemany(self, sql, parameters):
         self.before_statement(sql)
-        return super().executemany(sql, parameters)
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            self._began(sql)
+            self._ended()
 
     def cursor(self, factory=FencedCursor):
         return super().cursor(factory)
@@ -96,7 +141,9 @@ class FencedConnection(sqlite3.Connection):
             except BaseException:
                 self.rollback()
                 raise
-        return super().commit()
+        result = super().commit()
+        self._ended()
+        return result
 
     def __exit__(self, exc_type, exc, traceback):
         if exc_type is not None:

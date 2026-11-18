@@ -7,6 +7,7 @@ as "AI 整理", never as a verified fact.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -2466,6 +2467,10 @@ class Pipeline:
             self._execution_state.current = previous_execution
 
 
+def _db_busy(exc):
+    return any(word in str(exc).lower() for word in ('database is locked', 'database is busy', 'database table is locked'))
+
+
 ANALYSIS_MIN_SECONDS = 30  # least time between input-change scheduling passes
 
 
@@ -2676,6 +2681,18 @@ class StudioWorker:
                 self.pipeline.store.defer_legacy_batches(job)
             else:
                 self.pipeline.store.finish(job["id"], error=str(exc), lease_token=job["lease_token"])
+        except sqlite3.OperationalError as exc:
+            if not _db_busy(exc):
+                _log.exception("studio job failed")
+                self.pipeline.store.finish(job["id"], error=f"内部错误：{type(exc).__name__}", lease_token=job["lease_token"])
+            else:
+                # Another writer held the database past the wait. That is temporary: the job goes back
+                # in the queue on its checkpoints. A reply received but not yet recorded stays an
+                # unknown request and is held, never resent. Live jobs failed outright here before.
+                _log.warning("studio job requeued: database busy (%s)", job['id'])
+                # Still busy: the lease lapses and the queue takes the job back on its own.
+                with contextlib.suppress(sqlite3.OperationalError):
+                    self.pipeline.store.yield_job(job)
         except Exception as exc:
             _log.exception("studio job failed")
             self.pipeline.store.finish(job["id"], error=f"内部错误：{type(exc).__name__}", lease_token=job["lease_token"])
