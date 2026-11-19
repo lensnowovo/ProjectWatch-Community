@@ -197,7 +197,8 @@ def test_explicit_proxy_overrides_system_proxy(monkeypatch):
     monkeypatch.setattr(urllib.request, "build_opener", build)
     monkeypatch.setattr("project_watch.studio.http.system_proxies", lambda: {"https": "http://system.test:1"})
     for proxy in ('http://explicit.test:2', ''):
-        with pytest.raises(HttpError, match='connection_failed'):
+        # No connection was ever set up, so the transport proves nothing was sent.
+        with pytest.raises(HttpError, match='connection_not_sent'):
             urllib_transport(proxy)('GET', 'https://api.example/', {}, None, 1)
     assert seen == [{"http": "http://explicit.test:2", "https": "http://explicit.test:2"},
                     {"https": "http://system.test:1"}]

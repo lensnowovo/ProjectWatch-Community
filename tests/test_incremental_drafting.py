@@ -221,6 +221,98 @@ def test_a_section_never_published_makes_the_round_a_full_traversal(project):
     assert len(drafted(requests)) == 3 and 'previous_draft' not in requests[0]
 
 
+
+def _finish(project, execution, days_ago=0):
+    from datetime import UTC, datetime, timedelta
+    with closing(project.store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='done',finished_at=? WHERE id=?",
+                   ((datetime.now(UTC) - timedelta(days=days_ago)).isoformat(), execution.job['id']))
+
+
+def test_a_section_rejected_after_a_full_read_waits_instead_of_forcing_every_round_full(project, monkeypatch):
+    plain = a._reviewer
+    def rejecting(*args):
+        review = plain(*args)
+        def strict(system, payload):
+            result = review(system, payload)
+            if 'checks' in result:
+                for row in result['checks']:
+                    if row['field'].startswith('operations'):
+                        row.update(status='insufficient', evidence=[])
+            return result
+        strict.prepare = review.prepare
+        return strict
+    project.add(2)
+    with monkeypatch.context() as m:
+        m.setattr(a, '_reviewer', rejecting)
+        first, publication, _ = project.run('b1')
+    assert publication['published'] == ['chain'] and project.head('operations') is None
+    _finish(project, first)
+    project.add(1)
+    second, publication, requests = project.run('b2')
+    plan = second.read_checkpoint(inc.PLAN)
+    # Live: one never-published section made every round re-read all 1,840 fragments.
+    assert plan['mode'] == 'incremental' and plan['targets'] == ['chain']
+    assert list(plan['deferred_sections']) == ['operations']
+    assert len(drafted(requests)) == 1 and publication['coverage']['deferred_sections']
+    _finish(project, second)
+    project.add(1)
+    third, _, requests = project.run('b3')
+    assert third.read_checkpoint(inc.PLAN)['mode'] == 'incremental'
+    _finish(project, third)
+    _finish(project, first, days_ago=inc.FULL_RETRY_DAYS + 1)
+    with closing(project.store._connect()) as db, db:
+        # Only the old full read drafted operations; the incremental rounds left it out.
+        db.execute("UPDATE studio_jobs SET finished_at=? WHERE id IN (?,?)",
+                   ('2000-01-01T00:00:00+00:00', second.job['id'], third.job['id']))
+    project.add(1)
+    fourth, _, requests = project.run('b4')
+    assert fourth.read_checkpoint(inc.PLAN)['reason'] == 'never_published:operations'
+    assert len(drafted(requests)) == 5
+
+
+def test_a_full_read_for_another_reason_still_drafts_a_deferred_section(project, monkeypatch):
+    plain = a._reviewer
+    def rejecting(*args):
+        review = plain(*args)
+        def strict(system, payload):
+            result = review(system, payload)
+            for row in result.get('checks', ()):
+                if row['field'].startswith('operations'):
+                    row.update(status='insufficient', evidence=[])
+            return result
+        strict.prepare = review.prepare
+        return strict
+    project.add(2)
+    with monkeypatch.context() as m:
+        m.setattr(a, '_reviewer', rejecting)
+        first, _, _ = project.run('b1')
+    _finish(project, first)
+    monkeypatch.setattr(inc, 'covered_fragments', lambda store, record: None)
+    project.add(1)
+    second, _, requests = project.run('b2')
+    plan = second.read_checkpoint(inc.PLAN)
+    assert plan['mode'] == 'full' and plan['targets'] == list(TARGETS)
+    assert len(drafted(requests)) == 3
+
+
+@pytest.mark.parametrize('outcome', [{'status': 'blocked', 'issues': ['request_outcome_unknown']},
+                                     {'status': 'rejected', 'issues': ['section_normalization_failed']}],
+                         ids=['unclear-request', 'unusable-reply'])
+def test_a_section_not_rejected_by_review_is_read_in_full_again(project, monkeypatch, outcome):
+    project.add(2)
+    first, _, _ = project.run('b1', affected=('chain',))
+    with closing(project.store._connect()) as db, db:
+        db.execute('DELETE FROM studio_insight_heads WHERE artifact_key=?', (section_analysis.PREFIX + 'operations',))
+    publication = first.read_checkpoint(a.PUBLICATION)
+    publication['sections']['operations'] = outcome
+    publication['published'] = ['chain']
+    first.checkpoint_chunked(a.PUBLICATION, publication)
+    _finish(project, first)
+    project.add(1)
+    second, _, _ = project.run('b2')
+    assert second.read_checkpoint(inc.PLAN)['reason'] == 'never_published:operations'
+
 def test_a_version_without_a_traversal_record_is_not_a_seed(project, monkeypatch):
     with monkeypatch.context() as published_before_the_upgrade:
         published_before_the_upgrade.setattr(inc, 'traversal', lambda execution: None)

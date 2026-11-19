@@ -104,3 +104,28 @@ def test_a_page_summary_with_an_isolated_unknown_request_finishes_like_a_round(t
     p.store.finish(job['id'])
     with closing(p.store._connect()) as db:
         assert db.execute('SELECT status FROM studio_jobs WHERE id=?', (job['id'],)).fetchone()[0] == expected
+
+
+@pytest.mark.parametrize('kind,isolated,expected', [('details', True, 'done'), ('business', True, 'done'),
+                                                     ('details', False, 'failed')])
+def test_an_extraction_job_whose_unclear_batch_was_isolated_finishes_partial(tmp_path, kind, isolated, expected):
+    """Its other batches stay saved and nothing is applied; enqueue() holds the same input either way."""
+    from contextlib import closing
+
+    from project_watch.studio.app import create_studio_app
+    p = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    pid = p.repository.create_project('Synthetic Unknown Co').id
+    p.store.upsert_project(pid, {'legal_name': 'Synthetic Unknown Co'}, consent=True)
+    job = p.store.enqueue(pid, kind, input_version='synthetic-input')
+    with closing(p.store._connect()) as db, db:
+        db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at,usage_version) "
+                   "VALUES (?,?,?,?,'unknown',?,1)", (job['id'], 'synthetic-cut', 'model', 'p', '2026-11-18T00:00:00+00:00'))
+        if isolated:
+            db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?)",
+                       (job['id'], 'independent-step-failures-v1', '{"detail_proposal_3": {"status": "blocked"}}'))
+    p.store.finish(job['id'])
+    with closing(p.store._connect()) as db:
+        assert db.execute('SELECT status FROM studio_jobs WHERE id=?', (job['id'],)).fetchone()[0] == expected
+    if isolated:
+        # No new paid job for the same input.
+        assert p.store.enqueue(pid, kind, automatic=True, input_version='synthetic-input')['id'] == job['id']

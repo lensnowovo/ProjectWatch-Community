@@ -239,7 +239,12 @@ def batches(system, payload):
         yield batch
 
 
-def run(execution, llm, system, payload, guard):
+def _traverse(execution, llm, system, payload, guard, partial=None):
+    """Review every batch of one payload; return each batch's checked answer.
+
+    A supported row that a batch only partly verified becomes insufficient here. With
+    ``partial`` (a dict), the sources each such batch quoted are recorded per field.
+    """
     results = []
     # Build the whole finite plan first: an oversized source cannot cause a
     # partially sent plan whose remaining sources silently vanish.
@@ -269,15 +274,21 @@ def run(execution, llm, system, payload, guard):
             issues = review.validate_review(value, batch)
             invalid_support = {i['field'] for i in issues if i['code'] == 'evidence_insufficient'}
             for row in value['checks']:
-                if row['status'] == 'supported' and (row['field'] in invalid_support
-                        or row.get('inference') in ('partial', 'related')):
+                if row['status'] != 'supported':
+                    continue
+                if partial is not None and row.get('inference') == 'partial' and row['field'] not in invalid_support:
+                    refs = {e['ref'] for e in row.get('evidence') or () if isinstance(e, dict) and e.get('ref') in batch['evidence']}
+                    if refs:
+                        partial.setdefault(row['field'], []).append(refs)
+                if row['field'] in invalid_support or row.get('inference') in ('partial', 'related'):
                     row.update(status='insufficient', reason='source batch did not verify full support', evidence=[])
         results.append(value)
-    if consistency:
-        conflicts = [c for result in results for c in result['conflicts']]
-        return dict(consistent=not conflicts, reason='all evidence batches reviewed', conflicts=conflicts)
+    return results
+
+
+def _verdicts(fields, results):
     checks = []
-    for field in payload['fields']:
+    for field in fields:
         rows = [next(r for r in result['checks'] if r['field'] == field) for result in results]
         contradicted = next((r for r in rows if r['status'] == 'contradicted'), None)
         supported = next((r for r in rows if r['status'] == 'supported'), None)
@@ -289,6 +300,41 @@ def run(execution, llm, system, payload, guard):
             checks.append(rows[0])
         else:
             checks.append(dict(field=field, status='insufficient', reason='no evidence batch verified full support', evidence=[]))
+    return checks
+
+
+def run(execution, llm, system, payload, guard):
+    if payload.get('phase') == 'consistency':
+        results = _traverse(execution, llm, system, payload, guard)
+        conflicts = [c for result in results for c in result['conflicts']]
+        return dict(consistent=not conflicts, reason='all evidence batches reviewed', conflicts=conflicts)
+    partial = {}
+    checks = _verdicts(payload['fields'], _traverse(execution, llm, system, payload, guard, partial))
+    # A compound assertion whose parts are supported in different batches: a live technology
+    # route ("domestic compute, speech base, device-cloud, industry models") was three-quarters
+    # supported by each of two batches and rejected. Only the sources those batches quoted are
+    # checked once more together; that check must verify full support on its own. Only
+    # aggregate fields (summary, route, headline) can be partly supported here: validate_review
+    # already rejects a partial quote for a single point. The joint check is optional: if its
+    # answer is unclear or unusable the earlier verdicts stand (its journal row stops a resend).
+    joined = {row['field'] for row in checks if row['status'] == 'insufficient' and len(partial.get(row['field'], ())) >= 2}
+    if joined:
+        refs = set().union(*(r for field in joined for r in partial[field]))
+        combined = {**payload, 'fields': {f: t for f, t in payload['fields'].items() if f in joined},
+                    'evidence': {ref: source for ref, source in payload['evidence'].items() if ref in refs}}
+        from project_watch.studio.llm import ModelError
+        from project_watch.studio.step_outcomes import ISOLATABLE
+        try:
+            again = {row['field']: row for row in _verdicts(combined['fields'],
+                                                             _traverse(execution, llm, system, combined, guard))}
+        except ModelError as exc:
+            if exc.code not in ISOLATABLE:
+                raise  # pause, backoff and permission changes still park or stop the job
+            again = {}
+        except ValueError:
+            again = {}
+        checks = [again[row['field']] if row['field'] in again and again[row['field']]['status'] == 'supported' else row
+                  for row in checks]
     return {'checks': checks}
 
 

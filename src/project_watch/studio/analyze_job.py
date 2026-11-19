@@ -400,9 +400,12 @@ def sections(pipeline, execution, llm, context, affected=None):
             execution.checkpoint_chunked(PUBLICATION, publication)
             return publication
     if not targets:
+        deferred = (plan or {}).get('deferred_sections') or {}
         publication = _mark_retired(dict(status='completed', targets=[], published=[],
-                           sections={s: dict(status='unchanged', reason='no new relevant material for this section')
-                                     for s in section_analysis.SECTIONS}), retired)
+                           sections={s: dict(status='unchanged', reason='rejected after a full read; waiting for the next full read'
+                                             if s in deferred else 'no new relevant material for this section')
+                                     for s in section_analysis.SECTIONS},
+                           **({'deferred_sections': deferred} if deferred else {})), retired)
         execution.checkpoint_chunked(PUBLICATION, publication)
         return publication
     project = pipeline.store.get_project(pid) or {}

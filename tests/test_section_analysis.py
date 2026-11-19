@@ -555,3 +555,47 @@ def test_unknown_section_keeps_independent_judgment(host):
     assert outcome_state(result['sections']['technology']) == 'missing_draft'
     assert outcome_state({'status':'rejected','blocking':[{'code':'evidence_insufficient'}]}) == 'insufficient'
     assert outcome_state({'status':'rejected','blocking':[{'code':'invalid_review'}]}) == 'review_blocked'
+
+
+def _two_field_review():
+    from project_watch.studio import judgment_review as review
+
+    payload = {'fields': {'a.summary': 'x', 'a.for.0.text': 'y'},
+               'evidence': {'S1': {'context': 'first span', 'title': ''}}}
+    return review, payload, review.ReviewFieldAliases(payload)
+
+
+def test_a_partial_status_is_read_as_not_supported():
+    """Live reviewers sometimes put the inference label in status; that field is not supported."""
+    review, payload, aliases = _two_field_review()
+    decoded = aliases.decode({'checks': [
+        {'field': 'F1', 'status': 'supported', 'reason': 'r', 'evidence': [{'ref': 'S1', 'quote_id': 'Q1'}]},
+        {'field': 'F2', 'status': 'partial', 'inference': 'partial', 'reason': 'half', 'evidence': []}]})
+    issues = review.validate_review(decoded, payload)
+    assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
+    # A reply saved before decoding mapped it is read the same way.
+    saved = {'checks': [{'field': 'a.summary', 'status': 'partial', 'reason': 'half', 'evidence': []},
+                        {'field': 'a.for.0.text', 'status': 'not_factual', 'reason': 'r', 'evidence': []}]}
+    assert [i['code'] for i in review.validate_review(saved, payload)] == ['evidence_insufficient']
+    assert saved['checks'][0]['status'] == 'insufficient'
+
+
+def test_a_flattened_check_leaves_only_its_field_unverified():
+    review, payload, aliases = _two_field_review()
+    decoded = aliases.decode({'checks': [
+        {'field': 'F1', 'status': 'supported', 'reason': 'r', 'evidence': [{'ref': 'S1', 'quote_id': 'Q1'}]},
+        'field F2', 'status', 'supported', 'reason', 'looks fine', 'evidence', []]})
+    issues = review.validate_review(decoded, payload)
+    assert [(i['field'], i['code']) for i in issues] == [('a.for.0.text', 'evidence_insufficient')]
+    assert {c['field']: c['status'] for c in decoded['checks']} == {'a.summary': 'supported',
+                                                                     'a.for.0.text': 'insufficient'}
+
+
+def test_counterevidence_replies_stay_strict():
+    """A garbled counterevidence row could hide a contradiction: the reply is still rejected."""
+    import pytest
+
+    review, payload, _ = _two_field_review()
+    aliases = review.ReviewFieldAliases({**payload, 'phase': 'counterevidence'})
+    with pytest.raises(ValueError, match='review_check_invalid'):
+        aliases.decode({'checks': ['field F1', 'status', 'contradicted']})

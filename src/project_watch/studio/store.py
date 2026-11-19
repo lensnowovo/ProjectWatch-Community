@@ -1522,7 +1522,12 @@ class StudioStore:
         with closing(self._connect()) as db, db:
             unknown = db.execute(f"SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1", (job_id,)).fetchone()
             round_job = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND kind IN "
-                                   "('collect','analyze','report','page_summary','internal_page_summary')",
+                                   "('collect','analyze','report','page_summary','internal_page_summary') "
+                                   # An extraction job whose unclear batch was isolated keeps its other
+                                   # batches and is not applied; enqueue() holds the same input. A live
+                                   # details job with 217 answers and one held request showed as failed.
+                                   "OR (kind IN ('business','details') AND EXISTS (SELECT 1 FROM studio_job_checkpoints c "
+                                   "WHERE c.job_id=studio_jobs.id AND c.stage='independent-step-failures-v1'))",
                                    (job_id,)).fetchone()
             if unknown and not error and not round_job:
                 # Round jobs finish with their unclear requests recorded per source/section, and page

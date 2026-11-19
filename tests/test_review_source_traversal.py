@@ -120,6 +120,82 @@ def test_partial_support_is_not_promoted_to_a_full_summary_across_chunks():
     assert result['checks'][0]['status'] == 'insufficient'
 
 
+
+def test_parts_supported_in_different_batches_are_checked_once_together():
+    sent = []
+    def model(system, user, **kwargs):
+        body = json.loads(user)
+        sent.append(set(body['evidence']))
+        result = answer(body)
+        if len(body['evidence']) > 4:
+            result['checks'][0]['inference'] = 'partial'  # each large batch supports only part of it
+        return result
+    result = r.run(Journal(), SimpleNamespace(json=model), 'system', payload(), lambda: None)
+    batches = sent[:-1]
+    assert len(batches) >= 2
+    # One more request with only the sources the partial batches quoted.
+    assert sent[-1] == {sorted(b, key=lambda ref: int(ref[1:]))[0] for b in batches}
+    assert result['checks'][0]['status'] == 'supported'
+    assert result['checks'][0]['inference'] == 'direct'
+
+
+
+def test_an_unclear_joint_check_leaves_the_earlier_verdicts():
+    sent = []
+    def model(system, user, **kwargs):
+        body = json.loads(user)
+        sent.append(set(body['evidence']))
+        if len(body['evidence']) <= 4:
+            raise ModelError('synthetic lost joint check', code='request_outcome_unknown')
+        result = answer(body)
+        result['checks'][0]['inference'] = 'partial'
+        return result
+    result = r.run(Journal(), SimpleNamespace(json=model), 'system', payload(), lambda: None)
+    assert result['checks'][0]['status'] == 'insufficient'
+    assert len(sent) == len(list(r.batches('system', payload()))) + 1
+
+
+def test_a_paused_project_still_stops_the_joint_check():
+    def model(system, user, **kwargs):
+        body = json.loads(user)
+        if len(body['evidence']) <= 4:
+            raise ModelError('paused', code='project_paused')
+        result = answer(body)
+        result['checks'][0]['inference'] = 'partial'
+        return result
+    with pytest.raises(ModelError, match='paused'):
+        r.run(Journal(), SimpleNamespace(json=model), 'system', payload(), lambda: None)
+
+def test_a_single_partial_batch_is_not_rechecked():
+    sent = []
+    def model(system, user, **kwargs):
+        body = json.loads(user)
+        sent.append(set(body['evidence']))
+        result = answer(body)
+        if len(sent) == 1:
+            result['checks'][0]['inference'] = 'partial'
+        else:
+            result['checks'][0].update(status='insufficient', evidence=[])
+        return result
+    result = r.run(Journal(), SimpleNamespace(json=model), 'system', payload(), lambda: None)
+    assert result['checks'][0]['status'] == 'insufficient'
+    assert len(sent) == len(list(r.batches('system', payload())))
+
+
+def test_a_joint_check_cannot_override_a_contradiction():
+    sent = []
+    def model(system, user, **kwargs):
+        body = json.loads(user)
+        sent.append(set(body['evidence']))
+        if len(sent) == 2:
+            return answer(body, status='contradicted')
+        result = answer(body)
+        result['checks'][0]['inference'] = 'partial'
+        return result
+    result = r.run(Journal(), SimpleNamespace(json=model), 'system', payload(), lambda: None)
+    assert result['checks'][0]['status'] == 'contradicted'
+    assert len(sent) == len(list(r.batches('system', payload())))
+
 def long_payload():
     data = payload()
     data['evidence'] = {f'S{i}': {'context': ('SOURCE' + str(i) + ' ') * 500, 'title': f'title {i}'} for i in range(42)}

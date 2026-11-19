@@ -186,8 +186,9 @@ def research_inputs(service, project_id):
     company_names, _ = current_located_names(service.objects.store, project_id, subject, name_refs,
                                             include_internal=False)
     basis = {'subject_id': subject['id'], 'company': subject['name'], 'products': products, 'fact_ids': sorted(fact_ids),
-             'overrides': [(r['scope_key'], r['decision'], r['version']) for r in overrides],
-             'week': date.today().isocalendar()[:2], 'prompt_version': PROMPT_VERSION,
+             # Lists, not tuples: a resumed job compares these with its checkpointed (JSON) copy.
+             'overrides': [[r['scope_key'], r['decision'], r['version']] for r in overrides],
+             'week': list(date.today().isocalendar()[:2]), 'prompt_version': PROMPT_VERSION,
              'matching_version': MATCHING_VERSION, 'business_version': BUSINESS_VERSION,
              'query_contexts': query_contexts, 'discovery_queries': queries,
              'company_names': company_names, 'industry_hint': industry_hint, 'hint_products': product_names,
@@ -568,7 +569,7 @@ class CompetitionResearch(CompanyLeads):
                 # Name what moved (diagnostics only, no values): two of seven live jobs stopped here.
                 before = execution.read_checkpoint('competition_target_inputs') or inputs
                 moved = sorted(k for k in set(current) | set(before) if k not in ('queries', 'input_version')
-                               and current.get(k) != before.get(k))
+                               and json.dumps(current.get(k), sort_keys=True) != json.dumps(before.get(k), sort_keys=True))
                 _log.warning('competition inputs changed during job %s: %s', job['id'], ', '.join(moved) or 'unknown')
                 raise ValueError('competition inputs changed; start a new explicit round')
         def stage(name, function):
