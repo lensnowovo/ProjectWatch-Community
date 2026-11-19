@@ -143,7 +143,8 @@ def redirect_handler(monkeypatch):
         return opener
 
     monkeypatch.setattr(urllib.request, 'build_opener', build)
-    with pytest.raises(HttpError, match='connection_failed'):
+    # No connection was ever set up, so the transport proves nothing was sent.
+    with pytest.raises(HttpError, match='connection_not_sent'):
         urllib_transport()('GET', 'https://api.example/original', {}, None, 1)
     return next(h for h in handlers if isinstance(h, urllib.request.HTTPRedirectHandler))
 

@@ -192,6 +192,28 @@ def test_a_partial_profile_is_replaced_by_a_later_complete_read(tmp_path):
     assert again == complete
 
 
+def test_one_malformed_batch_answer_leaves_only_that_batch_unread(tmp_path):
+    pipeline, pid, _calls, _reads = research_pipeline(tmp_path)
+    profiles = pipeline.business_profiles
+    company = pipeline.objects.ensure_subject(pid)
+    text = 'Synthetic Optics sells Lens B for drug screening.'
+    evidence = pipeline.evidence.save(sample(pid, text).model_copy(update={'visibility': 'public'}))
+    current = profiles.inputs(pid, binding=pipeline.model_binding(), subject_id=company['id'], evidence_ids=[evidence['id']])
+    part = current['parts'][0]
+    row = {'company': 'Synthetic Optics', 'name': 'Lens B', 'source': part['marker'], 'quote': text,
+           'use_case': '', 'buyer_type': '', 'delivery': '', 'basis': 'actual', 'polarity': 'asserted'}
+    # A live batch answered {"error": "no material provided"} instead of a product list.
+    result = profiles.apply(pid, current, None, batch_outputs=[{'products': [row]}, {'error': 'no material'}])
+    assert result['accepted'] == 1 and result['unread_batches'] == 1
+    # A single answer with a wrong envelope, or no usable answer at all, keeps the existing profile.
+    for outputs in ([{'error': 'no material'}], [{'error': 'no material'}, {'error': 'none either'}]):
+        with pytest.raises(ValueError):
+            profiles.apply(pid, current, None, batch_outputs=outputs)
+    # Batches already skipped upstream do not count as malformed answers here.
+    mixed = profiles.apply(pid, current, None, batch_outputs=[{'products': [row]}, {'error': 'x'}], unread_batches=1)
+    assert mixed['unread_batches'] == 2 and mixed['accepted'] == 1
+
+
 def test_saved_batches_replay_without_rebuilding_inputs(tmp_path):
     pipeline, pid, inputs = _batches(tmp_path)
     execution = _Checkpoints()

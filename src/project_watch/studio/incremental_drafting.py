@@ -23,6 +23,12 @@ TRAVERSAL_VERSION = 1
 # revision survives only when it replaced supporting quotes and left the identity alone
 # (``objects_keep_identity``). Every reason since the last publish must qualify.
 SEEDABLE_STALE = frozenset({'source_revised'})
+# A section that a full read could not publish waits this long before the next full read.
+# Until then automatic rounds leave it out and draft the others incrementally: on a live
+# project one never-published section forced every round to re-read all 1,840 fragments.
+FULL_RETRY_DAYS = 7
+UNUSABLE_OUTCOME = frozenset({'invalid_section_or_reference', 'invalid_consistency_review',
+                              'section_normalization_failed'})
 _OBJECT_STALE = 'object_revised'
 
 
@@ -247,19 +253,66 @@ def seed_permitted(db, pid, record):
     return True
 
 
+def failed_full_read(store, pid, name):
+    """When the latest full read that drafted ``name`` had it rejected by review, or None.
+
+    Only finished automatic or owner analyses count. A later incremental round that left
+    the section out is skipped over; one that published it ends the search.
+    """
+    from project_watch.studio.analyze_job import PUBLICATION
+    from project_watch.studio.execution import JobExecution
+
+    with closing(store._connect()) as db:
+        jobs = db.execute("SELECT id,finished_at FROM studio_jobs WHERE project_id=? AND kind='analyze' "
+                          "AND status='done' ORDER BY finished_at DESC LIMIT 30", (pid,)).fetchall()
+        for job_id, finished in jobs:
+            execution = JobExecution(store, {'id': job_id})
+            publication = execution.read_checkpoint(PUBLICATION, db=db) or {}
+            if name not in (publication.get('targets') or ()):
+                continue
+            if name in (publication.get('published') or ()):
+                return None
+            outcome = (publication.get('sections') or {}).get(name) or {}
+            codes = {i if isinstance(i, str) else (i or {}).get('code') for i in outcome.get('issues') or ()}
+            if outcome.get('status') != 'rejected' or codes & UNUSABLE_OUTCOME:
+                # Blocked by an unclear request, or an unusable reply rather than a review
+                # verdict: read in full again.
+                return None
+            frozen = execution.read_checkpoint(PLAN, db=db)
+            if frozen is None or frozen.get('mode') == 'full':
+                return finished
+    return None
+
+
 def _build(store, pid, context, selected, sources, targets, refs):
+    from datetime import UTC, datetime, timedelta
+
     from project_watch.studio.section_analysis import PREFIX
 
+    every = list(targets)
+
     def full(reason):
-        return {'mode': 'full', 'reason': reason, 'targets': list(targets)}
+        # A full read drafts every target, including one deferred above.
+        return {'mode': 'full', 'reason': reason, 'targets': every}
     if refs is None or len(refs) != len(sources):
         return full('selection_without_fragment_positions')
+    deferred = {}
+    for name in targets:
+        if (context.get('baseline_analysis') or {}).get(PREFIX + name):
+            continue
+        tried = failed_full_read(store, pid, name)
+        try:
+            recent = tried and datetime.fromisoformat(tried) > datetime.now(UTC) - timedelta(days=FULL_RETRY_DAYS)
+        except ValueError:
+            recent = False
+        if not recent:
+            return full('never_published:' + name)
+        deferred[name] = tried
+    targets = [name for name in targets if name not in deferred]
     position = {tuple(ref): i for i, ref in enumerate(refs)}
     seeds, carried, lag = {}, None, {}
     for name in targets:
         version = (context.get('baseline_analysis') or {}).get(PREFIX + name)
-        if not version:
-            return full('never_published:' + name)
         with closing(store._connect()) as db:
             row = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND id=?',
                              (pid, version)).fetchone()
@@ -293,8 +346,11 @@ def _build(store, pid, context, selected, sources, targets, refs):
     # It is never worse than a full read; ``lagging_sections`` makes it visible.
     common = len(carried or ())
     lagging = sorted(name for name, count in lag.items() if count == common and any(c > common for c in lag.values()))
+    # A deferred section is not drafted this round; its last full read and the date of the next
+    # are visible in the plan and coverage.
     return {'mode': 'incremental', 'targets': list(targets), 'carried': sorted(carried or ()), 'seeds': seeds,
-            **({'lagging_sections': lagging} if lagging else {})}
+            **({'lagging_sections': lagging} if lagging else {}),
+            **({'deferred_sections': deferred} if deferred else {})}
 
 
 def view(frozen, selected, sources):
@@ -304,7 +360,8 @@ def view(frozen, selected, sources):
     seeded = {name: {k: v for k, v in seed.items() if k != 'raw'} for name, seed in frozen['seeds'].items()}
     coverage = {**selected['coverage'], 'mode': 'incremental', 'carried_fragments': len(carried),
                 'new_fragments': len(draft_sources), 'seeded_sections': seeded,
-                **({'lagging_sections': frozen['lagging_sections']} if frozen.get('lagging_sections') else {})}
+                **({'lagging_sections': frozen['lagging_sections']} if frozen.get('lagging_sections') else {}),
+                **({'deferred_sections': frozen['deferred_sections']} if frozen.get('deferred_sections') else {})}
     seed = {name: frozen['seeds'][name]['raw'] for name in frozen['targets']}
     return draft_sources, seed, {**selected, 'coverage': coverage}
 

@@ -260,6 +260,40 @@ class PatientHTTPSConnection(http.client.HTTPSConnection):
             self.control.trace.data['stage'] = 'response_headers'
 
 
+class TracedHTTPSConnection(http.client.HTTPSConnection):
+    """An ordinary request that records when TCP, proxy tunnel and TLS setup finished.
+
+    Before that point no request byte has left. Public reads and searches use the default
+    timeout and no patient control, so without this mark a TLS handshake cut by the proxy
+    was recorded as an unknown outcome although nothing was sent.
+    """
+
+    def __init__(self, *args, trace=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.trace = trace
+
+    def connect(self):
+        super().connect()
+        if self.trace is not None:
+            self.trace.mark('connected')
+            self.trace.data['stage'] = 'sending'
+
+    def send(self, data):
+        super().send(data)
+        if self.trace is not None and 'connected_ms' in self.trace.data:
+            self.trace.mark('sent')
+            self.trace.data['stage'] = 'response_headers'
+
+
+class TracedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, trace):
+        super().__init__()
+        self.trace = trace
+
+    def https_open(self, req):
+        return self.do_open(partial(TracedHTTPSConnection, trace=self.trace), req, context=self._context)
+
+
 class PatientHTTPSHandler(urllib.request.HTTPSHandler):
     def __init__(self, control):
         super().__init__()
@@ -360,6 +394,8 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
             handlers = [urllib.request.ProxyHandler(proxies), redirect]
             if control:
                 handlers.append(PatientHTTPSHandler(control))
+            else:
+                handlers.insert(1, TracedHTTPSHandler(trace))
             opener = urllib.request.build_opener(*handlers)
             try:
                 with opener.open(request, timeout=timeout) as response:
@@ -390,10 +426,9 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, IncompleteStream) as exc:
             trace.error(exc)
             reason = getattr(exc, 'reason', exc)
-            # A patient connection marks `connected` only after TCP, proxy
+            # Every HTTPS connection marks `connected` only after TCP, proxy
             # tunnel and TLS setup; before that no request byte has left.
-            unconnected = (control is not None and trace.data.get('stage') == 'connect'
-                           and 'connected_ms' not in trace.data)
+            unconnected = trace.data.get('stage') == 'connect' and 'connected_ms' not in trace.data
             if (phase == "connect_or_headers" and not getattr(redirect, "seen_redirect", False)
                     and (unconnected or isinstance(reason, (socket.gaierror, ConnectionRefusedError))
                          or _local_socket_failure(reason))):

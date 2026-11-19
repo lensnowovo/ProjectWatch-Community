@@ -216,7 +216,21 @@ class BusinessProfiles:
     def apply(self, project_id, inputs, data, *, guard=None, batch_outputs=None, unread_batches=0):
         # Validate each bounded response before publishing the complete union.
         responses = [data] if batch_outputs is None else batch_outputs
-        rows = [row for response in responses for row in _ProposalEnvelope.model_validate(response).products]
+        rows, invalid, malformed = [], None, 0
+        for response in responses:
+            try:
+                rows.extend(_ProposalEnvelope.model_validate(response).products)
+            except ValidationError as exc:
+                invalid = exc
+                if len(responses) == 1:
+                    raise
+                # A live business job saved 123 batch answers and then failed outright because
+                # one answer claimed it had no material. Among several batches that answer is an
+                # unread batch, as in competition reading: the record is not final, the rest stand.
+                unread_batches += 1
+                malformed += 1
+        if invalid is not None and malformed == len(responses):
+            raise invalid  # no usable answer at all: keep the existing profile
         prepared, rejected, rejected_fields, rejected_schema = [], 0, 0, 0
         markers = {r['marker']: r for r in inputs['parts']}
         for row in rows:

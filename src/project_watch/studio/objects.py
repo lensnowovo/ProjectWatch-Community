@@ -77,15 +77,20 @@ class ObjectStore:
         with closing(self.store._connect()) as connection:
             return read(connection)
 
-    def page(self, project_id: str, *, include_internal: bool = True, limit: int = 500, after: str = "",
+    def page(self, project_id: str, *, include_internal: bool = True, limit: int | None = None, after: str = "",
              current_aliases_only: bool = False) -> list[dict]:
-        if type(limit) is not int or not 1 <= limit <= 500 or len(after) > 100:
+        """Every object by default; ``limit`` (at most 500) and ``after`` page the external API.
+
+        Internal callers read the whole list. With a silent 500-row default a project with 703
+        objects lost its own product from competition inputs once peer products sorted before it.
+        """
+        if (limit is not None and (type(limit) is not int or not 1 <= limit <= 500)) or len(after) > 100:
             raise ValueError("invalid object page")
         with closing(self.store._connect()) as db:
             db.execute('BEGIN')
             rows = [self._disclose(json.loads(r[0]), include_internal) for r in db.execute(
                 "SELECT record FROM studio_monitor_objects WHERE project_id=? AND id>? AND (? OR visibility='public') "
-                "ORDER BY id LIMIT ?", (project_id, after, include_internal, limit))]
+                "ORDER BY id LIMIT ?", (project_id, after, include_internal, -1 if limit is None else limit))]
             if current_aliases_only:
                 for row in rows:
                     if row['user_override'] or not row['aliases']:
