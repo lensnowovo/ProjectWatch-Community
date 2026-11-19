@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from contextlib import closing
 from datetime import date
 from types import SimpleNamespace
@@ -48,6 +49,8 @@ from project_watch.studio.product_matching import cgt_scope, contexts
 from project_watch.studio.public_profile import safe_url
 from project_watch.studio.public_reading import read_page as read_page
 
+# Longest a per-pair save relies on the last full input comparison.
+INPUT_RECHECK_SECONDS = 60
 _log = logging.getLogger(__name__)
 PROMPT_VERSION = 'research-v32-closing'
 DISCOVER = '''根据公开材料发现可能满足同类产品用途/采购需求的公司，不从记忆补名单。
@@ -554,7 +557,8 @@ class CompetitionResearch(CompanyLeads):
         if old_binding is not None and old_binding != binding:
             raise ValueError('competition checkpoint belongs to another model binding')
         execution.checkpoint('competition_model_binding', binding)
-        def guard():
+        checked = {'expected': None, 'at': 0.0}
+        def guard(recent_ok=False):
             with closing(pipeline.store._connect()) as db:
                 execution._guard(db)
             project = pipeline.store.get_project(pid)
@@ -564,6 +568,12 @@ class CompetitionResearch(CompanyLeads):
             if not project or project['status'] != 'active' or not project['activated'] or pipeline.model_binding() != binding:
                 raise ValueError('competition execution permission changed')
             expected = execution.read_checkpoint('competition_target_input_version') or inputs['input_version']
+            # Collecting the inputs costs seconds on a large portfolio; the per-pair save
+            # check re-ran it hundreds of times (a 73x6 peer took over 40 minutes).
+            # Only that check may rely on a recent comparison; outbound calls, including
+            # each pair's review, do not.
+            if recent_ok and checked['expected'] == expected and time.monotonic() - checked['at'] < INPUT_RECHECK_SECONDS:
+                return
             current = research_inputs(service, pid)
             if current.get('input_version') != expected:
                 # Name what moved (diagnostics only, no values): two of seven live jobs stopped here.
@@ -572,6 +582,7 @@ class CompetitionResearch(CompanyLeads):
                                and json.dumps(current.get(k), sort_keys=True) != json.dumps(before.get(k), sort_keys=True))
                 _log.warning('competition inputs changed during job %s: %s', job['id'], ', '.join(moved) or 'unknown')
                 raise ValueError('competition inputs changed; start a new explicit round')
+            checked.update(expected=expected, at=time.monotonic())
         def stage(name, function):
             guard()
             saved = execution.read_checkpoint(name)
@@ -719,6 +730,7 @@ class CompetitionResearch(CompanyLeads):
                 for scope in selected_pairs:
                     review_error = []
                     def review(context, errors=review_error):
+                        guard()  # full input check before each paid review call
                         try:
                             return llm.json(REVIEW, json.dumps(context, ensure_ascii=False), max_tokens=3000)
                         except Exception as exc:
@@ -733,7 +745,7 @@ class CompetitionResearch(CompanyLeads):
                             review_failure = review_error[0].code
                             break
                         raise review_error[0]
-                    guard()
+                    guard(recent_ok=True)
                     pipeline.relationships.save_assessment(pid, assessment, guard=execution._guard)
                     supported += assessment['support'] == 'supported'
                 reading = result.get('reading', {})

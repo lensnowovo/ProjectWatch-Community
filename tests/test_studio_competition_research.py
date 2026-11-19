@@ -300,3 +300,35 @@ def test_original_pages_continue_known_failure_but_hold_unknown(tmp_path):
     pipeline.article_reader = SimpleNamespace(read=lambda url: (_ for _ in ()).throw(HttpError('request_outcome_unknown')))
     with pytest.raises(HttpError, match='request_outcome_unknown'):
         pipeline.competition_research.originals(pid, [{**hits[0], 'url': 'https://alpha.test/new'}], execution=execution)
+
+
+
+def test_saving_each_product_pair_does_not_recollect_inputs_every_time(tmp_path, monkeypatch):
+    """Live 2026-11-19: 73x6 product pairs re-collected the inputs per save and one peer took 40+ minutes.
+
+    Pairs that need no paid review rely on a recent comparison; each review call still checks in full.
+    """
+    from project_watch.studio import competition_research as module
+    original_inputs, original_pairs, original_assess = module.research_inputs, module.select_product_pairs, module.assess_relation
+    counts = {}
+    for reviewed in (False, True):
+        for pairs in (1, 6):
+            pipeline, pid, _calls, _reads = research_pipeline(tmp_path / f'{reviewed}-{pairs}')
+            collected, reviews = [], []
+            def assess(*a, seen=reviews, review=None, reviewed=reviewed, **k):
+                if review is not None and reviewed:
+                    return original_assess(*a, review=lambda c: seen.append(1) or review(c), **k)
+                return original_assess(*a, **k)  # offline gates only: no paid review
+            monkeypatch.setattr(module, 'research_inputs', lambda *a, seen=collected, **k: seen.append(1) or original_inputs(*a, **k))
+            monkeypatch.setattr(module, 'select_product_pairs', lambda *a, n=pairs, **k: original_pairs(*a, **k) * n)
+            monkeypatch.setattr(module, 'assess_relation', assess)
+            pipeline.schedule_competition(pid)
+            job = pipeline.store.claim()
+            pipeline.run(job)
+            pipeline.store.finish(job['id'], lease_token=job['lease_token'])
+            assert pipeline.competition_research.saved(pid)['supported_count'] == (pairs if reviewed else 0)
+            counts[reviewed, pairs] = len(collected), len(reviews)
+    assert counts[False, 6][0] == counts[False, 1][0]
+    # One full input check per paid review call.
+    extra_reviews = counts[True, 6][1] - counts[True, 1][1]
+    assert extra_reviews > 0 and counts[True, 6][0] - counts[True, 1][0] == extra_reviews
