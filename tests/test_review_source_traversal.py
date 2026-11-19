@@ -361,3 +361,17 @@ def test_production_reviewer_scans_all_then_verifies_cited_evidence():
     assert reviewer.prepare(data)['issues'] == []
     assert reviewer('system', data)['checks'][0]['status'] == 'supported'
     assert scanned == list(data['evidence']) and supported == ['S0']
+
+
+def test_conflict_naming_one_field_twice_flags_that_field_only():
+    data = payload()
+    data.update(phase='consistency', fields={'position.summary': 'A', 'position.for.1.text': 'B'})
+    def model(system, user, **kwargs):
+        body = json.loads(user)
+        code = next(c for c, path in body['field_paths'].items() if path == 'position.for.1.text')
+        return {'consistent': False, 'reason': 'synthetic', 'conflicts': [
+            {'fields': [code, 'position.for.1.text'], 'reason': 'contradiction'}]}
+    result = r.run(Journal(), SimpleNamespace(json=model), 'system', data, lambda: None)
+    from project_watch.studio import judgment_review
+    issues = judgment_review.validate_consistency(result, data)
+    assert issues and {tuple(i['fields']) for i in issues} == {('position.for.1.text',)}

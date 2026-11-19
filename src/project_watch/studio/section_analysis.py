@@ -180,7 +180,7 @@ def _refs(value, sources):
     return found
 
 
-def _checked(execution, reviewer, guard, batch, refs, sources, *, split=True):
+def _checked(execution, reviewer, guard, batch, refs, sources, *, split=True, supporting=None):
     """Issues and receipts for one review batch. A malformed reply is reviewed once more in
     two halves (new, smaller requests); a half still malformed marks its own fields."""
     guard()
@@ -196,8 +196,16 @@ def _checked(execution, reviewer, guard, batch, refs, sources, *, split=True):
             found = [c for c in review.validate_consistency(saved['response'], batch) if not _inherent(c)]
         else:
             found = review.validate_review(saved['response'], batch)
+            flagged = {issue['field'] for issue in found}
             for check in saved['response'].get('checks', []):
-                refs.update(witness['ref'] for witness in check.get('evidence', []) if witness.get('ref') in sources)
+                quoted = {witness['ref'] for witness in check.get('evidence', []) if witness.get('ref') in sources}
+                refs.update(quoted)
+                # Sources that verified a scalar field (route, summary, headline): list
+                # items carry their own refs, and a support claim validation rejected
+                # (unquoted or partial) supports nothing.
+                if (supporting is not None and check.get('status') == 'supported'
+                        and check.get('field') not in flagged and _item(str(check.get('field'))) is None):
+                    supporting.update(quoted)
         return found, [key]
     except ValueError:
         fields = list(batch['fields'])
@@ -206,7 +214,8 @@ def _checked(execution, reviewer, guard, batch, refs, sources, *, split=True):
             issues, receipts = [], [key]
             for chunk in (fields[:half], fields[half:]):
                 sub = {**batch, 'fields': {path: batch['fields'][path] for path in chunk}}
-                found, keys = _checked(execution, reviewer, guard, sub, refs, sources, split=False)
+                found, keys = _checked(execution, reviewer, guard, sub, refs, sources, split=False,
+                                       supporting=supporting)
                 issues.extend(found)
                 receipts.extend(keys)
             return issues, receipts
@@ -302,9 +311,10 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
             counter = {'issues': [], 'receipts': []}
         issues = [issue for issue in counter['issues'] if issue['field'].split('.')[0] == name]
         receipts = list(counter['receipts'])
+        supporting = set()
         try:
             for batch in batches:
-                found, keys = _checked(execution, reviewer, guard, batch, refs, sources)
+                found, keys = _checked(execution, reviewer, guard, batch, refs, sources, supporting=supporting)
                 issues.extend(found)
                 receipts.extend(keys)
         except ModelError as exc:
@@ -321,6 +331,9 @@ def evaluate(execution, raw, sources, reviewer, guard, retained=None):
         outcomes[name] = dict(status='approved' if trimmed is not None else 'rejected', issues=issues,
                               refs=sorted(_refs(trimmed, sources) if trimmed is not None else refs),
                               review_receipts=receipts, dropped=dropped, blocking=blocking)
+        if (execution.read_checkpoint('analysis_review_sources_v1') or {}).get('version', 1) >= 5:
+            # Only v5 jobs use it; older jobs keep their original outcome (and publication identity).
+            outcomes[name]['supporting_refs'] = sorted(supporting)
         _withhold(trimmed, outcomes[name], held)
         if trimmed is None:
             basis, removed, _ = trim(part, issues, keep_blocked=True)

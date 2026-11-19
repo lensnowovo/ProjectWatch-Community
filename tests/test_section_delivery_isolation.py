@@ -396,3 +396,31 @@ def test_approved_without_publication_is_not_displayed_as_published(tmp_path):
     execution.checkpoint('analyze_section_outcome_v1:operations', {'outcome': {'status': 'approved'}, 'published': False})
     with closing(store._connect()) as db:
         assert section_progress.states(db, row(store, job))[0]['operations'] == 'unfinished'
+
+
+@pytest.mark.parametrize('version', [4, 5])
+def test_summary_repair_keeps_the_source_that_verified_the_route(host, version):
+    """Live 2026-11-20: the route's source was cited only by a dropped point; the repair's
+    re-review lost it and rejected a section that had passed with its summary withheld."""
+    from project_watch.studio.review_source_traversal import cited_payload
+    research, _, sources = host
+    research.execution.checkpoint(analyze_job.REVIEW_PROTOCOL, {'version': version})
+    sources['S2'] = {**sources['S1'], 'context': 'Synthetic route', 'title': 'Synthetic route'}
+    kept = dict(route='Synthetic route', maturity='advanced', consensus='forming', confidence='low',
+                summary='', academic=[{'text': 'RECRUITING', 'refs': ['S1']}], industry=[], risks=[])
+    raw = {'technology': deepcopy(kept)}
+    outcomes = {'technology': dict(status='approved', refs=['S1'], supporting_refs=['S1', 'S2'], dropped=[],
+                                   blocking=[], summary_withheld='summary_insufficient')}
+    def checked(system, payload):
+        if payload.get('phase') == 'consistency':
+            return {'consistent': True, 'reason': 'synthetic', 'conflicts': []}
+        available = cited_payload(payload)['evidence']
+        return {'checks': [dict(field=f, status='supported' if not f.endswith('.route') or 'S2' in available else 'insufficient',
+            reason='synthetic', evidence=[{'ref': 'S2', 'quote': 'Synthetic route'}]
+            if f.endswith('.route') and 'S2' in available else [{'ref': 'S1', 'quote': 'RECRUITING'}]) for f in payload['fields']]}
+    checked.prepare = lambda _: {'issues': [], 'receipts': []}
+    llm = SimpleNamespace(ready=True, json=lambda *_: {'summary': '合成材料仍在招募阶段。'})
+    result = analyze_job.repair_summaries(research.pipeline.insight_generator, research.execution, llm,
+                                         raw, sources, outcomes, checked, lambda: None, None)
+    assert result['technology']['status'] == ('approved' if version == 5 else 'rejected')
+    assert raw['technology']['refs'] == (['S1', 'S2'] if version == 5 else ['S1'])

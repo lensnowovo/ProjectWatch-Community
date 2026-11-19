@@ -462,7 +462,7 @@ def test_only_fresh_analysis_opts_into_new_review(host):
     from project_watch.studio import analyze_job
     research, _, _ = host
     analyze_job.freeze_review_protocol(research.execution, None, fresh=True)
-    assert analyze_job._review_version(research.execution) == 4
+    assert analyze_job._review_version(research.execution) == 5
 
 
 def test_normalization_repair_does_not_drop_a_shifted_valid_point_twice(host):
@@ -599,3 +599,48 @@ def test_counterevidence_replies_stay_strict():
     aliases = review.ReviewFieldAliases({**payload, 'phase': 'counterevidence'})
     with pytest.raises(ValueError, match='review_check_invalid'):
         aliases.decode({'checks': ['field F1', 'status', 'contradicted']})
+
+
+def test_outcome_records_only_sources_that_verified_scalar_fields(host):
+    from project_watch.studio import analyze_job
+    research, _, sources = host
+    research.execution.checkpoint(analyze_job.REVIEW_PROTOCOL, {'version': 5})
+    sources['S2'] = {**sources['S1'], 'context': 'Synthetic item', 'title': 'Synthetic item'}
+    sources['S3'] = {**sources['S1'], 'context': 'Synthetic other', 'title': 'Synthetic other'}
+    def review(system, payload):
+        if 'conflicts' in system:
+            return dict(consistent=True, reason='synthetic consistent', conflicts=[])
+        def row(f):
+            if f.endswith('.summary'):  # a scalar field verified by S1
+                return dict(field=f, status='supported', reason='synthetic', evidence=[dict(ref='S1', quote='RECRUITING')])
+            if f.endswith('.verdict') or f.endswith('.confidence'):  # supported, but the quote is not in S3
+                return dict(field=f, status='supported', reason='synthetic', evidence=[dict(ref='S3', quote='absent text')])
+            return dict(field=f, status='supported', reason='synthetic', evidence=[dict(ref='S2', quote='Synthetic item')])
+        return dict(checks=[row(f) for f in payload['fields']])
+    raw = {'operations': two_points()}
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, review, lambda: None)
+    assert outcomes['operations']['supporting_refs'] == ['S1']  # not the item source, not the unquoted one
+
+
+def test_older_protocols_keep_their_original_outcome_shape(host):
+    research, _, sources = host
+    outcomes = section_analysis.evaluate(research.execution, {'operations': two_points()}, sources, judging(), lambda: None)
+    assert 'supporting_refs' not in outcomes['operations']
+
+
+def test_a_conflict_naming_one_point_twice_drops_only_that_point(host):
+    research, _, sources = host
+    def review(system, payload):
+        if 'conflicts' in system:
+            return dict(consistent=False, reason='synthetic', conflicts=[
+                dict(fields=['operations.for.1.text', 'operations.for.1.text'], reason='synthetic contradiction')])
+        return dict(checks=[dict(field=f, status='supported', reason='synthetic', evidence=[dict(ref='S1', quote='RECRUITING')])
+                            for f in payload['fields']])
+    part = two_points()
+    # More points than one review batch holds: the section-wide consistency check runs.
+    part['for'] = [dict(text=f'合成材料记录第{i}项招募状态。', refs=['S1']) for i in range(section_analysis.review.MAX_FIELDS + 2)]
+    raw = {'operations': part}
+    outcomes = section_analysis.evaluate(research.execution, raw, sources, review, lambda: None)
+    assert outcomes['operations']['status'] == 'approved'
+    assert [p['text'] for p in raw['operations']['for']] == [p['text'] for i, p in enumerate(part['for']) if i != 1]
+    assert not any(i.get('code') == 'invalid_review' for i in outcomes['operations']['issues'])

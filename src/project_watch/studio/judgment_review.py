@@ -242,10 +242,13 @@ def validate_consistency(value, payload):
         if not isinstance(conflict, dict):
             raise ValueError('review_conflict_invalid')
         paths, reason = conflict.get('fields'), conflict.get('reason')
-        if (not isinstance(paths, list) or len(paths) < 2
+        if (not isinstance(paths, list) or not paths
                 or any(not isinstance(p, str) or p not in payload['fields'] for p in paths)
-                or len(set(paths)) != len(paths) or not isinstance(reason, str) or not reason.strip()):
+                or not isinstance(reason, str) or not reason.strip()):
             raise ValueError('review_conflict_invalid')
+        # A live reply named one field twice (its request code and its path). That entry
+        # still flags the field; it does not void every other field's consistency check.
+        paths = list(dict.fromkeys(paths))
         issues.append({'field': paths[0], 'fields': paths, 'code': 'evidence_cross_section_conflict',
                        'reason': reason})
     if value['consistent'] == bool(issues):

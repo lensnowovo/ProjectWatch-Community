@@ -609,7 +609,13 @@ def repair_summaries(generator, execution, llm, raw, sources, outcomes, reviewer
                 # their own. Trimming a list item must not silently remove the
                 # original source needed to re-check an unchanged scalar field.
                 # These are review inputs, not permission to accept any claim.
-                repaired[name]['refs'] = sorted(set(outcomes[name].get('refs', [])))
+                refs = set(outcomes[name].get('refs', []))
+                if _review_version(execution) >= 5:
+                    # The kept points' sources are not enough either: a route verified in the
+                    # first review by a source that only a dropped point cited was re-reviewed
+                    # without it and rejected a section that had passed (live, 2026-11-20).
+                    refs |= set(outcomes[name].get('supporting_refs', [])) & set(sources)
+                repaired[name]['refs'] = sorted(refs)
     if not repaired:
         return outcomes
     again = section_analysis.evaluate(execution, repaired, sources, reviewer, guard, retained)
@@ -736,7 +742,7 @@ def freeze_review_protocol(execution, batch, *, fresh):
     if execution.read_checkpoint(REVIEW_PROTOCOL) is not None:
         return
     from project_watch.studio.execution import JobExecution
-    version = 4 if fresh else 1
+    version = 5 if fresh else 1
     with closing(execution.store._connect()) as db:
         if db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=? LIMIT 1', (execution.job['id'],)).fetchone():
             version = 1
