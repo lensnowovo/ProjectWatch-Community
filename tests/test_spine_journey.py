@@ -13,7 +13,7 @@ from urllib.parse import unquote_plus, urlsplit
 import pytest
 from synthetic_providers import EMPTY_RSS, model_answer, paper, patent_html, patents, section
 
-from project_watch.studio import analyze_job, dispatch, insight
+from project_watch.studio import analyze_job, dispatch, insight, material_snapshot
 from project_watch.studio.app import create_studio_app
 from project_watch.studio.execution import JobExecution
 from project_watch.studio.http import Http, Response
@@ -523,3 +523,39 @@ def test_a_redo_of_a_wide_batch_stays_wide_unless_a_wide_draft_overflowed(env):
             {'draft:analyze_section_draft_v2:0:x': {'status': 'blocked', 'code': 'model_output_truncated'}})))
     again = _redo(pipeline, pid, collect.job['id'])
     assert again.read_checkpoint(analyze_job.DRAFT_BATCH) == analyze_job.LEGACY_BATCH
+
+
+def test_a_redo_reads_past_material_later_marked_irrelevant(env):
+    """Live M2: the batch snapshot predates a later triage; a redo must not fail on it."""
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    first = work(pipeline, 'analyze')
+    batch = first.read_checkpoint(analyze_job.SNAPSHOT)
+    assert batch['materials'] > 1
+    with pipeline.store._connect() as db, db:
+        key = material_snapshot.read(pipeline.store, pid, batch['id'])['materials'][0]['source_key']
+        assert db.execute('UPDATE studio_items SET relevant=0 WHERE project_id=? AND (key=? OR id=?)',
+                          (pid, key, key[5:])).rowcount
+    redo = _redo(pipeline, pid, collect.job['id'])  # raised before the fix: snapshot material excluded
+    kept = redo.read_checkpoint(analyze_job.SNAPSHOT)
+    assert kept['id'] != batch['id'] and kept['materials'] == batch['materials'] - 1
+    assert redo.read_checkpoint(analyze_job.RESULT)['published']
+
+
+def test_an_automatic_rerun_of_a_batch_keeps_its_snapshot(env):
+    """Only the owner's redo analyses a reduced successor; an automatic re-run keeps the same requests."""
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    collect = work(pipeline, 'collect')
+    first = work(pipeline, 'analyze')
+    batch = first.read_checkpoint(analyze_job.SNAPSHOT)
+    with pipeline.store._connect() as db, db:
+        key = material_snapshot.read(pipeline.store, pid, batch['id'])['materials'][0]['source_key']
+        db.execute('UPDATE studio_items SET relevant=0 WHERE project_id=? AND (key=? OR id=?)', (pid, key, key[5:]))
+        db.execute("UPDATE studio_jobs SET status='done' WHERE project_id=? AND status='queued' AND kind='report'", (pid,))
+    pipeline.store.enqueue(pid, 'analyze', input_version='collect:' + collect.job['id'])
+    sent = len(_state['sent'])
+    with pytest.raises(material_snapshot.NotPermitted, match='excluded'):
+        work(pipeline, 'analyze')
+    assert len(_state['sent']) == sent  # failed before sending anything
