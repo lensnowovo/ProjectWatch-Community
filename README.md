@@ -1,6 +1,6 @@
 <a id="top"></a>
 
-> 当前源码为 0.3.0a3 基线上的稳定性修复分支，尚未完成稳定版验收。下方下载链接指向既有公开版本，不代表本分支已发布。
+> 当前源码为 0.3.0b1 发布候选（Windows x64 公开测试版），尚未取得发布批准。下方下载链接指向既有公开版本，不代表本候选已发布。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
