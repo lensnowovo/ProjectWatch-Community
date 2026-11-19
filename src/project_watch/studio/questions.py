@@ -743,9 +743,11 @@ class QuestionLedger:
     def new_events(self, project_id: str, watch_id: str, *, limit=ASSESS_EVENTS) -> list[dict]:
         """Unconsumed input versions, bounded after filtering previously consumed hits."""
         with closing(self.store._connect()) as db:
-            rows = db.execute('''SELECT DISTINCT e.id FROM studio_watch_hits h
-                JOIN studio_items i ON i.id=h.item_id JOIN studio_events e ON e.id=i.event_id
-                JOIN studio_watchpoints w ON w.id=h.watch_id
+            # CROSS JOIN fixes the order: start from this watch's hits. Left to the
+            # planner it scanned every relevant item of every project (~0.25 s per question).
+            rows = db.execute('''SELECT DISTINCT e.id FROM studio_watchpoints w
+                CROSS JOIN studio_watch_hits h ON h.watch_id=w.id
+                CROSS JOIN studio_items i ON i.id=h.item_id CROSS JOIN studio_events e ON e.id=i.event_id
                 WHERE h.watch_id=? AND w.project_id=? AND i.project_id=? AND e.project_id=?
                 AND i.relevant=1 AND e.status!='dismissed' AND NOT EXISTS (
                     SELECT 1 FROM studio_question_consumed_hits c WHERE c.watch_id=h.watch_id
