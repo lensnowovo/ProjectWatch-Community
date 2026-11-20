@@ -1,4 +1,5 @@
 """Section publication uses real immutable storage and source withdrawal fences."""
+import json
 from contextlib import closing
 
 import pytest
@@ -644,3 +645,29 @@ def test_a_conflict_naming_one_point_twice_drops_only_that_point(host):
     assert outcomes['operations']['status'] == 'approved'
     assert [p['text'] for p in raw['operations']['for']] == [p['text'] for i, p in enumerate(part['for']) if i != 1]
     assert not any(i.get('code') == 'invalid_review' for i in outcomes['operations']['issues'])
+
+
+def test_a_stored_article_citation_shows_its_items_title_and_link(host):
+    """Live M2: stored article bodies carry no metadata, so citations showed only 'item:<id>'."""
+    research, _context, sources = host
+    with closing(research.store._connect()) as db, db:
+        item = db.execute('SELECT id,title,url FROM studio_items WHERE project_id=? LIMIT 1',
+                          (research.project_id,)).fetchone()
+    assert item and item[1] and item[2]
+    sources['S1'].update(title='item:' + item[0], url='', source='', date='')
+    _, view = apply(host, dict(operations=part()))
+    cited = view['analysis']['cited'][0]
+    assert (cited['text'], cited['url']) == (item[1], item[2])
+    assert view['analysis']['operations']['for'][0]['refs'][0]['url'] == item[2]
+    with closing(research.store._connect()) as db:
+        stored = [json.loads(r[0]) for r in db.execute(
+            "SELECT record FROM studio_insight_versions WHERE project_id=? AND artifact_key LIKE 'snapshot-section:%'",
+            (research.project_id,))]
+    assert stored and all(r['numbered']['S1']['title'] == 'item:' + item[0] for r in stored)  # display only
+
+
+def test_an_unknown_item_citation_keeps_its_key(host):
+    _, _, sources = host
+    sources['S1'].update(title='item:missing', url='', source='', date='')
+    _, view = apply(host, dict(operations=part()))
+    assert view['analysis']['cited'][0]['text'] == 'item:missing'

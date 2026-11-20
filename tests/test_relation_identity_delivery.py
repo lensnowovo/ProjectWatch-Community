@@ -115,3 +115,62 @@ def test_pending_lead_withdrawal_retires_trial_without_deleting_fact(tmp_path):
     assert sync(p, pid)['retired'] == 1
     with p.store._connect() as db:
         assert db.execute('SELECT count(*) FROM studio_fact_records WHERE project_id=?', (pid,)).fetchone()[0] == 1
+
+
+def _competitor(tmp_path):
+    p, pid, evidence = commercial_fixture(tmp_path)
+    with p.store._connect() as db:
+        fact = json.loads(db.execute('SELECT record FROM studio_fact_records WHERE project_id=?', (pid,)).fetchone()[0])
+    scope = {'subject_id': fact['subject_id'], 'peer_id': fact['attributes']['peer_id'],
+             'subject_product_id': None, 'peer_product_id': None}
+    p.relationships.save_candidate(pid, scope, relation_type='direct', rationale='Synthetic candidate')
+    sync(p, pid)
+    watch = next(w for w in p.monitoring_plan.items(pid) if w['relation_type'] == 'competitor')
+    return p, pid, scope, watch, evidence
+
+
+def _bump_peer(p, pid, scope):
+    from project_watch.studio.monitoring_contracts import ObjectInput
+    peer = p.objects.get(pid, scope['peer_id'])
+    fields = {k: peer[k] for k in ObjectInput.model_fields if k not in ('aliases', 'refs') and k in peer}
+    p.objects.save(pid, ObjectInput(**fields, refs=tuple(peer['refs'])), actor='automatic', object_id=peer['id'],
+                   expected_version=peer['version'])
+    assert p.relationships.page(pid)[0]['scope_identity_changed']
+
+
+def _status(p, pid, watch):
+    return next(w for w in p.monitoring_plan.items(pid) if w['id'] == watch['id'])['status']
+
+
+def test_a_competitor_watch_survives_its_peer_gaining_a_version(tmp_path):
+    """Live M2: each later object update made the relationship stale and retired the watch for good."""
+    p, pid, scope, watch, _ = _competitor(tmp_path)
+    _bump_peer(p, pid, scope)
+    assert sync(p, pid)['retired'] == 0
+    assert _status(p, pid, watch) == 'trial'
+
+
+def test_a_competitor_watch_still_retires_when_its_relationship_is_corrected(tmp_path):
+    p, pid, scope, watch, _ = _competitor(tmp_path)
+    p.relationships.save_candidate(pid, scope, relation_type='unrelated', rationale='Synthetic correction')
+    sync(p, pid)
+    assert next(w for w in p.monitoring_plan.items(pid) if w['id'] == watch['id'])['status'] == 'retired'
+
+
+def test_a_disputed_relationship_that_goes_stale_still_retires_its_watch(tmp_path):
+    p, pid, _scope, watch, _ = _competitor(tmp_path)
+    page = p.relationships.page
+    p.relationships.page = lambda *a, **k: [{**r, 'status': 'stale', 'support': 'pending', 'previous_support': 'disputed',
+                                             'scope_identity_changed': True} for r in page(*a, **k)]
+    sync(p, pid)
+    assert _status(p, pid, watch) == 'retired'
+
+
+def test_a_competitor_watch_retires_when_its_evidence_is_withdrawn(tmp_path):
+    p, pid, scope, watch, evidence = _competitor(tmp_path)
+    key = p.relationships.page(pid)[0]['scope_key']
+    p.evidence.dependencies.track(pid, 'relationship:' + key, 'relationship', [evidence['id']])
+    _bump_peer(p, pid, scope)
+    p.evidence.dependencies.withdraw(pid, evidence['id'], 'synthetic withdrawal', actor='test')
+    sync(p, pid)
+    assert _status(p, pid, watch) == 'retired'

@@ -18,6 +18,18 @@ LABELS = {'supplier': '供应商', 'customer': '客户', 'partner': '合作方',
           'pilot_partner': '试点合作方', 'investor': '投资方', 'competitor': '竞品'}
 
 
+def _withdrawn(pipeline, project_id, row):
+    """Whether any evidence behind a relationship was withdrawn (not merely revised)."""
+    dependency = pipeline.evidence.dependencies.get(project_id, 'relationship:' + row['scope_key']) or {}
+    ids = list(dependency.get('evidence_ids') or ())
+    if not ids:
+        return False
+    with closing(pipeline.store._connect()) as db:
+        return db.execute("SELECT 1 FROM studio_evidence_lifecycle WHERE project_id=? AND status='withdrawn' "
+                          f"AND evidence_version_id IN ({','.join('?' * len(ids))}) LIMIT 1",
+                          (project_id, *ids)).fetchone() is not None
+
+
 def sync(pipeline, project_id, *, guard=None):
     store, plan = pipeline.store, pipeline.monitoring_plan
     project = store.get_project(project_id) or {}
@@ -48,14 +60,22 @@ def sync(pipeline, project_id, *, guard=None):
     # Use the override-aware projection, not raw candidate rows. A candidate
     # needs a current located company identity, but not a proven competitor role.
     relationships = pipeline.relationships.page(project_id, include_internal=False)
+    # A relationship waiting to be re-verified (an object gained a version, or its
+    # evidence was revised) still holds an existing watch. Retirement is permanent,
+    # so only a relationship that is gone, disputed or unrelated retires it.
+    pending = set()
     for row in relationships:
-        if (row['subject_id'] != primary[0] or row.get('status') != 'current'
-                or row.get('scope_identity_changed') or row.get('support') == 'disputed'
+        # A stale row's support reads 'pending'; a dispute it had before stays a dispute.
+        if (row['subject_id'] != primary[0] or 'disputed' in (row.get('support'), row.get('previous_support'))
                 or row['relation_type'] == 'unrelated'):
             continue
         peer = pipeline.objects.get(project_id, row['peer_id'], include_internal=False)
         names, refs = current_located_names(store, project_id, peer, peer['refs'], include_internal=False)
         if not any(ownership_refs(peer['name'], peer['name'], r['quote'], names) is not None for r in refs):
+            continue
+        if row.get('status') != 'current' or row.get('scope_identity_changed'):
+            if not _withdrawn(pipeline, project_id, row):
+                pending.add((row['peer_id'], 'competitor'))
             continue
         groups.setdefault((peer['id'], 'competitor'), []).append({
             'peer_name': peer['name'], 'fact_id': row['scope_key'], 'source_kind': 'relationship',
@@ -79,7 +99,7 @@ def sync(pipeline, project_id, *, guard=None):
         by_id = {r['id']: r for r in watches}
         for key, mapped in mappings.items():
             watch = by_id.get(mapped['watch_id'])
-            if (key in groups or not watch or watch['status'] == 'retired'
+            if (key in groups or key in pending or not watch or watch['status'] == 'retired'
                     or plan._owned_by_people(watch)):
                 continue
             plan.update(watch['id'], {'status': 'retired'}, actor='system', reason='原关联依据已失效',
