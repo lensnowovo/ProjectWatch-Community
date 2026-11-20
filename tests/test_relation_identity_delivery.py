@@ -174,3 +174,95 @@ def test_a_competitor_watch_retires_when_its_evidence_is_withdrawn(tmp_path):
     p.evidence.dependencies.withdraw(pid, evidence['id'], 'synthetic withdrawal', actor='test')
     sync(p, pid)
     assert _status(p, pid, watch) == 'retired'
+
+
+def _customer(tmp_path):
+    p, pid, evidence = commercial_fixture(tmp_path, stage='order')
+    assert sync(p, pid)['added'] == 1
+    watch, = p.monitoring_plan.items(pid)
+    with p.store._connect() as db:
+        fact = json.loads(db.execute('SELECT record FROM studio_fact_records WHERE project_id=?', (pid,)).fetchone()[0])
+    peer = p.objects.get(pid, fact['attributes']['peer_id'])
+    from project_watch.studio.monitoring_contracts import ObjectInput
+    fields = {k: peer[k] for k in ObjectInput.model_fields if k not in ('aliases', 'refs', 'website') and k in peer}
+    # A later round learns the peer's website: the fact waits to be re-verified.
+    p.objects.save(pid, ObjectInput(**fields, website='https://beta.example', refs=tuple(peer['refs'])),
+                   actor='automatic', object_id=peer['id'], expected_version=peer['version'])
+    assert p.evidence.dependencies.get(pid, 'fact:' + fact['id'])['status'] == 'stale'
+    return p, pid, watch, evidence
+
+
+def test_a_customer_watch_survives_its_peer_gaining_a_version(tmp_path):
+    """Live M2: an object update made nine customer and supplier facts stale and retired their watches."""
+    p, pid, watch, _ = _customer(tmp_path)
+    assert sync(p, pid) == {'added': 0, 'retired': 0}
+    assert _status(p, pid, watch) == 'trial'
+
+
+
+def _two_source_customer(tmp_path, *, valid_to=None):
+    """A customer fact backed by two sources, then made stale by a later object revision."""
+    from test_studio_evidence_versions import sample
+
+    from project_watch.studio.app import create_studio_app
+    from project_watch.studio.monitoring_contracts import FactInput, LocatedRef, ObjectInput
+    p = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    project = p.repository.create_project('Synthetic Optics')
+    pid = project.id
+    p.store.upsert_project(pid, {'legal_name': project.name}, consent=True)
+    subject = p.objects.ensure_subject(pid)
+    refs = []
+    for key, text in (('first-source', 'Synthetic Optics delivered an order to Customer Beta.'),
+                      ('second-source', 'Customer Beta placed an order with Synthetic Optics.')):
+        e = p.evidence.save(sample(pid, text).model_copy(update={'source_key': key, 'visibility': 'public',
+                                                                 'read_scope': 'full'}))
+        refs.append(LocatedRef(evidence_version_id=e['id'], part_index=0, start=0, end=len(text), quote=text))
+    peer = p.objects.save(pid, ObjectInput(kind='company', name='Customer Beta', visibility='public',
+                                           refs=tuple(refs)), actor='automatic')
+    fact = p.objects.save_fact(pid, FactInput(subject_id=subject['id'], predicate='business_relation',
+        text=refs[0].quote, basis='actual', subject_attribution='explicit', visibility='public', refs=tuple(refs),
+        valid_to=valid_to, attributes={'kind': 'business_relation', 'peer_id': peer['id'], 'role': 'customer',
+                                       'stage': 'order'}))
+    assert sync(p, pid)['added'] == 1
+    watch, = p.monitoring_plan.items(pid)
+    peer = p.objects.get(pid, peer['id'])
+    fields = {k: peer[k] for k in ObjectInput.model_fields if k not in ('aliases', 'refs', 'website') and k in peer}
+    p.objects.save(pid, ObjectInput(**fields, website='https://beta.example', refs=tuple(peer['refs'])),
+                   actor='automatic', object_id=peer['id'], expected_version=peer['version'])
+    assert p.evidence.dependencies.get(pid, 'fact:' + fact['id'])['status'] == 'stale'
+    return p, pid, watch, [r.evidence_version_id for r in refs]
+
+
+def test_a_stale_customer_watch_retires_when_one_of_its_sources_is_withdrawn(tmp_path):
+    p, pid, watch, evidence_ids = _two_source_customer(tmp_path)
+    assert sync(p, pid)['retired'] == 0
+    # The second source still names both parties: only the withdrawal check retires it.
+    p.evidence.dependencies.withdraw(pid, evidence_ids[0], 'synthetic withdrawal', actor='test')
+    assert sync(p, pid)['retired'] == 1
+    assert _status(p, pid, watch) == 'retired'
+
+
+def test_a_stale_customer_watch_retires_once_its_validity_ends(tmp_path, monkeypatch):
+    import datetime as real
+
+    from project_watch.studio import business_relations, relation_delivery
+    today = real.date.today()
+    p, pid, watch, _ = _two_source_customer(tmp_path, valid_to=today + real.timedelta(days=1))
+    assert sync(p, pid)['retired'] == 0
+
+    class Later(real.date):
+        @classmethod
+        def today(cls):
+            return today + real.timedelta(days=3)
+    monkeypatch.setattr(business_relations, 'date', Later)
+    monkeypatch.setattr(relation_delivery, 'date', Later)
+    assert sync(p, pid)['retired'] == 1
+    assert _status(p, pid, watch) == 'retired'
+
+
+def test_a_stale_fact_does_not_add_a_new_watch(tmp_path):
+    p, pid, _watch, _ = _customer(tmp_path)
+    with p.store._connect() as db:
+        db.execute('DELETE FROM studio_relation_delivery')
+        db.execute('DELETE FROM studio_watchpoints')
+    assert sync(p, pid)['added'] == 0
