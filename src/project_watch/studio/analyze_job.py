@@ -11,7 +11,7 @@ the request journal replays the model answers it already has.
 import json
 from contextlib import closing
 
-from project_watch.studio import incremental_drafting, material_snapshot
+from project_watch.studio import dispatch, incremental_drafting, material_snapshot
 from project_watch.studio.store import digest, now
 
 RESULT = 'analyze_result_v1'
@@ -70,7 +70,18 @@ class _Batch:
 
 
 def snapshot_for(execution, batch_id):
-    return material_snapshot.capture(_Batch(execution, batch_id) if batch_id else execution)
+    snapshot = material_snapshot.capture(_Batch(execution, batch_id) if batch_id else execution)
+    try:
+        material_snapshot.read(execution.store, execution.job['project_id'], snapshot['id'])
+    except material_snapshot.NotPermitted:
+        if not str(execution.job.get('input_version') or '').startswith(dispatch.REDO_PREFIX):
+            raise
+        # The owner's redo reads the batch snapshot after the round, when later triage,
+        # dismissal or withdrawal may have excluded some of it. Analyse what is still
+        # permitted; the batch manifest stays intact. Only an explicit redo changes the
+        # input: an automatic re-run keeps the same requests for the dispatch rule.
+        snapshot = material_snapshot.derive_permitted(execution, snapshot['id'])
+    return snapshot
 
 
 def _batch_items(store, pid, collect_job_id):

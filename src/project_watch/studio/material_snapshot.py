@@ -13,6 +13,10 @@ from project_watch.studio.store import digest, now
 KEY = 'material-snapshot-v1'
 
 
+class NotPermitted(ValueError):
+    """A frozen material is no longer permitted: excluded, withdrawn or outside public scope."""
+
+
 def _permitted(db, project_id, version_id):
     row = db.execute(
         'SELECT e.record,e.visibility,l.status AS lifecycle,n.visibility AS head_visibility,hl.status AS head_lifecycle '
@@ -23,9 +27,9 @@ def _permitted(db, project_id, version_id):
         'LEFT JOIN studio_evidence_lifecycle hl ON hl.project_id=n.project_id AND hl.evidence_version_id=n.id '
         'WHERE e.project_id=? AND e.id=?', (project_id, version_id)).fetchone()
     if not row or row['visibility'] != 'public' or row['head_visibility'] != 'public':
-        raise ValueError('snapshot material is outside permitted public scope')
+        raise NotPermitted('snapshot material is outside permitted public scope')
     if 'withdrawn' in (row['lifecycle'], row['head_lifecycle']):
-        raise ValueError('snapshot material withdrawn')
+        raise NotPermitted('snapshot material withdrawn')
     evidence = json.loads(row['record'])
     # Historical snapshots must still honor later item exclusions. Match the
     # stable source key as well as original observations, not only today's head.
@@ -40,7 +44,7 @@ def _permitted(db, project_id, version_id):
             "WHERE i.project_id=? AND o.evidence_version_id=? AND (i.status='dismissed' OR i.relevant=0)",
             (project_id, version_id)).fetchone()
     if excluded:
-        raise ValueError('snapshot material excluded')
+        raise NotPermitted('snapshot material excluded')
     return evidence
 
 
