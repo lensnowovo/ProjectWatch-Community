@@ -90,8 +90,11 @@ def _round(store, db, collect):
     jobs = [collect['id'], *([analysis] if analysis else [])]
     marks = ','.join('?' * len(jobs))
     columns = {r[1] for r in db.execute('PRAGMA table_info(studio_job_calls)')}
-    tokens = ('SUM(CASE WHEN kind=\'model\' THEN COALESCE(input_tokens,0) ELSE 0 END)' if 'input_tokens' in columns else '0')
-    calls = db.execute(f"SELECT COUNT(*),SUM(status IN ('unknown','started')),{tokens} FROM studio_job_calls "
+    # A model call without a usage receipt leaves the total unknown: it is counted, never read as zero.
+    tokens, missing = (("SUM(CASE WHEN kind='model' THEN COALESCE(input_tokens,0) ELSE 0 END)",
+                        "SUM(kind='model' AND input_tokens IS NULL)") if 'input_tokens' in columns
+                       else ('0', "SUM(kind='model')"))
+    calls = db.execute(f"SELECT COUNT(*),SUM(status IN ('unknown','started')),{tokens},{missing} FROM studio_job_calls "
                        f'WHERE job_id IN ({marks})', jobs).fetchone()
     return {
         'collect_job_id': collect['id'], 'analyze_job_id': analysis, 'finished_at': collect['finished_at'],
@@ -102,6 +105,7 @@ def _round(store, db, collect):
         'matched_share': _ratio(sum(1 for b in bound if b == 'bound'), len(bound)),
         'sections': sections,
         'requests': calls[0] or 0, 'unclear_requests': calls[1] or 0, 'model_input_tokens': calls[2] or 0,
+        'model_usage_missing': calls[3] or 0,
     }
 
 

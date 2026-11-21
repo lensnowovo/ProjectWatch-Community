@@ -11,3 +11,8 @@ test('an incremental round says what it carried forward and what it read anew', 
   assert.match(round, /沿用已发布判断 \$\{c\.carried_fragments\} 段 · 新读 \$\{c\.drafted_fragments \?\? 0\} \/ \$\{c\.new_fragments\} 段/);
   assert.match(bundle, /沿用已发布判断/);  // the shipped interface was rebuilt from this source
 });
+
+test('a round total with missing usage receipts reads as a lower bound, never as complete', () => {
+  assert.match(round, /f\.model_usage_missing\s*\?\s*`至少 \$\{f\.model_input_tokens\.toLocaleString\(\)\}（\$\{f\.model_usage_missing\} 次无用量回执）`/);
+  assert.match(bundle, /次无用量回执/);  // the shipped interface was rebuilt from this source
+});

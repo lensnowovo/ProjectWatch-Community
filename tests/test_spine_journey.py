@@ -264,6 +264,27 @@ def test_a_round_reports_its_own_quality(env):
     assert sum(u['collected'] for u in yields) >= current['items'] and all(u['source'] and 'query' in u for u in yields)
 
 
+def test_a_round_does_not_count_a_missing_usage_receipt_as_zero(env):
+    from project_watch.studio import spine_api
+
+    pipeline, pid, _state = env
+    pipeline.store.enqueue(pid, 'collect', input_version='manual:' + now())
+    work(pipeline, 'collect')
+    work(pipeline, 'analyze')
+    current = spine_api.round_view(pipeline.store, pid)['quality']['current']
+    jobs = [current['collect_job_id'], current['analyze_job_id']]
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_job_calls SET input_tokens=100,output_tokens=10 WHERE kind='model' AND job_id IN (?,?)", jobs)
+        models = db.execute("SELECT COUNT(*) FROM studio_job_calls WHERE kind='model' AND job_id IN (?,?)", jobs).fetchone()[0]
+    complete = spine_api.round_view(pipeline.store, pid)['quality']['current']
+    assert models > 1 and complete['model_usage_missing'] == 0 and complete['model_input_tokens'] == 100 * models
+    with pipeline.store._connect() as db:
+        db.execute("UPDATE studio_job_calls SET input_tokens=NULL,output_tokens=NULL WHERE rowid=(SELECT min(rowid) "
+                   "FROM studio_job_calls WHERE kind='model' AND job_id IN (?,?))", jobs)
+    after = spine_api.round_view(pipeline.store, pid)['quality']['current']
+    assert after['model_usage_missing'] == 1 and after['model_input_tokens'] == 100 * (models - 1)
+
+
 def test_a_query_that_never_brings_anything_relevant_is_named(monkeypatch):
     from project_watch.studio import round_quality
 
