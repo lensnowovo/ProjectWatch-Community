@@ -5,6 +5,7 @@ here, so source withdrawal cannot remove a manually managed relationship.
 """
 import json
 from contextlib import closing
+from datetime import date
 
 from project_watch.studio.business_identity import current_located_names, ownership_refs
 from project_watch.studio.business_relations import project_relation
@@ -16,6 +17,29 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_relation_delivery (
  PRIMARY KEY(project_id,peer_id,role));'''
 LABELS = {'supplier': '供应商', 'customer': '客户', 'partner': '合作方',
           'pilot_partner': '试点合作方', 'investor': '投资方', 'competitor': '竞品'}
+
+
+def _withdrawn(pipeline, project_id, artifact_key):
+    """Whether any evidence behind an artifact was withdrawn (not merely revised)."""
+    dependency = pipeline.evidence.dependencies.get(project_id, artifact_key) or {}
+    ids = list(dependency.get('evidence_ids') or ())
+    if not ids:
+        return False
+    with closing(pipeline.store._connect()) as db:
+        return db.execute("SELECT 1 FROM studio_evidence_lifecycle WHERE project_id=? AND status='withdrawn' "
+                          f"AND evidence_version_id IN ({','.join('?' * len(ids))}) LIMIT 1",
+                          (project_id, *ids)).fetchone() is not None
+
+
+def _awaiting_reverification(pipeline, project_id, fact):
+    """A fact made stale by a revision, still inside its validity window and not withdrawn."""
+    key = 'fact:' + fact['id']
+    dependency = pipeline.evidence.dependencies.get(project_id, key) or {}
+    day = date.today().isoformat()
+    return (dependency.get('status') == 'stale'
+            and (not fact.get('valid_from') or fact['valid_from'] <= day)
+            and (not fact.get('valid_to') or fact['valid_to'] >= day)
+            and not _withdrawn(pipeline, project_id, key))
 
 
 def sync(pipeline, project_id, *, guard=None):
@@ -30,7 +54,7 @@ def sync(pipeline, project_id, *, guard=None):
             return {'added': 0, 'retired': 0}
         rows = db.execute("SELECT record FROM studio_fact_records WHERE project_id=? AND visibility='public' "
                           "AND json_extract(record,'$.attributes.kind')='business_relation' ORDER BY id", (project_id,)).fetchall()
-    groups = {}
+    groups, pending = {}, set()
     for row in rows:
         fact = json.loads(row[0])
         try:
@@ -40,22 +64,33 @@ def sync(pipeline, project_id, *, guard=None):
         # A located lead can be monitored before the commercial assertion is
         # established. This never changes the fact or its pending projection.
         allowed_gaps = {'original_passage', 'commercial_stage', 'explicit_actual_attribution'}
-        candidate = (fact['basis'] == 'actual' and set(relation['missing']) <= allowed_gaps)
-        if (relation['subject_id'] != primary[0] or not candidate
-                or relation['role'] not in LABELS):
+        if relation['subject_id'] != primary[0] or fact['basis'] != 'actual' or relation['role'] not in LABELS:
             continue
-        groups.setdefault((relation['peer_id'], relation['role']), []).append(relation)
+        key = (relation['peer_id'], relation['role'])
+        gaps = set(relation['missing']) - allowed_gaps
+        if not gaps:
+            groups.setdefault(key, []).append(relation)
+        elif gaps == {'stale_or_outside_validity'} and _awaiting_reverification(pipeline, project_id, fact):
+            # Same rule as a stale relationship below: hold an existing watch, add none.
+            pending.add(key)
     # Use the override-aware projection, not raw candidate rows. A candidate
     # needs a current located company identity, but not a proven competitor role.
     relationships = pipeline.relationships.page(project_id, include_internal=False)
+    # A relationship waiting to be re-verified (an object gained a version, or its
+    # evidence was revised) still holds an existing watch. Retirement is permanent,
+    # so only a relationship that is gone, disputed or unrelated retires it.
     for row in relationships:
-        if (row['subject_id'] != primary[0] or row.get('status') != 'current'
-                or row.get('scope_identity_changed') or row.get('support') == 'disputed'
+        # A stale row's support reads 'pending'; a dispute it had before stays a dispute.
+        if (row['subject_id'] != primary[0] or 'disputed' in (row.get('support'), row.get('previous_support'))
                 or row['relation_type'] == 'unrelated'):
             continue
         peer = pipeline.objects.get(project_id, row['peer_id'], include_internal=False)
         names, refs = current_located_names(store, project_id, peer, peer['refs'], include_internal=False)
         if not any(ownership_refs(peer['name'], peer['name'], r['quote'], names) is not None for r in refs):
+            continue
+        if row.get('status') != 'current' or row.get('scope_identity_changed'):
+            if not _withdrawn(pipeline, project_id, 'relationship:' + row['scope_key']):
+                pending.add((row['peer_id'], 'competitor'))
             continue
         groups.setdefault((peer['id'], 'competitor'), []).append({
             'peer_name': peer['name'], 'fact_id': row['scope_key'], 'source_kind': 'relationship',
@@ -79,7 +114,7 @@ def sync(pipeline, project_id, *, guard=None):
         by_id = {r['id']: r for r in watches}
         for key, mapped in mappings.items():
             watch = by_id.get(mapped['watch_id'])
-            if (key in groups or not watch or watch['status'] == 'retired'
+            if (key in groups or key in pending or not watch or watch['status'] == 'retired'
                     or plan._owned_by_people(watch)):
                 continue
             plan.update(watch['id'], {'status': 'retired'}, actor='system', reason='原关联依据已失效',

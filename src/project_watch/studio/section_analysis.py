@@ -591,6 +591,25 @@ def _strip_codes(value):
             _strip_codes(child)
 
 
+def _item_label(db, pid, ref):
+    """A stored article body carries no title or link; show the collected item's own.
+
+    Display only: the numbered sources sent to the model are unchanged.
+    """
+    key = str(ref.get('text') or '')
+    if ref.get('url'):
+        return {}
+    if key.startswith('competition:summary:'):
+        return {'text': '同行研究摘要（本机整理）'}
+    if not key.startswith('item:'):
+        return {}
+    row = db.execute('SELECT title,url,source,published_at FROM studio_items WHERE project_id=? AND id=?',
+                     (pid, key[5:])).fetchone()
+    if not row or not row[0]:
+        return {}
+    return {'text': row[0], 'url': row[1] or '', 'source': row[2] or '', 'date': row[3] or ''}
+
+
 def project(store, pid, baseline):
     """Compose per-section dates without relabelling retained results as new."""
     with closing(store._connect()) as db:
@@ -617,7 +636,8 @@ def project(store, pid, baseline):
                     if identity not in references:
                         prefix = value['code'][0]
                         source_counts[prefix] = source_counts.get(prefix, 0) + 1
-                        references[identity] = {**value, 'code': prefix + str(source_counts[prefix])}
+                        references[identity] = {**value, **_item_label(db, pid, value),
+                                                'code': prefix + str(source_counts[prefix])}
                     value.update(references[identity])
                 else:
                     for child in value.values():
