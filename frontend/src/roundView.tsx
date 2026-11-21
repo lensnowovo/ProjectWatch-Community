@@ -87,7 +87,9 @@ const ROWS: [string, (f: RoundFigures) => string][] = [
   ["分析板块发布", (f) => f.sections ? `${f.sections.published} / ${f.sections.considered}${f.sections.unchanged?.length ? `（另 ${f.sections.unchanged.length} 个无新材料，沿用）` : ""}` : "—"],
   ["删去的论点", (f) => f.sections ? String(f.sections.dropped_points) : "—"],
   ["请求 · 结果不明", (f) => `${f.requests} · ${f.unclear_requests}`],
-  ["模型输入 token", (f) => f.model_input_tokens.toLocaleString()],
+  ["模型输入 token", (f) => f.model_usage_missing
+    ? `至少 ${f.model_input_tokens.toLocaleString()}（${f.model_usage_missing} 次无用量回执）`
+    : f.model_input_tokens.toLocaleString()],
 ];
 const SOURCE: Record<string, string> = { openalex_topic: "论文主题检索", europepmc_topic: "论文主题检索（Europe PMC）", search: "网页检索" };
 
