@@ -1479,15 +1479,22 @@ class StudioStore:
             return count
 
     def defer_recoverable(self, job: dict, reason: str) -> bool:
-        from project_watch.studio.dispatch import retry_delay
+        from project_watch.studio.dispatch import PROVIDER_WAIT, retry_delay
         from project_watch.studio.model_errors import ACCOUNT_ERRORS, MESSAGES
         status = 402 if reason in ACCOUNT_ERRORS else 429
         stage = (MESSAGES[reason] if reason in ACCOUNT_ERRORS or reason == 'connection_not_sent'
                  else '稍后自动继续')
         due = (datetime.now(UTC) + timedelta(seconds=retry_delay(status, max(0, job['attempts'] - 1)))).isoformat()
         with closing(self._connect()) as db, db:
-            backoff = db.execute("SELECT max(b.retry_after) FROM studio_provider_backoff b JOIN studio_job_calls c "
-                                 "ON b.provider=c.provider WHERE c.job_id=?", (job['id'],)).fetchone()[0]
+            # A connection failure waits for connection backoffs only: another provider's daily
+            # budget (a 429 lasting hours) must not hold a round whose network is back in minutes.
+            connection = reason == 'connection_not_sent'
+            # Providers it called, and those it was only refused by (a wait checkpoint, no call row).
+            backoff = db.execute("SELECT max(b.retry_after) FROM studio_provider_backoff b WHERE (? = 0 OR b.status=0) "
+                                 "AND b.provider IN (SELECT provider FROM studio_job_calls WHERE job_id=? UNION "
+                                 "SELECT substr(stage, ?) FROM studio_job_checkpoints WHERE job_id=? AND stage LIKE ?)",
+                                 (int(connection), job['id'], len(PROVIDER_WAIT) + 1, job['id'],
+                                  PROVIDER_WAIT + '%')).fetchone()[0]
             due = max(due, backoff or due)
             return bool(db.execute("UPDATE studio_jobs SET status='queued',stage=?,error='',finished_at=NULL,"
                 "retry_after=?,lease_token='',lease_until=NULL,queue_at=?,attempts=MAX(0,attempts-1) "
