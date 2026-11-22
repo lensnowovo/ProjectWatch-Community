@@ -19,6 +19,9 @@ from project_watch.studio.http import Http, HttpError, Response
 from project_watch.studio.runtime_health import CALL_GRACE_SECONDS, progress
 from project_watch.studio.store import now
 
+# A guarded write renews the lease when less than this is left (the heartbeat keeps it above 70 s).
+LEASE_RENEW_BELOW = timedelta(seconds=60)
+
 
 class JobYield(Exception):
     """A completed durable phase gives the single worker back to the queue."""
@@ -122,10 +125,52 @@ class JobExecution:
         self._lease_guard(db)
 
     def _lease_guard(self, db):
-        row = db.execute("SELECT 1 FROM studio_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
-                         (self.job["id"], self.job["lease_token"], now())).fetchone()
-        if not row:
+        row = db.execute("SELECT lease_until FROM studio_jobs WHERE id=? AND status='running' AND lease_token=?",
+                         (self.job["id"], self.job["lease_token"])).fetchone()
+        at = datetime.now(UTC)
+        # The write lock is exclusive: while this transaction holds it nobody can reclaim the job,
+        # so a lease confirmed under the lock stays ours until the transaction ends, even when the
+        # heartbeat, blocked by that same lock, could not renew it in time.
+        lock = getattr(db, '_write_began', None) if db.in_transaction else None
+        # Only the very lease this transaction confirmed (or renewed) under the lock: one that
+        # any statement has since changed, even this job's own, is not carried on.
+        held = lock is not None and row is not None and getattr(db, 'lease_confirmed', None) == (lock, row[0])
+        lapsed = not row or row[0] <= at.isoformat()
+        if not row or (lapsed and not held):
             raise RuntimeError("job lease expired or replaced")
+        if lock is None:
+            return  # a read: nothing to fence or renew here; the heartbeat renews
+        db.lease_confirmed = (lock, row[0])
+        if lapsed or row[0] < (at + LEASE_RENEW_BELOW).isoformat():
+            db.lease_confirmed = (lock, self._renew_in_transaction(db, at, lapsed) or row[0])
+
+    def _renew_in_transaction(self, db, at, lapsed):
+        """Renew this job's lease from inside its own write transaction; returns the new expiry.
+
+        The heartbeat renews through its own connection and cannot while this job holds
+        the write lock. A live business job applying 1,200 products under CPU load held
+        the lock past its 90 s lease and failed its next write; it was reclaimed and rerun
+        14 times before it failed. A lease that lapsed before this transaction took the
+        lock, or was replaced, is never renewed (checked by the caller), and the
+        watchdog's own revocation rule still applies.
+        """
+        import sqlite3
+
+        from project_watch.studio.runtime_health import LEASE_SECONDS, expired_reason
+
+        if expired_reason(db, {'id': self.job['id']}, at):
+            # The watchdog decides on an overdue request, not the writer.
+            if lapsed:
+                raise RuntimeError("job lease expired or replaced")
+            return None
+        until = (at + timedelta(seconds=LEASE_SECONDS)).isoformat()
+        # The base method: a fenced execute would call this guard again.
+        renewed = sqlite3.Connection.execute(
+            db, "UPDATE studio_jobs SET heartbeat_at=?,lease_until=? WHERE id=? AND status='running' AND lease_token=?",
+            (at.isoformat(), until, self.job['id'], self.job['lease_token'])).rowcount
+        if not renewed:
+            raise RuntimeError("job lease expired or replaced")
+        return until
 
     def checkpoint(self, stage, data):
         encoded = json.dumps(data)
