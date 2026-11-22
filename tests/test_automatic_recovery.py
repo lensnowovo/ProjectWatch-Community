@@ -89,6 +89,91 @@ def test_news_retains_secondary_provider_identity_for_offline_recovery(env, monk
         settle_not_sent(ledger, coverage)
 
 
+def test_a_resumed_pass_skips_units_whose_provider_still_backs_off(env):
+    """A long backoff (a daily budget) must not starve the round: later passes reach the
+    remaining units without retrying or rewriting the waiting ones, and the pass settles."""
+    from test_collection_plan import candidate, plan
+
+    from project_watch.studio.collection_ledger import CollectionLedger
+    from project_watch.studio.collection_runner import run_collection, settle_not_sent
+    from project_watch.studio.execution import JobYield
+    from project_watch.studio.store import now
+
+    store, pid = env
+    work = job(store, pid, 'collect')
+    limited = hashlib.sha256(b'limited').hexdigest()
+    with store._connect() as db:
+        db.execute('INSERT INTO studio_provider_backoff VALUES (?,?,429)', (limited, '2999-01-01'))
+    tried = []
+
+    def collect(unit):
+        tried.append(unit['query'])
+        if unit['query'] == 'limited':
+            return work.call('open_data', 'limited-query', lambda: pytest.fail('backing-off request sent'),
+                             provider='limited')
+        return dict(items=[], request_ids=['request-' + unit['query']], truncated=False)
+
+    ledger = CollectionLedger(work, plan([candidate() | {'query': 'limited', 'query_rank': 0}, candidate() | {'query': 'open', 'query_rank': 1}],
+                                         round_id=work.job['id'], project_id=pid, at=now()))
+    work.slice_seconds = 0  # yield after the first unit, as a long round does
+    with pytest.raises(JobYield):
+        run_collection(ledger, collect=collect, ingest=lambda *a: 0, guard=lambda: None)
+    assert tried == ['limited']
+    waiting = ledger.receipt(ledger.plan['units'][0]['id'])
+    assert (waiting['outcome'], waiting['reason'], waiting['provider_hashes']) == ('running', 'provider_backoff', [limited])
+
+    def manifest():
+        with store._connect() as db:
+            return db.execute("SELECT data FROM studio_job_checkpoints WHERE job_id=? AND stage='collection_round_v1'",
+                              (work.job['id'],)).fetchone()[0]
+    before = manifest()
+    work.slice_seconds = 3600
+    tried.clear()
+    resumed = CollectionLedger(work, ledger.plan)
+    original = resumed.execution.checkpoint_chunked
+    writes = []
+    resumed.execution.checkpoint_chunked = lambda stage, data: (writes.append(stage), original(stage, data))
+    coverage = run_collection(resumed, collect=collect, ingest=lambda *a: 0, guard=lambda: None)
+    assert tried == ['open'] and writes.count('collection_round_v1') == 2  # open unit only: running, success
+    assert manifest() != before
+    settled = {r['unit_id']: r for r in settle_not_sent(resumed, coverage)['rows']}
+    assert [settled[u['id']]['outcome'] for u in resumed.plan['units']] == ['failed', 'success']
+
+    # Once the backoff ends, a unit still open is tried again.
+    with store._connect() as db:
+        db.execute('DELETE FROM studio_provider_backoff')
+    store.finish(work.job['id'], lease_token=work.job['lease_token'])
+    other = job(store, pid, 'collect')
+    again = CollectionLedger(other, plan([candidate() | {'query': 'open'}], round_id=other.job['id'], project_id=pid, at=now()))
+    again.record(dict(round_id=other.job['id'], unit_id=again.plan['units'][0]['id'], outcome='running',
+                      reason='provider_backoff', provider_hashes=[limited]))
+    tried.clear()
+    run_collection(again, collect=collect, ingest=lambda *a: 0, guard=lambda: None)
+    assert tried == ['open']
+
+
+def test_a_unit_is_retried_while_any_of_its_providers_is_available(env):
+    from test_collection_plan import candidate, plan
+
+    from project_watch.studio.collection_ledger import CollectionLedger
+    from project_watch.studio.collection_runner import run_collection
+    from project_watch.studio.store import now
+
+    store, pid = env
+    work = job(store, pid, 'collect')
+    limited, free = (hashlib.sha256(s).hexdigest() for s in (b'limited', b'free'))
+    with store._connect() as db:
+        db.execute('INSERT INTO studio_provider_backoff VALUES (?,?,429)', (limited, '2999-01-01'))
+    ledger = CollectionLedger(work, plan([candidate()], round_id=work.job['id'], project_id=pid, at=now()))
+    unit = ledger.plan['units'][0]['id']
+    ledger.record(dict(round_id=work.job['id'], unit_id=unit, outcome='running',
+                       reason='provider_backoff', provider_hashes=[limited, free]))
+    tried = []
+    run_collection(ledger, collect=lambda u: tried.append(u['id']) or dict(items=[], request_ids=['r'], truncated=False),
+                   ingest=lambda *a: 0, guard=lambda: None)
+    assert tried == [unit] and ledger.receipt(unit)['outcome'] == 'success'
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     return fixtures.env.__wrapped__(tmp_path, monkeypatch)

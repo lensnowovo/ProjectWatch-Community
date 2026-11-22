@@ -47,6 +47,10 @@ class CollectionLedger:
     def receipts(self):
         return deepcopy(self._state['receipts'])
 
+    def receipt(self, unit_id):
+        """The current receipt of one unit, without copying every other receipt."""
+        return deepcopy(next((r for r in self._state['receipts'] if r['unit_id'] == unit_id), None))
+
     def coverage(self):
         return reconcile(self._state['plan'], self._state['receipts'])
 

@@ -20,10 +20,15 @@ def run_collection(ledger, *, collect, ingest, guard):
     """
     execution = ledger.execution
     plan = ledger.plan
+    waiting = _backing_off(execution)
     for unit in plan['units']:
         guard()
-        old = next((r for r in ledger.receipts if r['unit_id'] == unit['id']), None)
+        old = ledger.receipt(unit['id'])
         if unit['disposition'] != 'pending' or (old and old['outcome'] != 'running'):
+            continue
+        if _still_waiting(old, waiting):
+            # Retrying cannot send anything and would rewrite the whole ledger twice;
+            # skipping lets the pass reach the remaining units and settle (settle_not_sent).
             continue
         receipt = dict(round_id=plan['round_id'], unit_id=unit['id'], outcome='running')
         ledger.record(receipt)
@@ -79,6 +84,29 @@ def run_collection(ledger, *, collect, ingest, guard):
             ledger.record(receipt | dict(outcome='unknown', reason=type(exc).__name__))
         execution.yield_if_due()
     return ledger.coverage()
+
+
+def _backing_off(execution):
+    """When each backoff in force at the start of this pass ends."""
+    from contextlib import closing
+
+    from project_watch.studio.store import now
+
+    with closing(execution.store._connect()) as db:
+        return dict(db.execute('SELECT provider,retry_after FROM studio_provider_backoff WHERE retry_after>?', (now(),)))
+
+
+def _still_waiting(old, waiting):
+    """A unit last stopped because every provider it needs was backing off, and still is."""
+    from project_watch.studio.store import now
+
+    # Only a backoff receipt: a connection failure is retried once so its reason is renewed
+    # and _offline judges the provider's current backoff, not a stale disconnection.
+    providers = (old or {}).get('provider_hashes') or []
+    if not (old and old['outcome'] == 'running' and old.get('reason') == 'provider_backoff' and providers):
+        return False
+    at = now()  # a backoff that ends during the pass lets its units be tried again
+    return all(waiting.get(p, '') > at for p in providers)
 
 
 def _validate_payload(payload):
