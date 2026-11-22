@@ -174,5 +174,5 @@ def advice(job: dict) -> dict:
     if "依据已变化" in error or "恢复监控" in error:
         return {"why": "任务运行期间新增了资料，或公司信息、监控状态有变化，旧结果没有发布。", "todo": "点“重新运行”按最新信息再做一次。", "action": "rerun"}
     if error.startswith("内部错误"):
-        return {"why": "程序处理时出错，已有结果保留。", "todo": "点“重新运行”；如果再次失败，请把这条记录反馈给开发。", "action": "rerun"}
+        return {"why": "程序处理时出错，已有结果保留。", "todo": "点“重新运行”；如果再次失败，请把这条记录和数据目录 logs 文件夹里的 studio.log 一起反馈给开发。", "action": "rerun"}
     return {"why": "任务没有完成，已有结果保留。", "todo": "点“重新运行”再试一次，或收起提醒；收起不改变任务结果。", "action": "rerun"}

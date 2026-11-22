@@ -15,6 +15,7 @@ import re
 import uuid
 from contextlib import closing, nullcontext
 from datetime import date
+from functools import lru_cache
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -115,6 +116,65 @@ class QuestionAdvisor(Protocol):
 def _now():
     from project_watch.studio.store import now
     return now()
+
+
+class _PublicRow(dict):
+    """A public event row; its match texts are folded once and reused for every watch.
+
+    Rows are read-only to matching. Folding the same article for each of a project's
+    relations made the monitoring-plan view take 25 s on a live project.
+    """
+    __slots__ = ('match_texts',)
+
+
+def _match_texts(row):
+    headers = " ".join(str(row.get(k) or "") for k in ("title", "summary", "event_title", "event_summary"))
+    body = str(row.get("body") or "")
+    return headers, headers.casefold(), body, body.casefold()
+
+
+def _row_texts(row):
+    if isinstance(row, _PublicRow):
+        texts = getattr(row, 'match_texts', None)
+        if texts is None:
+            texts = row.match_texts = _match_texts(row)
+        return texts
+    return _match_texts(row)
+
+
+@lru_cache(maxsize=4096)
+def _compiled(pattern):
+    return re.compile(pattern)
+
+
+def _policy_relation(watch):
+    return watch.get("relation_type") == "policy" or (
+        watch.get("scope_kind") == "question" and not watch.get("relation_type")
+        and watch.get("axis") == "rules")  # Older children inherit target/aliases, not relation_type.
+
+
+def _relation_pattern(policy, term):
+    term = term.casefold()
+    if policy:
+        parts = re.fullmatch(r"(.{2,}?)相关(?:医疗服务)?价格项目", term)
+        if parts:
+            return re.escape(parts[1]) + r"相关(?:医疗服务)?价格项目", parts[1]
+    return (r"(?<![A-Za-z0-9_-])" + re.escape(term) + r"(?![A-Za-z0-9_-])"
+            if term.isascii() else re.escape(term)), term
+
+
+@lru_cache(maxsize=4096)
+def _relation_matcher(policy, term):
+    """The compiled pattern and a literal every match contains (a cheap first test)."""
+    pattern, needle = _relation_pattern(policy, term)
+    return re.compile(pattern), needle
+
+
+@lru_cache(maxsize=4096)
+def _relation_terms(target, aliases):
+    if isinstance(aliases, str):
+        aliases = json.loads(aliases)
+    return tuple(dict.fromkeys(str(t).strip() for t in [target or "", *(aliases or [])] if len(str(t).strip()) >= 2))
 
 
 class QuestionLedger:
@@ -411,10 +471,8 @@ class QuestionLedger:
     @staticmethod
     def relation_terms(watch):
         aliases = watch.get("relation_aliases") or []
-        if isinstance(aliases, str):
-            aliases = json.loads(aliases)
-        return list(dict.fromkeys(str(t).strip() for t in
-                    [watch.get("relation_target") or "", *aliases] if len(str(t).strip()) >= 2))
+        key = aliases if isinstance(aliases, str) else tuple(str(t) for t in aliases)
+        return list(_relation_terms(watch.get("relation_target") or "", key))
 
     @staticmethod
     def relation_pattern(watch, term):
@@ -424,16 +482,7 @@ class QuestionLedger:
         the complete subject prefix; do not normalize company/product names or
         silently persist inferred aliases on the watch.
         """
-        term = term.casefold()
-        policy = watch.get("relation_type") == "policy" or (
-            watch.get("scope_kind") == "question" and not watch.get("relation_type")
-            and watch.get("axis") == "rules")  # Older children inherit target/aliases, not relation_type.
-        if policy:
-            parts = re.fullmatch(r"(.{2,}?)相关(?:医疗服务)?价格项目", term)
-            if parts:
-                return re.escape(parts[1]) + r"相关(?:医疗服务)?价格项目"
-        return (r"(?<![A-Za-z0-9_-])" + re.escape(term) + r"(?![A-Za-z0-9_-])"
-                if term.isascii() else re.escape(term))
+        return _relation_pattern(_policy_relation(watch), term)[0]
 
     @staticmethod
     def policy_service_pattern(watch, term):
@@ -465,23 +514,25 @@ class QuestionLedger:
     def public_row_match(cls, watch, project, row):
         """Literal association with a bounded, attributable excerpt; not a verdict."""
         terms = cls.relation_terms(watch)
-        headers = " ".join(str(row.get(k) or "") for k in ("title", "summary", "event_title", "event_summary"))
-        candidates = [("summary", headers)]
+        headers, headers_lower, body, body_lower = _row_texts(row)
+        candidates = [("summary", headers, headers_lower)]
         scope_basis = {"article_body": "full_body", "partial_body": "partial_body", "search_summary": "search_summary"}
         if watch.get("scope_kind") in ("relation", "question") and row.get("body_status") in scope_basis:
             # A saved search excerpt can route a lead, but is never full-text verification.
-            candidates.append((scope_basis[row["body_status"]], str(row.get("body") or "")))
-        for basis, text in candidates:
+            candidates.append((scope_basis[row["body_status"]], body, body_lower))
+        for basis, text, lower in candidates:
             if not terms:
                 if cls.public_focus_matches(watch, project, text):
                     return {"basis": basis, "matched_term": "", "excerpt": text[:500]}
                 continue
             # Require the research outcome close to the subject, rather than in
             # an unrelated section elsewhere in a long article/report.
-            lower = text.casefold()
+            policy = _policy_relation(watch)
             for term in terms:
-                pattern = cls.relation_pattern(watch, term)
-                for match in re.finditer(pattern, lower):
+                compiled, needle = _relation_matcher(policy, term)
+                if needle not in lower:
+                    continue
+                for match in compiled.finditer(lower):
                     excerpt = text[max(0, match.start() - 180):match.end() + 320]
                     if cls.public_focus_matches(watch, project, excerpt):
                         return {"basis": basis, "matched_term": term, "excerpt": excerpt}
@@ -491,13 +542,26 @@ class QuestionLedger:
                 pattern = cls.policy_service_pattern(watch, term)
                 if not pattern:
                     continue
+                subject = re.fullmatch(r"(.{2,}?)相关(?:医疗服务)?价格项目", term.casefold())[1]
+                if subject not in lower:
+                    continue  # every match starts with the subject; folding is per character
                 for sentence in re.finditer(r"[^。！？!?；;\n]+", text):
-                    for match in re.finditer(pattern, sentence[0].casefold()):
+                    for match in _compiled(pattern).finditer(sentence[0].casefold()):
                         excerpt = sentence[0][max(0, match.start() - 180):match.end() + 320]
                         if cls.public_focus_matches(watch, project, excerpt):
                             return {"basis": basis, "matched_term": term, "excerpt": excerpt,
                                     "match_rule": "policy_service_link", "matched_text": match[0]}
         return None
+
+    @classmethod
+    def memo_row_match(cls, memo, watch, project, row):
+        """public_row_match, computed once per watch and row within one read (memo is per request)."""
+        if memo is None:
+            return cls.public_row_match(watch, project, row)
+        key = (watch["id"], row["id"])
+        if key not in memo:
+            memo[key] = cls.public_row_match(watch, project, row)
+        return memo[key]
 
     @staticmethod
     def public_row_fingerprint(row):
@@ -529,7 +593,7 @@ class QuestionLedger:
                 # studio_items.body is only a 12k preview. Match all saved parts
                 # locally, then expose only the relevant bounded excerpt.
                 row["body"] = "\n".join(p["text"] for p in record["parts"])
-            result.append(row)
+            result.append(_PublicRow(row))
         return result
 
     def public_event_match(self, watch, project, event, *, rows=None):
@@ -543,7 +607,7 @@ class QuestionLedger:
                 with closing(self.store._connect()) as db:
                     rows = self.public_event_rows(db, watch["project_id"], event_id)
             for row in rows:
-                match = self.public_row_match(watch, project, dict(row))
+                match = self.public_row_match(watch, project, row)
                 if match:
                     return {**match, "source": row["source"], "url": row["url"], "item_id": row["id"]}
             return None
@@ -656,7 +720,7 @@ class QuestionLedger:
                 terms = self._material_terms(watch, project)
                 for row in rows:
                     text = ' '.join(str(row[k] or '') for k in ('title', 'summary', 'event_title', 'event_summary'))
-                    matches = (self.public_row_match(watch, project, dict(row))
+                    matches = (self.public_row_match(watch, project, row)
                                if watch.get("scope_kind") in ("relation", "question") else
                                self.public_focus_matches(watch, project, text) if focused else
                                any(self._term_match(term, text) for term in terms))
