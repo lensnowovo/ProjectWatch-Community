@@ -260,6 +260,7 @@ class MonitoringPlan:
 
     def view(self, project_id: str, *, changes: int = 30) -> dict:
         from project_watch.studio.plan_tree import tree_signals
+        from project_watch.studio.questions import QuestionLedger
 
         collection = None  # per-source receipts of the latest round: GET /round
         items = self.items(project_id)
@@ -288,11 +289,15 @@ class MonitoringPlan:
         for w in items:
             w["scope_category"] = w.get("scope_kind") or "direction"
             w["section"] = place(w.get("axis") or "asset", w.get("text") or "")
+        # Relation updates and the tree match the same watches against the same events: once.
+        with self.monitor._db() as db:
+            public = QuestionLedger.public_event_rows(db, project_id)
+        memo = {}
         return {"items": items, "changes": [c for c in log if c.get("state", "applied") != "proposed"],
                 "proposals": proposals, "framework": framework,
                 "scope": self.scope_groups(live),
-                "relation_updates": self.relation_updates(project_id, live),
-                "tree_signals": (signals := tree_signals(self, project_id, items)),
+                "relation_updates": self.relation_updates(project_id, live, rows=public, memo=memo),
+                "tree_signals": (signals := tree_signals(self, project_id, items, rows=public, memo=memo)),
                 "explorations": self.explorations.view(project_id),
                 "rings": [{"key": k, "label": label} for k, label in RINGS],
                 "meta": {k: meta.get(k) for k in ("understanding", "method", "in_scope", "out_of_scope", "updated_at", "templates", "review")},
@@ -387,13 +392,14 @@ class MonitoringPlan:
             "legacy_ids": [w["id"] for w in items if not w.get("scope_kind")],  # compatibility for existing clients
         }
 
-    def relation_updates(self, project_id, items):
+    def relation_updates(self, project_id, items, *, rows=None, memo=None):
         """Read-only, current matching receipts, not model-assessed progress."""
         from project_watch.studio.questions import QuestionLedger
 
         project = self.monitor.store.get_project(project_id) or {}
-        with self.monitor._db() as db:
-            rows = QuestionLedger.public_event_rows(db, project_id)
+        if rows is None:
+            with self.monitor._db() as db:
+                rows = QuestionLedger.public_event_rows(db, project_id)
         result = {}
         for watch in items:
             if watch.get("scope_kind") != "relation" or watch.get("visibility") != "public":
@@ -401,7 +407,7 @@ class MonitoringPlan:
             matches = []
             seen = set()
             for row in rows:
-                match = QuestionLedger.public_row_match(watch, project, dict(row))
+                match = QuestionLedger.memo_row_match(memo, watch, project, row)
                 if match and row["event_id"] not in seen:
                     seen.add(row["event_id"])
                     matches.append({"event_id": row["event_id"], "title": row["event_title"],

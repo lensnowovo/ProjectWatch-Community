@@ -30,12 +30,12 @@ def evidence_signal(rows):
             "basis": newest.get("basis", "") if newest else ""}
 
 
-def tree_signals(plan, project_id, items):
+def tree_signals(plan, project_id, items, *, rows=None, memo=None):
     from project_watch.studio.questions import QuestionLedger
 
     project = plan.monitor.store.get_project(project_id) or {}
     with plan.monitor._db() as db:
-        public = QuestionLedger.public_event_rows(db, project_id)
+        public = QuestionLedger.public_event_rows(db, project_id) if rows is None else rows
         clocks = {r["id"]: r["collected_at"] for r in db.execute(
             "SELECT id,collected_at FROM studio_items WHERE project_id=?", (project_id,))}
         routed = {}
@@ -51,7 +51,7 @@ def tree_signals(plan, project_id, items):
                 for row in public:
                     if item["scope_kind"] == "question" and row["id"] not in routed.get(item["id"], set()):
                         continue
-                    match = QuestionLedger.public_row_match(item, project, row)
+                    match = QuestionLedger.memo_row_match(memo, item, project, row)
                     if match:
                         receipts.append({"id": row["event_id"], "title": row["event_title"], "url": row["url"],
                                          "recorded_at": clocks.get(row["id"], ""), "basis": match["basis"]})

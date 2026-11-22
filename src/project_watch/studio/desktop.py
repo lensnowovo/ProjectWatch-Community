@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import os
 import re
 import socket
@@ -204,6 +205,9 @@ def run_desktop(home: Path, *, browser=True, tray=True, smoke_seconds=None):
     server = thread = sock = icon = timer = None
     identity = uuid.uuid4().hex
     try:
+        from project_watch.studio import desktop_log
+
+        desktop_log.configure(home)  # only the instance holding the lock writes the log
         check_installed_version(home)
         public_executor = configure_runtime(home)
         app = create_studio_app(home, start_worker=smoke_seconds is None)
@@ -249,6 +253,10 @@ def run_desktop(home: Path, *, browser=True, tray=True, smoke_seconds=None):
         else:
             thread.join()
         return 'stopped'
+    except Exception:
+        # Startup and shutdown failures reach the local log; the dialog shows only the error type.
+        logging.getLogger('project_watch.desktop').exception('desktop failed')
+        raise
     finally:
         if timer:
             timer.cancel()

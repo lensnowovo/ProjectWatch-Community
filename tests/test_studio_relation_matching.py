@@ -214,3 +214,40 @@ def test_policy_variant_alias_and_negative_boundaries():
     assert not match("合成接口产品团队获奖。其他公司医保支付项目获批")
     assert not match("合成接口相关医疗服务价格项目讨论。" + "背景内容。" * 100 + "其他项目医保支付")
     assert not match("合成接口相关医疗服务价格项目已明确医保支付范围", {**watch, "relation_type": "product"})
+
+
+def test_cached_match_texts_follow_the_row_and_match_like_a_plain_dict(sample):
+    from project_watch.studio import questions
+
+    p, pid, root, _child = sample
+    add_event(p, pid, "cached", "这是一条报道。合成手部系统获得许可，可用于临床。")
+    with p.store._connect() as db:
+        rows = QuestionLedger.public_event_rows(db, pid)
+    row = rows[0]
+    project = p.store.get_project(pid)
+    assert QuestionLedger.public_row_match(root, project, row) == QuestionLedger.public_row_match(root, project, dict(row))
+    assert row.match_texts[3] == row["body"].casefold()
+    assert questions._row_texts(dict(row, body="无关文字"))[2] == "无关文字"  # a copy is folded afresh
+
+
+def test_one_plan_view_matches_each_watch_and_event_once(sample, monkeypatch):
+    p, pid, root, child = sample
+    add_event(p, pid, "once", "这是一条报道。合成手部系统获得许可，可用于临床。")
+    p.questions.route_existing_events(pid, [root["id"], child["id"]], focused=True)
+    calls = []
+    original = QuestionLedger.public_row_match.__func__
+    monkeypatch.setattr(QuestionLedger, "public_row_match",
+                        classmethod(lambda cls, w, pr, r: calls.append((w["id"], r["id"])) or original(cls, w, pr, r)))
+    view = p.monitoring_plan.view(pid)
+    assert view["relation_updates"][root["id"]]["count"] == 1
+    assert len(calls) == len(set(calls))
+
+
+def test_policy_subject_prefilter_keeps_policy_matches():
+    from project_watch.studio import questions
+
+    watch = {"relation_type": "policy", "relation_target": "合成检测相关医疗服务价格项目"}
+    compiled, needle = questions._relation_matcher(True, watch["relation_target"])
+    assert needle == "合成检测"
+    text = "省医保局发布合成检测相关价格项目立项指南。"
+    assert compiled.search(text.casefold()) and needle in text.casefold()
