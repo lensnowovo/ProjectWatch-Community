@@ -28,11 +28,19 @@ def _operation(sql):
 class FencedCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
         self.connection.before_statement(sql)
-        return super().execute(sql, parameters)
+        try:
+            return super().execute(sql, parameters)
+        finally:
+            self.connection._began(sql)
+            self.connection._ended()
 
     def executemany(self, sql, parameters):
         self.connection.before_statement(sql)
-        return super().executemany(sql, parameters)
+        try:
+            return super().executemany(sql, parameters)
+        finally:
+            self.connection._began(sql)
+            self.connection._ended()
 
     def executescript(self, sql):
         if self.connection.guard is None:
@@ -45,6 +53,7 @@ class FencedConnection(sqlite3.Connection):
     guard = None
     keep_open = False
     _write_began = None
+    _guarded_write = False  # a statement passed the guard as a write (WITH ... INSERT is not timed)
 
     def _began(self, sql):
         # Only the write lock blocks other writers (WAL): it is taken by BEGIN IMMEDIATE/EXCLUSIVE or
@@ -58,7 +67,10 @@ class FencedConnection(sqlite3.Connection):
             self._write_began = (time.monotonic(), traceback.extract_stack(limit=10)[:-2])
 
     def _ended(self, closing=False):
-        if self._write_began is None or (self.in_transaction and not closing):
+        if self.in_transaction and not closing:
+            return
+        self._guarded_write = False
+        if self._write_began is None:
             return
         started, stack = self._write_began
         self._write_began = None
@@ -90,11 +102,13 @@ class FencedConnection(sqlite3.Connection):
             return
         if not self.in_transaction:
             super().execute("BEGIN IMMEDIATE")
+            self._began("BEGIN IMMEDIATE")  # the guard runs holding the write lock
         try:
             self.guard(self)
         except BaseException:
             self.rollback()
             raise
+        self._guarded_write = True
 
     def execute(self, sql, parameters=()):
         self.before_statement(sql)
@@ -135,7 +149,9 @@ class FencedConnection(sqlite3.Connection):
         return cursor
 
     def commit(self):
-        if self.guard is not None and self.in_transaction:
+        # A read-only transaction has nothing to fence: a long read under load must not fail
+        # its job because the heartbeat could not renew the lease meanwhile.
+        if self.guard is not None and self.in_transaction and (self._write_began is not None or self._guarded_write):
             try:
                 self.guard(self)
             except BaseException:

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 IDLE_SECONDS = 15 * 60
 CALL_GRACE_SECONDS = 60
+LEASE_SECONDS = 90  # a job lease lasts this long past its last renewal
 
 
 def stage_phase(stage):
@@ -146,7 +147,7 @@ def tick(store, job, *, at=None):
         reason = expired_reason(db, current, at)
         if not reason:
             db.execute('UPDATE studio_jobs SET heartbeat_at=?,lease_until=? WHERE id=?',
-                       (at.isoformat(), (at + timedelta(seconds=90)).isoformat(), job['id']))
+                       (at.isoformat(), (at + timedelta(seconds=LEASE_SECONDS)).isoformat(), job['id']))
             return 'alive'
         uncertain = db.execute(f'SELECT 1 FROM studio_job_calls c WHERE c.job_id=? AND {UNRESOLVED} LIMIT 1',
                                (job['id'],)).fetchone()
