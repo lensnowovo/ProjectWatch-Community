@@ -411,6 +411,51 @@ def test_repeated_disconnect_backoff_increases_across_claims(env):
     assert delays == [30, 60, 120]
 
 
+def test_a_disconnect_does_not_wait_for_another_providers_daily_budget(env):
+    """A round that lost its connection briefly resumes in minutes, not when an unrelated
+    provider's daily budget resets (a pw-night round waited 17 h this way)."""
+    from datetime import UTC, datetime, timedelta
+
+    from project_watch.studio.store import now
+    store, pid = env
+    work = job(store, pid, 'collect')
+    with store._connect() as db:
+        for provider in ('daily-search', 'model'):
+            db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at) "
+                       "VALUES (?,?,?,?,?,?)", (work.job['id'], provider, 'open_data', provider, 'completed', now()))
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('daily-search','2999-01-01T00:00:00+00:00',429)")
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('model',?,0)",
+                   ((datetime.now(UTC) + timedelta(minutes=5)).isoformat(),))
+
+    def due():
+        with store._connect() as db:
+            value = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
+            db.execute('UPDATE studio_jobs SET retry_after=NULL WHERE id=?', (work.job['id'],))
+        return datetime.fromisoformat(value) - datetime.now(UTC)
+    assert store.defer_recoverable(work.job, 'connection_not_sent')
+    assert timedelta(minutes=4) < due() < timedelta(minutes=6)  # the connection backoff, not 2999
+    work = JobExecution(store, store.claim())
+    assert store.defer_recoverable(work.job, 'provider_backoff')
+    assert due() > timedelta(days=300)  # a job waiting on a backing-off provider still waits for it
+
+
+def test_a_job_refused_by_a_backing_off_provider_waits_for_it_without_a_call_row(env):
+    """Refused before any request (another job's backoff): wait for that backoff, not 30 s polls."""
+    from datetime import UTC, datetime, timedelta
+    store, pid = env
+    work = job(store, pid, 'page_summary')
+    with store._connect() as db:
+        db.execute("INSERT INTO studio_provider_backoff VALUES (?,'2999-01-01T00:00:00+00:00',429)",
+                   (hashlib.sha256(b'limited').hexdigest(),))
+    with pytest.raises(dispatch.NotSent, match='provider_backoff'):
+        work.call('open_data', 'refused', lambda: pytest.fail('sent during a backoff'), provider='limited')
+    assert store.defer_recoverable(work.job, 'provider_backoff')
+    with store._connect() as db:
+        assert not db.execute('SELECT 1 FROM studio_job_calls WHERE job_id=?', (work.job['id'],)).fetchone()
+        due = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
+    assert datetime.fromisoformat(due) - datetime.now(UTC) > timedelta(days=300)
+
+
 @pytest.mark.parametrize('new_version', ['page:papers', 'competition-summary:synthetic'])
 def test_different_page_does_not_suppress_old_definite_failure(env, new_version):
     store, pid = env
