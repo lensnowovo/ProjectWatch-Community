@@ -439,6 +439,42 @@ def test_a_disconnect_does_not_wait_for_another_providers_daily_budget(env):
     assert due() > timedelta(days=300)  # a job waiting on a backing-off provider still waits for it
 
 
+@pytest.mark.parametrize('reason,providers', [('provider_backoff', ['model']), ('model_rate_limited', [])])
+def test_a_short_refusal_does_not_wait_for_a_finished_steps_daily_budget(env, reason, providers):
+    """A job stopped by a short model limit resumes then, not when the search budget it
+    used in an earlier step resets."""
+    from datetime import UTC, datetime, timedelta
+
+    from project_watch.studio.store import now
+    store, pid = env
+    work = job(store, pid, 'business')
+    with store._connect() as db:
+        for provider, kind in (('daily-search', 'search'), ('model', 'model')):
+            db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at) "
+                       "VALUES (?,?,?,?,?,?)", (work.job['id'], provider, kind, provider, 'completed', now()))
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('daily-search','2999-01-01T00:00:00+00:00',429)")
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('model',?,429)",
+                   ((datetime.now(UTC) + timedelta(minutes=5)).isoformat(),))
+    assert store.defer_recoverable(work.job, reason, providers)
+    with store._connect() as db:
+        due = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
+    assert timedelta(minutes=4) < datetime.fromisoformat(due) - datetime.now(UTC) < timedelta(minutes=6)
+
+
+def test_the_refusing_provider_is_found_through_wrapping_errors():
+    from project_watch.studio.pipeline import _refusing_providers
+    refusal = dispatch.NotSent('provider_backoff')
+    refusal.provider_hash = 'p1'
+    try:
+        try:
+            raise refusal
+        except dispatch.NotSent as exc:
+            raise ModelError('wrapped', code='provider_backoff') from exc
+    except ModelError as wrapped:
+        assert _refusing_providers(wrapped) == ['p1']
+    assert _refusing_providers(ModelError('plain', code='model_rate_limited')) == []
+
+
 def test_a_job_refused_by_a_backing_off_provider_waits_for_it_without_a_call_row(env):
     """Refused before any request (another job's backoff): wait for that backoff, not 30 s polls."""
     from datetime import UTC, datetime, timedelta

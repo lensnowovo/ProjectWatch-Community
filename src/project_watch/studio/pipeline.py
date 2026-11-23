@@ -2488,6 +2488,16 @@ class Pipeline:
             self._execution_state.current = previous_execution
 
 
+def _refusing_providers(exc):
+    """The providers named by a refusal, through the errors that wrap it (ModelError from NotSent)."""
+    providers, seen = [], set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        providers += [getattr(exc, 'provider_hash', ''), *(getattr(exc, 'provider_hashes', None) or [])]
+        exc = exc.__cause__ or exc.__context__
+    return [p for p in dict.fromkeys(providers) if p]
+
+
 def _db_busy(exc):
     return any(word in str(exc).lower() for word in ('database is locked', 'database is busy', 'database table is locked'))
 
@@ -2697,7 +2707,7 @@ class StudioWorker:
             if getattr(exc, 'code', '') == 'project_paused':
                 self.pipeline.store.defer_paused(job)
             elif getattr(exc, 'code', '') in dispatch.RECOVERABLE_ERRORS:
-                self.pipeline.store.defer_recoverable(job, getattr(exc, 'code', ''))
+                self.pipeline.store.defer_recoverable(job, getattr(exc, 'code', ''), _refusing_providers(exc))
             elif getattr(exc, 'code', '') == 'legacy_batches_waiting':
                 self.pipeline.store.defer_legacy_batches(job)
             else:
