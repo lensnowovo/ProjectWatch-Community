@@ -70,6 +70,9 @@ class ModelConfig:
     # actual usage and the provider's rules determine billing and plan consumption.
     # Providers with a lower ceiling are stepped down automatically (see llm.LLM).
     max_output_tokens: int = 1000000
+    # Independent model requests one job may have open at once (1-4). Unknown results
+    # are still held, never resent; a provider's rate limit backs all of them off.
+    parallel_requests: int = 3
 
     @property
     def ready(self) -> bool:
@@ -389,6 +392,11 @@ class SettingsStore:
                     if limit not in OUTPUT_LIMITS:
                         raise ValueError("单次回复上限只支持 8K/16K/32K/64K/100K/128K/256K/512K/1M")
                     current.model.max_output_tokens = limit
+                if "parallel_requests" in model:
+                    width = int(model["parallel_requests"] or 0)
+                    if not 1 <= width <= 4:
+                        raise ValueError("同时进行的模型请求数只支持 1–4")
+                    current.model.parallel_requests = width
                 if model.get("api_key"):
                     current.model.api_key = _clean_secret(model["api_key"])
                 elif previous_endpoint != (current.model.protocol, current.model.base_url.rstrip("/")):
@@ -524,6 +532,7 @@ class SettingsStore:
                 "model": settings.model.model,
                 "api_key": mask(settings.model.api_key),
                 "max_output_tokens": settings.model.max_output_tokens,
+                "parallel_requests": settings.model.parallel_requests,
                 "ready": settings.model.ready,
             },
             "search": {

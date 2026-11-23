@@ -2,7 +2,7 @@
 
 A cumulative draft (each batch revising the one before) rewrote earlier conclusions
 away, so a published section reflected roughly its last batch. Here every batch is
-read on its own for candidate points (PARALLEL requests at a time), candidates are
+read on its own for candidate points (the job's width of requests at a time), candidates are
 consolidated in bounded merges, and one synthesis writes the sections from all of
 them plus, in an incremental round, the published version. The draft keeps the
 cumulative draft's shape, so review and publication are unchanged.
@@ -14,13 +14,15 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 
+from project_watch.studio.parallel_steps import (
+    WAVE_DEFAULT as PARALLEL,  # noqa: F401 -- default width
+)
 from project_watch.studio.store import digest
 
 MODE = 'analyze_draft_protocol_v1'
 EXTRACT = 'analyze_extract_v1'
 MERGE = 'analyze_merge_v1'
 SYNTHESIS = 'analyze_synthesis_v1'
-PARALLEL = 3  # independent requests of one job sent at the same time
 FAILURE_LIMIT = 2  # after this many failed extractions, send no more (provider trouble)
 REFUSAL_LIMIT = 5  # content refusals are per material, but this many stop the rest too
 POOL_CHARS = 48000  # serialized candidates per merge or synthesis request
@@ -155,10 +157,10 @@ def _codes(points):
 
 
 def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=None):
-    """Send unsaved requests PARALLEL at a time; return each key's value, FAILED or NOT_SENT.
+    """Send unsaved requests the job's width at a time; return each key's value, FAILED or NOT_SENT.
 
-    Each request keeps its own journal row, so an unknown one is never resent. The first
-    unsaved request goes alone: on resume it may be the uncertain one. A terminal failure
+    Each request keeps its own journal row, so an unknown one is never resent. While the job
+    has an unresolved request, the first unsaved one goes alone: on resume it may be that one. A terminal failure
     is recorded and isolated; anything else is raised once the wave's answers are saved.
     Yield only between waves, never with a request in flight.
     """
@@ -189,8 +191,9 @@ def _send(execution, llm, requests, accept, *, failure_limit=None, after_wave=No
     struck = {failures['draft:' + key].get('wave') or key for key, value in results.items()
               if value is FAILED and failures.get('draft:' + key, {}).get('code') != 'model_content_rejected'}
     failed = len(struck)
-    waves = [pending[:1]] + [pending[i:i + PARALLEL] for i in range(1, len(pending), PARALLEL)]
-    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+    from project_watch.studio import parallel_steps
+    waves = parallel_steps.waves(execution, pending)
+    with ThreadPoolExecutor(max_workers=parallel_steps.width(execution, parallel_steps.WAVE_DEFAULT)) as pool:
         for items in waves:
             if not items:
                 continue

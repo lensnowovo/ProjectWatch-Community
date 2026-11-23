@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,9 @@ from project_watch.studio.store import now
 
 # A guarded write renews the lease when less than this is left (the heartbeat keeps it above 70 s).
 LEASE_RENEW_BELOW = timedelta(seconds=60)
+
+
+_SLOT_INIT = threading.Lock()
 
 
 class JobYield(Exception):
@@ -140,6 +144,21 @@ class JobExecution:
             return False
         with closing(self.store._connect()) as db:
             return _still_open(db, self.job['id'], call_key)
+
+    def _model_slot(self, kind):
+        """At most the job's width of model requests admitted at once, however its steps are nested.
+
+        Taken before admission (so a waiting request is checked for pause, stop and lease when
+        it gets its turn, and no started row waits) and released once its answer is recorded.
+        A request never calls another, so it cannot wait on a second slot."""
+        from contextlib import nullcontext
+        if kind != 'model':
+            return nullcontext()
+        with _SLOT_INIT:
+            if getattr(self, '_slots', None) is None:
+                from project_watch.studio.parallel_steps import WAVE_DEFAULT, width
+                self._slots = threading.BoundedSemaphore(width(self, WAVE_DEFAULT))
+        return self._slots
 
     def _guard(self, db):
         if self.cancel_requested():
@@ -263,6 +282,11 @@ class JobExecution:
             self._progress(db)
 
     def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
+        with self._model_slot(kind):
+            return self._call(kind, key, transport, provider=provider, read_only=read_only,
+                              public_read=public_read, timeout=timeout)
+
+    def _call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
         if kind not in self.budgets or not key or len(key) > 200:
             raise ValueError("invalid request journal key")
         # Provider values are only hashes, not URLs, keys or private prompts.
