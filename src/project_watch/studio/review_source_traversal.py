@@ -13,12 +13,14 @@ from contextlib import closing
 from copy import deepcopy
 
 from project_watch.studio import judgment_review as review
+from project_watch.studio.parallel_steps import (
+    WAVE_DEFAULT as PARALLEL,  # noqa: F401 -- default width
+)
 from project_watch.studio.store import digest
 
 MAX_REQUEST_CHARS = 64000  # Serialized request context, not a call/material quota.
 PROTOCOL = 'review-source-traversal-v1'
 # Independent review requests of one job sent at the same time. Each is journaled on its own.
-PARALLEL = 3
 # Counterevidence scope of jobs that start under it, instead of the whole corpus: the cited
 # sources (up to SCOPE_CHARS), plus for every assertion its own best-matching sources by shared
 # distinctive terms: the best one whatever its length, then more up to PER_FIELD and FIELD_CHARS.
@@ -145,11 +147,11 @@ def relevant_evidence(payload):
 
 
 def _send(execution, llm, plan, guard, accept, check):
-    """Send the plan's unsaved requests PARALLEL at a time; save, then check, every answer.
+    """Send the plan's unsaved requests the job's width at a time; save, then check, every answer.
 
     The requests are independent; each keeps its own journal row, so an unknown one is
-    never resent. The first unsaved request goes alone: on resume it may be the unknown
-    one, and nothing else is paid for if it cannot complete. After a failure or an answer
+    never resent. While the job has an unresolved request, the first unsaved one goes
+    alone: on resume it may be that one, and nothing else is paid for if it cannot complete. After a failure or an answer
     that fails its check no new request is sent; answers already received stay saved.
     Yield only between waves, never with a request in flight.
     """
@@ -157,8 +159,9 @@ def _send(execution, llm, plan, guard, accept, check):
     for key, _, _ in plan:
         if execution.read_checkpoint(key) is not None:
             check(key)  # an answer saved earlier but never checked must not let the rest be sent
-    waves = [pending[:1]] + [pending[i:i + PARALLEL] for i in range(1, len(pending), PARALLEL)]
-    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+    from project_watch.studio import parallel_steps
+    waves = parallel_steps.waves(execution, pending)
+    with ThreadPoolExecutor(max_workers=parallel_steps.width(execution, parallel_steps.WAVE_DEFAULT)) as pool:
         for items in waves:
             if not items:
                 continue
