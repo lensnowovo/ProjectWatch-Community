@@ -68,6 +68,26 @@ def waiting_on_request(store, job_id):
                           (job_id,)).fetchone() is not None
 
 
+def _busy_retry(write, *, seconds=60.0):
+    """Run a transaction again while the database stays busy, up to ``seconds``.
+
+    Used for request receipts: losing one to another writer's long transaction leaves a
+    paid answer unrecorded and the request unknown. Other errors are raised at once.
+    """
+    import sqlite3
+
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return write()
+        except sqlite3.OperationalError as exc:
+            if 'locked' not in str(exc).lower() and 'busy' not in str(exc).lower():
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
 def _diagnostic_stage(prefix, key):
     """A retry under ``<key>:429:N`` keeps its own diagnostic; the first request keeps its old stage name."""
     return prefix + key[:40] + key[64:]
@@ -319,88 +339,94 @@ class JobExecution:
                                 or (public_read and transport_failure)))
             not_sent = isinstance(exc, HttpError) and exc.code == "connection_not_sent"
             failure_code = 'public_read_failed' if transport_failure else 'response_too_large'
-            with closing(self.store._connect()) as db, db:
-                if failed_read:
-                    db.execute("BEGIN IMMEDIATE")
-                    self._receipt_guard(db)
-                db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
-                           ("not_sent" if not_sent else "failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
-                if not_sent:
-                    exc.provider_hash = provider_hash
-                    db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
-                    db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,0) ON CONFLICT(provider) "
-                               "DO UPDATE SET retry_after=excluded.retry_after,status=0",
-                               (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(0, attempt))).isoformat()))
-                phase = getattr(exc, 'transport_phase', 'unknown')
-                failure = getattr(exc, 'failure_kind', 'timeout' if isinstance(exc, TimeoutError)
-                                  else 'transport_error' if isinstance(exc, ConnectionError) else 'unknown')
-                diagnostic = {'call_key': key,
-                    'phase': phase if phase in ('connect_or_headers', 'response_body') else 'unknown',
-                    'failure': failure if failure in ('timeout', 'transport_error') else 'unknown'}
-                from project_watch.studio.http import safe_diagnostics
-                diagnostic['transport'] = safe_diagnostics(getattr(exc, 'diagnostics', {}))
-                if failed_read:
-                    diagnostic['code'] = failure_code
-                    diagnostic['policy'] = 'public_read' if public_read else 'oversized_read'
-                resend = (kind == 'model' and not not_sent and not failed_read and phase == 'response_body'
-                          and dispatch.cut_stream(diagnostic['transport']) and not self.cancel_requested())
-                if resend:
-                    # The provider took the request and its stream broke off. A model request
-                    # changes nothing outside this job, so it is sent once more under a new key;
-                    # a second break of the same logical request stays unknown and holds.
-                    batch = dispatch.batch_of(self.job)
-                    resend = not db.execute(
-                        "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
-                        "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status IN ('unknown','resent') AND c.retryable=? "
-                        "AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' AND j.input_version IN (?,?))) LIMIT 1",
-                        (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND, self.job['id'],
-                         batch, 'collect:' + (batch or ''), dispatch.REDO_PREFIX + (batch or ''))).fetchone()
+            def record_failure(exc=exc):
+                # The paid outcome is worth a wait: a busy database is retried (idempotent writes).
+                with closing(self.store._connect()) as db, db:
+                    if failed_read:
+                        db.execute("BEGIN IMMEDIATE")
+                        self._receipt_guard(db)
+                    db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
+                               ("not_sent" if not_sent else "failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                    if not_sent:
+                        exc.provider_hash = provider_hash
+                        db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
+                        db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,0) ON CONFLICT(provider) "
+                                   "DO UPDATE SET retry_after=excluded.retry_after,status=0",
+                                   (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(0, attempt))).isoformat()))
+                    phase = getattr(exc, 'transport_phase', 'unknown')
+                    failure = getattr(exc, 'failure_kind', 'timeout' if isinstance(exc, TimeoutError)
+                                      else 'transport_error' if isinstance(exc, ConnectionError) else 'unknown')
+                    diagnostic = {'call_key': key,
+                        'phase': phase if phase in ('connect_or_headers', 'response_body') else 'unknown',
+                        'failure': failure if failure in ('timeout', 'transport_error') else 'unknown'}
+                    from project_watch.studio.http import safe_diagnostics
+                    diagnostic['transport'] = safe_diagnostics(getattr(exc, 'diagnostics', {}))
+                    if failed_read:
+                        diagnostic['code'] = failure_code
+                        diagnostic['policy'] = 'public_read' if public_read else 'oversized_read'
+                    resend = (kind == 'model' and not not_sent and not failed_read and phase == 'response_body'
+                              and dispatch.cut_stream(diagnostic['transport']) and not self.cancel_requested())
                     if resend:
-                        db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
-                                   (dispatch.CUT_RESEND, self.job["id"], key))
-                    diagnostic['auto_resend'] = bool(resend)
-                # No exception text, URL, credentials or response body in diagnostics.
-                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
-                           'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], _diagnostic_stage('call_error:', key), json.dumps(diagnostic)))
+                        # The provider took the request and its stream broke off. A model request
+                        # changes nothing outside this job, so it is sent once more under a new key;
+                        # a second break of the same logical request stays unknown and holds.
+                        batch = dispatch.batch_of(self.job)
+                        resend = not db.execute(
+                            "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
+                            "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status IN ('unknown','resent') AND c.retryable=? "
+                            "AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' AND j.input_version IN (?,?))) LIMIT 1",
+                            (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND, self.job['id'],
+                             batch, 'collect:' + (batch or ''), dispatch.REDO_PREFIX + (batch or ''))).fetchone()
+                        if resend:
+                            db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
+                                       (dispatch.CUT_RESEND, self.job["id"], key))
+                        diagnostic['auto_resend'] = bool(resend)
+                    # No exception text, URL, credentials or response body in diagnostics.
+                    db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
+                               'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                               (self.job['id'], _diagnostic_stage('call_error:', key), json.dumps(diagnostic)))
+                    return resend
+            resend = _busy_retry(record_failure)
             if failed_read:
                 raise HttpError(failure_code) from exc
             if resend:
                 raise HttpError('stream_cut_resend', transport_phase='response_body',
                                 failure_kind='transport_error', diagnostics=getattr(exc, 'diagnostics', None)) from exc
             raise
-        with closing(self.store._connect()) as db, db:
-            db.execute("BEGIN IMMEDIATE")
-            # A complete answer is recorded even if the lease lapsed meanwhile: the
-            # row is still ``started``, so no other attempt could have resent or
-            # filled it, and the resumed job replays it instead of paying again.
-            # A job the watchdog already held as unknown stays unknown.
-            if not _still_open(db, self.job['id'], key):
-                raise RuntimeError("job lease expired or replaced")
-            self._progress(db)
-            safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
-            if response.diagnostics:
-                from project_watch.studio.http import safe_diagnostics
-                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
-                           'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], _diagnostic_stage('call_transport:', key), json.dumps(safe_diagnostics(response.diagnostics))))
-            from project_watch.studio.usage import FIELDS, reported
+        def record():
+            with closing(self.store._connect()) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                # A complete answer is recorded even if the lease lapsed meanwhile: the
+                # row is still ``started``, so no other attempt could have resent or
+                # filled it, and the resumed job replays it instead of paying again.
+                # A job the watchdog already held as unknown stays unknown.
+                if not _still_open(db, self.job['id'], key):
+                    raise RuntimeError("job lease expired or replaced")
+                self._progress(db)
+                safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
+                if response.diagnostics:
+                    from project_watch.studio.http import safe_diagnostics
+                    db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
+                               'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                               (self.job['id'], _diagnostic_stage('call_transport:', key), json.dumps(safe_diagnostics(response.diagnostics))))
+                from project_watch.studio.usage import FIELDS, reported
 
-            counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)
-            db.execute("UPDATE studio_job_calls SET status='completed',response_status=?,response_headers=?,response_body=?,"
-                       'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
-                       (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
-                        int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
-            if key != logical_key:
-                # The automatic resend of a cut stream came back: the earlier row stays
-                # counted as spent but is no longer an unresolved outcome.
-                db.execute("UPDATE studio_job_calls SET status=? WHERE job_id=? AND (call_key=? OR call_key GLOB ?||':429:*') "
-                           "AND status='unknown' AND retryable=?",
-                           (dispatch.RESENT, self.job['id'], logical_key, logical_key, dispatch.CUT_RESEND))
-            if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
-                db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
-                db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
-                    (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(response.status, attempt, response.headers))).isoformat(), response.status))
+                counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)
+                db.execute("UPDATE studio_job_calls SET status='completed',response_status=?,response_headers=?,response_body=?,"
+                           'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
+                           (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
+                            int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                if key != logical_key:
+                    # The automatic resend of a cut stream came back: the earlier row stays
+                    # counted as spent but is no longer an unresolved outcome.
+                    db.execute("UPDATE studio_job_calls SET status=? WHERE job_id=? AND (call_key=? OR call_key GLOB ?||':429:*') "
+                               "AND status='unknown' AND retryable=?",
+                               (dispatch.RESENT, self.job['id'], logical_key, logical_key, dispatch.CUT_RESEND))
+                if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
+                    db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
+                    db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
+                        (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(response.status, attempt, response.headers))).isoformat(), response.status))
+        _busy_retry(record)  # a received answer is not dropped for a busy database
         with closing(self.store._connect()) as db:
             self._lease_guard(db)  # saved; a superseded owner still stops here
         if self.cancel_requested():
