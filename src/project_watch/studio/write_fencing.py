@@ -19,6 +19,11 @@ _log = logging.getLogger(__name__)
 SLOW_WRITE_SECONDS = 5.0
 
 
+def _shape(sql):
+    """The statement without its values (parameters are bound, never in the text), shortened."""
+    return ' '.join(sql.split())[:90]
+
+
 def _operation(sql):
     # Internal SQL may start with comments; WITH is conservatively write-fenced.
     sql = re.sub(r"\A(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)*", "", sql, flags=re.S)
@@ -28,17 +33,21 @@ def _operation(sql):
 class FencedCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
         self.connection.before_statement(sql)
+        started = time.monotonic()
         try:
             return super().execute(sql, parameters)
         finally:
+            self.connection._statement(sql, started)
             self.connection._began(sql)
             self.connection._ended()
 
     def executemany(self, sql, parameters):
         self.connection.before_statement(sql)
+        started = time.monotonic()
         try:
             return super().executemany(sql, parameters)
         finally:
+            self.connection._statement(sql, started)
             self.connection._began(sql)
             self.connection._ended()
 
@@ -54,6 +63,13 @@ class FencedConnection(sqlite3.Connection):
     keep_open = False
     _write_began = None
     _guarded_write = False  # a statement passed the guard as a write (WITH ... INSERT is not timed)
+    _statements = None  # (seconds, sql) of each statement while the write lock is held
+
+    def _statement(self, sql, started):
+        if self._write_began is not None:
+            if self._statements is None:
+                self._statements = []
+            self._statements.append((time.monotonic() - started, sql))
 
     def _began(self, sql):
         # Only the write lock blocks other writers (WAL): it is taken by BEGIN IMMEDIATE/EXCLUSIVE or
@@ -73,12 +89,18 @@ class FencedConnection(sqlite3.Connection):
         if self._write_began is None:
             return
         started, stack = self._write_began
+        statements, self._statements = self._statements or [], None
         self._write_began = None
         held = time.monotonic() - started
         if held >= SLOW_WRITE_SECONDS:
             frames = [f for f in stack if 'project_watch' in f.filename and 'write_fencing' not in f.filename] or stack[-3:]
             where = ' <- '.join(f'{f.filename.rsplit("project_watch", 1)[-1]}:{f.lineno} {f.name}' for f in reversed(frames))
-            _log.warning('write transaction held %.1f s, opened at %s', held, where)
+            # Where the time went: SQL (the slowest statements) or the code between them.
+            in_sql = sum(seconds for seconds, _ in statements)
+            slowest = sorted(statements, key=lambda s: -s[0])[:3]
+            detail = '; '.join(f'{seconds:.1f} s {_shape(sql)}' for seconds, sql in slowest if seconds >= 0.5)
+            _log.warning('write transaction held %.1f s (%d statements, %.1f s in SQL%s), opened at %s',
+                         held, len(statements), in_sql, ': ' + detail if detail else '', where)
 
     def rollback(self):
         super().rollback()
@@ -112,17 +134,21 @@ class FencedConnection(sqlite3.Connection):
 
     def execute(self, sql, parameters=()):
         self.before_statement(sql)
+        started = time.monotonic()
         try:
             return super().execute(sql, parameters)
         finally:
+            self._statement(sql, started)
             self._began(sql)
             self._ended()
 
     def executemany(self, sql, parameters):
         self.before_statement(sql)
+        started = time.monotonic()
         try:
             return super().executemany(sql, parameters)
         finally:
+            self._statement(sql, started)
             self._began(sql)
             self._ended()
 
@@ -157,7 +183,9 @@ class FencedConnection(sqlite3.Connection):
             except BaseException:
                 self.rollback()
                 raise
+        started = time.monotonic()
         result = super().commit()
+        self._statement('COMMIT', started)
         self._ended()
         return result
 
