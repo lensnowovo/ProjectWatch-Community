@@ -126,6 +126,65 @@ def test_a_failed_open_batch_is_marked_and_not_resent_on_resume(tmp_path):
     assert llm.calls == 1
 
 
+def stalled(code, phase='response_body'):
+    """The model error for a reply that broke off; its cause carries where the transport was."""
+    from project_watch.studio.http import HttpError
+    try:
+        raise HttpError('connection_failed', transport_phase=phase)
+    except HttpError as cause:
+        try:
+            raise ModelError('x', code=code) from cause
+        except ModelError as exc:
+            return exc
+
+
+class Stalled(Refuses):
+    def __init__(self, code='request_outcome_unknown', phase='response_body'):
+        super().__init__()
+        self.code, self.phase = code, phase
+
+    def json(self, *_a, **_k):
+        self.calls += 1
+        raise stalled(self.code, self.phase)
+
+
+def in_job(pipeline, unresolved=1):
+    from types import SimpleNamespace
+    saved = {}
+    pipeline._execution_state.current = SimpleNamespace(
+        read_checkpoint=saved.get, checkpoint=saved.__setitem__, _guard=None,
+        unresolved_requests=lambda: unresolved)
+    return saved
+
+
+@pytest.mark.parametrize('code', ['request_outcome_unknown', 'model_timeout'])
+def test_a_reply_that_broke_off_reads_the_batch_without_resending(tmp_path, code):
+    """A live round failed on one stalled reply; the batch is now read in full and marked."""
+    pipeline, pid = setup(tmp_path)
+    saved = in_job(pipeline)
+    llm = Stalled(code)
+    try:
+        eligible = pipeline.prefilter_bodies(pid, llm, pipeline.store.get_project(pid), {}, lambda _: None)
+        again = pipeline.prefilter_bodies(pid, llm, pipeline.store.get_project(pid), {}, lambda _: None)
+    finally:
+        pipeline._execution_state.current = None
+    assert len(eligible) == 2 and eligible == again and llm.calls == 1  # a resumed round does not ask again
+    [rows] = saved.values()
+    assert all(r['unassessed'] == code for r in rows)
+
+
+@pytest.mark.parametrize('phase,unresolved', [('connect_or_headers', 1), ('unknown', 1), ('response_body', 2)])
+def test_a_provider_not_answering_or_a_second_unknown_request_still_holds(tmp_path, phase, unresolved):
+    """No answer started, or not the job's only unknown request: the round stops instead of sending more."""
+    pipeline, pid = setup(tmp_path)
+    in_job(pipeline, unresolved)
+    try:
+        with pytest.raises(ModelError):
+            pipeline.prefilter_bodies(pid, Stalled(phase=phase), pipeline.store.get_project(pid), {}, lambda _: None)
+    finally:
+        pipeline._execution_state.current = None
+
+
 @pytest.mark.parametrize('code', ['request_outcome_unknown', 'unknown_not_resent', 'model_timeout'])
 def test_a_cut_off_triage_batch_stays_unassessed_and_the_rest_is_screened(tmp_path, code):
     import re
@@ -152,40 +211,3 @@ def test_a_cut_off_triage_batch_stays_unassessed_and_the_rest_is_screened(tmp_pa
     assert llm.calls == 2 and store.untriaged(project.id) == []  # the cut batch is not resent
     assert sum('中断' in i['impact'] for i in items) == 20
     assert sum(i['importance'] == 'notable' for i in items) == 5
-
-
-@pytest.mark.parametrize('code', ['request_outcome_unknown', 'unknown_not_resent', 'model_timeout'])
-def test_an_uncertain_prefilter_reply_reads_the_batch_without_resending(tmp_path, code):
-    """A stalled or broken-off reply failed a live round; the batch is now read in full and marked."""
-    pipeline, pid = setup(tmp_path)
-
-    class Stalled(Refuses):
-        def json(self, *_a, **_k):
-            self.calls += 1
-            raise ModelError('x', code=code)
-    llm = Stalled()
-    eligible = pipeline.prefilter_bodies(pid, llm, pipeline.store.get_project(pid), {}, lambda _: None)
-    assert len(eligible) == 2 and llm.calls == 1
-
-
-def test_a_resumed_round_does_not_ask_again_for_an_uncertain_prefilter_batch(tmp_path):
-    from types import SimpleNamespace
-    pipeline, pid = setup(tmp_path)
-    saved = {}
-    pipeline._execution_state.current = SimpleNamespace(
-        read_checkpoint=saved.get, checkpoint=saved.__setitem__, _guard=None)
-
-    class Stalled(Refuses):
-        def json(self, *_a, **_k):
-            self.calls += 1
-            raise ModelError('x', code='request_outcome_unknown')
-    llm = Stalled()
-    project = pipeline.store.get_project(pid)
-    try:
-        first = pipeline.prefilter_bodies(pid, llm, project, {}, lambda _: None)
-        again = pipeline.prefilter_bodies(pid, llm, project, {}, lambda _: None)
-    finally:
-        pipeline._execution_state.current = None
-    assert first == again and len(first) == 2 and llm.calls == 1
-    [rows] = saved.values()
-    assert all(r['unassessed'] == 'request_outcome_unknown' for r in rows)
