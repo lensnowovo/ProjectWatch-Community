@@ -18,7 +18,8 @@ def relation(p, pid, subject, name, role, key, stage='order', text=None):
     e = p.evidence.save(sample(pid, text).model_copy(update={'source_key': 'source-' + key,
                                                            'visibility': 'public', 'read_scope': 'full'}))
     ref = LocatedRef(evidence_version_id=e['id'], part_index=0, start=0, end=len(text), quote=text)
-    peers = [o for o in p.objects.list(pid) if o['name'] == name] if hasattr(p.objects, 'list') else []
+    listed = p.objects.page(pid)
+    peers = [o for o in (listed.get('items', []) if isinstance(listed, dict) else listed) if o['name'] == name]
     peer = peers[0] if peers else p.objects.save(
         pid, ObjectInput(kind='company', name=name, visibility='public', refs=(ref,)), actor='automatic')
     p.objects.save_fact(pid, FactInput(subject_id=subject['id'], predicate='business_relation', text=text,
@@ -62,11 +63,31 @@ def test_a_phrase_naming_several_companies_is_not_watched(tmp_path):
 
 
 def test_name_rules():
-    from project_watch.studio.relation_delivery import _listing, _same_name
+    from project_watch.studio.relation_delivery import _listing
     assert _listing('华大基因（300676.SZ）、吉因加、贝瑞科技') and _listing('20家生态伙伴') and _listing('华大研究院旗下机构')
+    assert _listing('Alpha Labs, Beta Labs')
     assert not _listing('印度斋浦尔分子实验室（Jaipur Molecular Lab，JML）') and not _listing('上海凌恩生物科技有限公司')
-    assert _same_name('华大序风', '华大序风科技') and _same_name('中科基因', '北京中科基因技术股份有限公司')
-    assert not _same_name('华大', '华大基因') and not _same_name('华大基因', '华大时空')
+    assert not _listing('Illumina, Inc.') and not _listing('Thermo Fisher Scientific, Inc.') and not _listing('Acme, Co.')
+
+
+def test_a_university_and_its_hospital_keep_their_own_watches(tmp_path):
+    p, pid, subject = project(tmp_path)
+    relation(p, pid, subject, '北京大学', 'partner', 'a', stage='strategic')
+    relation(p, pid, subject, '北京大学第一医院', 'customer', 'b')
+    assert sync(p, pid)['added'] == 2
+    assert {w['relation_target'] for w in relation_watches(p, pid)} == {'北京大学', '北京大学第一医院'}
+
+
+def test_a_dispute_keyword_holds_an_existing_watch_rather_than_retiring_it(tmp_path):
+    """A keyword match adds no watch, but never retires one for good ("为保险公司提供索赔审核")."""
+    p, pid, subject = project(tmp_path)
+    relation(p, pid, subject, 'Insurer Delta', 'customer', 'b',
+             text='Synthetic Optics sells claims review (索赔审核) software to Insurer Delta.')
+    _, plain = relation(p, pid, subject, 'Insurer Delta', 'customer', 'a')
+    sync(p, pid)
+    p.evidence.dependencies.withdraw(pid, plain['id'], 'correction', actor='test')
+    assert sync(p, pid)['retired'] == 0
+    assert relation_watches(p, pid)[0]['status'] != 'retired'
 
 
 def test_duplicates_from_earlier_rounds_are_merged_into_the_oldest(tmp_path):

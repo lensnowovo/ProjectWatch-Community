@@ -22,7 +22,8 @@ LABELS = {'supplier': '供应商', 'customer': '客户', 'partner': '合作方',
 
 # A phrase naming several companies or a group ("A、B、C", "20家生态伙伴", "…旗下机构") is not
 # one company to watch: live data had such names watched alongside each member.
-_LISTING = re.compile(r"[、，,；;]|^\s*\d+\s*家|(旗下机构|旗下企业|等)$")
+_LISTING = re.compile(r"[、，；;]|,(?!\s*(Inc|Ltd|LLC|L\.?P|Co|Corp|Corporation|GmbH|AG|SA|S\.A|plc|Limited|N\.V|B\.V)\b)"
+                      r"|^\s*\d+\s*家|(旗下机构|旗下企业|等)$", re.IGNORECASE)
 
 
 def _listing(name):
@@ -35,13 +36,6 @@ def _family(role):
     return 'competitor' if role == 'competitor' else 'commercial'
 
 
-def _same_name(a, b):
-    """The same company spelled shorter or longer (华大序风 / 华大序风科技), never a bare prefix."""
-    a, b = _norm(a), _norm(b)
-    short, long = sorted((a, b), key=len)
-    return a == b or (len(short) >= 4 and short in long)
-
-
 def _company_watch(watches, mappings, peer_id, target, role):
     """The relation watch already following this company in the same family, if any."""
     linked = {m['watch_id'] for (peer, mapped_role), m in mappings.items()
@@ -49,7 +43,9 @@ def _company_watch(watches, mappings, peer_id, target, role):
     for watch in watches:
         if watch.get('scope_kind') != 'relation' or _family(watch.get('relation_type', '')) != _family(role):
             continue
-        if watch['id'] in linked or _same_name(watch.get('relation_target', ''), target):
+        # The same company record, or exactly the same name: containment merged a university
+        # with its hospital, so a shorter or longer spelling stays a separate watch.
+        if watch['id'] in linked or _norm(watch.get('relation_target', '')) == _norm(target):
             return watch
     return None
 
@@ -107,6 +103,9 @@ def sync(pipeline, project_id, *, guard=None):
             groups.setdefault(key, []).append(relation)
         elif gaps == {'stale_or_outside_validity'} and _awaiting_reverification(pipeline, project_id, fact):
             # Same rule as a stale relationship below: hold an existing watch, add none.
+            pending.add(key)
+        elif 'adversarial_context' in gaps and gaps <= {'adversarial_context', 'stale_or_outside_validity'}:
+            # A passage naming a dispute adds no watch; a keyword alone never retires one.
             pending.add(key)
     # Use the override-aware projection, not raw candidate rows. A candidate
     # needs a current located company identity, but not a proven competitor role.
