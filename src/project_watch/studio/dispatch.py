@@ -83,6 +83,17 @@ def spent(db, project_id, kind, *, since=None):
                       (project_id, kind, since or month_start())).fetchone()[0]
 
 
+# One logical request and its rate-limit retries (key, key:429:1, ...). A range rather than
+# GLOB ?||':429:*', which no index can serve: the check scanned every request row, including
+# stored replies, and held the write lock for 30-60 s on a large journal.
+SAME_REQUEST = "(c.call_key=? OR (c.call_key>=?||':429:' AND c.call_key<?||':429;'))"
+
+
+def same_request(key):
+    """Parameters for SAME_REQUEST."""
+    return (key, key, key)
+
+
 # retryable value of an unknown row whose one automatic resend is allowed; never 1, which
 # older rows may carry and which must keep holding.
 CUT_RESEND = 2
@@ -114,8 +125,8 @@ def check(db, job, kind, call_key, provider_hash):
         raise NotSent('project_not_consented')
     # A request still in flight is never sent twice, whoever asks.
     if db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-                  "WHERE j.project_id=? AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status='started' AND j.status='running' "
-                  "AND j.lease_until>? LIMIT 1", (job['project_id'], call_key, call_key, now())).fetchone():
+                  f"WHERE j.project_id=? AND {SAME_REQUEST} AND c.status='started' AND j.status='running' "
+                  "AND j.lease_until>? LIMIT 1", (job['project_id'], *same_request(call_key), now())).fetchone():
         raise NotSent('request_in_flight')
     # The same logical request with an unresolved or billing-ambiguous outcome is
     # never resent automatically: within one job, and across the analyses of one
@@ -126,11 +137,11 @@ def check(db, job, kind, call_key, provider_hash):
     batch = batch_of(job)
     if not explicit_redo(job) and db.execute(
             "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
-            "WHERE j.project_id=? AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' "
+            f"WHERE j.project_id=? AND {SAME_REQUEST} AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' "
             "AND j.input_version IN ('collect:'||?, ?||?))) AND (c.status='started' "
             "OR (c.status='unknown' AND COALESCE(c.retryable,0)<>2) "
             f"OR (c.kind='model' AND c.status='completed' AND c.response_status IN {RECEIVED_FAILURE} AND c.retryable=0)) LIMIT 1",
-            (job['project_id'], call_key, call_key, job['id'], batch, batch, REDO_PREFIX, batch)).fetchone():
+            (job['project_id'], *same_request(call_key), job['id'], batch, batch, REDO_PREFIX, batch)).fetchone():
         raise NotSent('unknown_not_resent')
     backoff = db.execute('SELECT retry_after,status FROM studio_provider_backoff WHERE provider=?', (provider_hash,)).fetchone()
     if backoff and backoff[0] > now():

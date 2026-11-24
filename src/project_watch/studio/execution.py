@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS studio_job_calls (
     response_status INTEGER, response_headers TEXT, response_body BLOB,
     created_at TEXT NOT NULL, PRIMARY KEY(job_id,call_key)
 );
+-- Duplicate-request checks (dispatch.SAME_REQUEST) look a request up by key across a project's jobs.
+CREATE INDEX IF NOT EXISTS studio_job_calls_key ON studio_job_calls(call_key);
 CREATE TABLE IF NOT EXISTS studio_job_checkpoints (
     job_id TEXT NOT NULL REFERENCES studio_jobs(id), stage TEXT NOT NULL,
     data TEXT NOT NULL, PRIMARY KEY(job_id,stage)
@@ -373,9 +375,9 @@ class JobExecution:
                         batch = dispatch.batch_of(self.job)
                         resend = not db.execute(
                             "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
-                            "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status IN ('unknown','resent') AND c.retryable=? "
+                            f"AND {dispatch.SAME_REQUEST} AND c.status IN ('unknown','resent') AND c.retryable=? "
                             "AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' AND j.input_version IN (?,?))) LIMIT 1",
-                            (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND, self.job['id'],
+                            (self.job['project_id'], *dispatch.same_request(logical_key), dispatch.CUT_RESEND, self.job['id'],
                              batch, 'collect:' + (batch or ''), dispatch.REDO_PREFIX + (batch or ''))).fetchone()
                         if resend:
                             db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
@@ -419,9 +421,9 @@ class JobExecution:
                 if key != logical_key:
                     # The automatic resend of a cut stream came back: the earlier row stays
                     # counted as spent but is no longer an unresolved outcome.
-                    db.execute("UPDATE studio_job_calls SET status=? WHERE job_id=? AND (call_key=? OR call_key GLOB ?||':429:*') "
+                    db.execute(f"UPDATE studio_job_calls AS c SET status=? WHERE job_id=? AND {dispatch.SAME_REQUEST} "
                                "AND status='unknown' AND retryable=?",
-                               (dispatch.RESENT, self.job['id'], logical_key, logical_key, dispatch.CUT_RESEND))
+                               (dispatch.RESENT, self.job['id'], *dispatch.same_request(logical_key), dispatch.CUT_RESEND))
                 if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
                     db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
                     db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
