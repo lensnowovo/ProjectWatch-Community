@@ -394,6 +394,17 @@ TRIAGE_ISOLATED = frozenset({'model_content_rejected', 'request_outcome_unknown'
 LANDSCAPE_MIN_HOURS = 6  # competition/industry views refresh after new related events, at most this often
 TRIAGE_MAX_TOKENS = 8000
 
+def _isolated_drop(exc: BaseException, execution) -> bool:
+    """A reply that broke off after the provider began answering, and the job's only unknown request."""
+    cause, phase = exc, None
+    while cause is not None and phase is None:
+        phase = getattr(cause, 'transport_phase', None)
+        cause = cause.__cause__ or cause.__context__
+    if phase != 'response_body':
+        return False
+    return execution is None or execution.unresolved_requests() <= 1
+
+
 def _fulltext_filing(item: dict) -> bool:
     try:
         host = (urlsplit(item.get("url") or "").hostname or "").lower()
@@ -433,6 +444,9 @@ def _news(collectors, query, search_count=0):
 
 
 PREFILTER_FAIL_OPEN = UNUSABLE_REPLY
+# Reading priority only: a definite unusable reply, or an isolated broken-off one, reads the batch in full.
+# Its uncertain request stays recorded as unknown and is never resent.
+BODY_PREFILTER_FAIL_OPEN = UNUSABLE_REPLY | TRIAGE_ISOLATED
 
 
 class Pipeline:
@@ -1604,10 +1618,17 @@ class Pipeline:
                 try:
                     data = llm.json(_BODY_PREFILTER_SYSTEM, user, max_tokens=4000) if llm.ready else {"results": []}
                 except ModelError as exc:
-                    # Prioritisation only: a definite "no usable answer" is never resent, and the
-                    # batch is read in full instead of failing the whole collection. An uncertain
-                    # outcome (unknown, timeout) still holds the round for the owner to see.
-                    if exc.code not in PREFILTER_FAIL_OPEN:
+                    # Prioritisation only: a batch without a usable answer is read in full instead
+                    # of failing the whole collection. An uncertain outcome (a reply that stalled or
+                    # broke off) is not resent either: it stays recorded as unknown, and the batch is
+                    # marked unassessed. One stalled reply used to fail a live round after its other
+                    # batches were done. Only an isolated drop fails open: the provider had started
+                    # answering, and it is the job's only unknown request. A provider that does not
+                    # answer at all, or a second unknown request, still holds the round rather than
+                    # keep sending. Account, budget, backoff and pause errors still stop.
+                    if exc.code not in BODY_PREFILTER_FAIL_OPEN:
+                        raise
+                    if exc.code not in UNUSABLE_REPLY and not _isolated_drop(exc, execution):
                         raise
                     _log.info("body prefilter batch had no usable reply (%s); reading all of it", exc.code)
                     data, unassessed = {"results": []}, exc.code

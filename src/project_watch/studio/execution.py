@@ -416,6 +416,12 @@ class JobExecution:
                              public_read=bool(public_read and public_read(method, url, headers, body)))
         return Http(send)
 
+    def unresolved_requests(self) -> int:
+        """Requests of this job whose outcome is still unknown (sent, no answer recorded)."""
+        with closing(self.store._connect()) as db:
+            return db.execute(f"SELECT count(*) FROM studio_job_calls c WHERE c.job_id=? AND {dispatch.UNRESOLVED}",
+                              (self.job['id'],)).fetchone()[0]
+
     def budget_used(self, kind, *, db=None):
         """Admission consumption, including adopted receipts; not new usage."""
         if db is None:

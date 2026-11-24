@@ -76,10 +76,9 @@ def test_malformed_or_conflicting_prefilter_reply_reads_rather_than_fails(tmp_pa
                                          lambda _: None)) == 2
 
 
-@pytest.mark.parametrize('code', ['provider_backoff', 'request_budget', 'project_paused', 'model_rate_limited',
-                                  'request_outcome_unknown', 'model_timeout'])
-def test_recoverable_and_uncertain_outcomes_still_stop_the_prefilter(tmp_path, code):
-    """An uncertain outcome holds the round for the owner; it is not silently continued."""
+@pytest.mark.parametrize('code', ['provider_backoff', 'request_budget', 'project_paused', 'model_rate_limited'])
+def test_recoverable_outcomes_still_stop_the_prefilter(tmp_path, code):
+    """Account, budget, backoff and pause errors stop the round for their own owners."""
     pipeline, pid = setup(tmp_path)
 
     class Backoff(Refuses):
@@ -125,6 +124,65 @@ def test_a_failed_open_batch_is_marked_and_not_resent_on_resume(tmp_path):
     pipeline._execution_state.current = JobExecution(pipeline.store, job)
     assert pipeline.prefilter_bodies(*args) == first
     assert llm.calls == 1
+
+
+def stalled(code, phase='response_body'):
+    """The model error for a reply that broke off; its cause carries where the transport was."""
+    from project_watch.studio.http import HttpError
+    try:
+        raise HttpError('connection_failed', transport_phase=phase)
+    except HttpError as cause:
+        try:
+            raise ModelError('x', code=code) from cause
+        except ModelError as exc:
+            return exc
+
+
+class Stalled(Refuses):
+    def __init__(self, code='request_outcome_unknown', phase='response_body'):
+        super().__init__()
+        self.code, self.phase = code, phase
+
+    def json(self, *_a, **_k):
+        self.calls += 1
+        raise stalled(self.code, self.phase)
+
+
+def in_job(pipeline, unresolved=1):
+    from types import SimpleNamespace
+    saved = {}
+    pipeline._execution_state.current = SimpleNamespace(
+        read_checkpoint=saved.get, checkpoint=saved.__setitem__, _guard=None,
+        unresolved_requests=lambda: unresolved)
+    return saved
+
+
+@pytest.mark.parametrize('code', ['request_outcome_unknown', 'model_timeout'])
+def test_a_reply_that_broke_off_reads_the_batch_without_resending(tmp_path, code):
+    """A live round failed on one stalled reply; the batch is now read in full and marked."""
+    pipeline, pid = setup(tmp_path)
+    saved = in_job(pipeline)
+    llm = Stalled(code)
+    try:
+        eligible = pipeline.prefilter_bodies(pid, llm, pipeline.store.get_project(pid), {}, lambda _: None)
+        again = pipeline.prefilter_bodies(pid, llm, pipeline.store.get_project(pid), {}, lambda _: None)
+    finally:
+        pipeline._execution_state.current = None
+    assert len(eligible) == 2 and eligible == again and llm.calls == 1  # a resumed round does not ask again
+    [rows] = saved.values()
+    assert all(r['unassessed'] == code for r in rows)
+
+
+@pytest.mark.parametrize('phase,unresolved', [('connect_or_headers', 1), ('unknown', 1), ('response_body', 2)])
+def test_a_provider_not_answering_or_a_second_unknown_request_still_holds(tmp_path, phase, unresolved):
+    """No answer started, or not the job's only unknown request: the round stops instead of sending more."""
+    pipeline, pid = setup(tmp_path)
+    in_job(pipeline, unresolved)
+    try:
+        with pytest.raises(ModelError):
+            pipeline.prefilter_bodies(pid, Stalled(phase=phase), pipeline.store.get_project(pid), {}, lambda _: None)
+    finally:
+        pipeline._execution_state.current = None
 
 
 @pytest.mark.parametrize('code', ['request_outcome_unknown', 'unknown_not_resent', 'model_timeout'])
