@@ -12,3 +12,22 @@ def test_relationship_rows_keep_page_fields_and_drop_internal_detail():
     for key in ('items', 'exclusions'):
         assert set(shown[key][0]) == _RELATIONSHIP_PAGE_FIELDS
     assert 'matching' in view['items'][0]  # the stored view itself is not changed
+
+
+def test_the_revision_changes_when_a_job_moves_and_stays_put_otherwise(tmp_path):
+    from contextlib import closing
+
+    from fastapi.testclient import TestClient
+
+    from project_watch.studio.app import create_studio_app
+    app = create_studio_app(tmp_path, start_worker=False)
+    web = TestClient(app)
+    pid = web.post('/api/studio/projects', json={'entity': {'legal_name': 'Synthetic Revision Co'}, 'consent': True}).json()['id']
+    store = app.state.studio_store
+    job = store.enqueue(pid, 'brief', input_version='manual:revision')
+    first = web.get(f'/api/studio/projects/{pid}/revision').json()['revision']
+    assert web.get(f'/api/studio/projects/{pid}/revision').json()['revision'] == first
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='running',stage='合成步骤' WHERE id=?", (job['id'],))
+    assert web.get(f'/api/studio/projects/{pid}/revision').json()['revision'] != first
+    assert web.get('/api/studio/projects/missing/revision').status_code == 404

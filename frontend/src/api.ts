@@ -920,6 +920,7 @@ export const api = {
       ...(confirmedCompanyNames !== undefined ? { confirmed_company_names: confirmedCompanyNames } : {}) }),
   projects: () => request<Project[]>("GET", "/api/studio/projects"),
   project: (id: string) => request<ProjectDetail>("GET", `/api/studio/projects/${id}`),
+  projectRevision: (id: string) => request<{ revision: string }>("GET", `/api/studio/projects/${id}/revision`),
   commercial: (id: string) => request<CommercialView>("GET", `/api/studio/projects/${id}/commercial`),
   race: (id: string, signal?: AbortSignal) => request<RaceView>("GET", `/api/studio/projects/${id}/race`, undefined, signal),
   tech: (id: string) => request<TechView>("GET", `/api/studio/projects/${id}/tech`),
