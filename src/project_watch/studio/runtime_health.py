@@ -223,8 +223,9 @@ def activity(db, job_id, at):
 def waiting_until(job, at) -> str:
     """Local time a queued job waits for (a provider backoff), if more than a minute away."""
     try:
+        # Not every caller's row carries retry_after (the task board did not, and the page failed).
         due = datetime.fromisoformat(job['retry_after'] or '')
-    except (TypeError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError):
         return ''
     due = due if due.tzinfo else due.replace(tzinfo=UTC)
     if due.year >= 9999 or (due - at).total_seconds() < 60:
