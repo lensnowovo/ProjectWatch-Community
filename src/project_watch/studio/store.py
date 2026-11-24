@@ -649,15 +649,32 @@ class StudioStore:
         return [r[0] for r in rows]
 
     def due_external_projects(self, hours: int) -> list[str]:
+        """Projects whose next public round is due.
+
+        While a round runs, the project's other jobs wait (see claim). A round that takes
+        longer than the update interval would otherwise be followed at once by the next one,
+        and those jobs would never start. So a job queued before the last round finished goes
+        first: the next round is due once it has started, or SIDE_TURN after that round
+        finished, whichever is earlier, so public monitoring is never held longer than that.
+        """
         cutoff = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+        turn = (datetime.now(UTC) - self.SIDE_TURN).isoformat()
+        kinds = ','.join('?' * len(JOB_KINDS))
+        rounds = ','.join('?' * len(self.ROUND_KINDS))
+        round_end = (f"(SELECT max(r.finished_at) FROM studio_jobs r WHERE r.project_id=s.project_id "
+                     f"AND r.kind IN ({rounds}) AND r.finished_at IS NOT NULL)")
         with closing(self._connect()) as db:
             rows = db.execute(
-                """SELECT project_id FROM studio_projects s
+                f"""SELECT project_id FROM studio_projects s
                 WHERE consent_at IS NOT NULL AND status='active'
                 AND (last_external_at IS NULL OR last_external_at < ?)
                 AND NOT EXISTS (SELECT 1 FROM studio_jobs q WHERE q.project_id=s.project_id
-                    AND q.kind IN ('collect','analyze','report') AND q.status IN ('queued','running'))""",
-                (cutoff,)).fetchall()
+                    AND q.kind IN ('collect','analyze','report') AND q.status IN ('queued','running'))
+                AND NOT (COALESCE({round_end} > ?, 0) AND EXISTS (SELECT 1 FROM studio_jobs w WHERE w.project_id=s.project_id
+                    AND w.status='queued' AND w.started_at IS NULL AND w.created_at < {round_end}
+                    AND (w.retry_after IS NULL OR w.retry_after <= ?)
+                    AND w.kind IN ({kinds}) AND w.kind NOT IN ({rounds})))""",
+                (cutoff, *self.ROUND_KINDS, turn, *self.ROUND_KINDS, now(), *JOB_KINDS, *self.ROUND_KINDS)).fetchall()
         return [r[0] for r in rows]
 
     def due_landscape_projects(self, days: int = LANDSCAPE_DAYS) -> list[str]:
@@ -1356,6 +1373,7 @@ class StudioStore:
             return dict(db.execute("SELECT * FROM studio_jobs WHERE id=?", (job_id,)).fetchone())
 
     ROUND_KINDS = ('collect', 'analyze', 'report', 'brief')
+    SIDE_TURN = timedelta(hours=12)  # how long a finished round's successor waits for the project's other jobs
     # Covers connection backoffs (retry_delay caps at 30 min) and the 30-min rate limit.
     HOLD_WAIT = timedelta(minutes=35)
 
