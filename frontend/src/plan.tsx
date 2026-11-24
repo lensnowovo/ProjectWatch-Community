@@ -319,7 +319,8 @@ function ChangeLog({ changes, labels, onChanged }: { changes: PlanChange[]; labe
           {describe(c, labels) && <p className="muted small">{describe(c, labels)}</p>}
           {!!c.evidence?.length && <p className="plan-evidence small">依据：{c.evidence.map((e) => e.title || e.text).filter(Boolean).join("；")}</p>}
         </div>
-        {c.action !== "regroup" && <button className="link small" onClick={() => revert(c)}>撤销</button>}
+        {c.action !== "regroup" && <button className="link small" onClick={() => revert(c)}
+          aria-label={`撤销${ACTION_LABEL[c.action]}：${c.item || (c.after.text as string) || "条目"}`}>撤销</button>}
       </li>)}</ol>
     </div>
   );

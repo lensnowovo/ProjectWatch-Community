@@ -187,17 +187,18 @@ export default function NewProjectPage() {
               。请核对公司主体。
             </p>
             {result.notes && <div className="note">{result.notes}</div>}
-            <div className="candidates">
+            <div className="candidates" role="radiogroup" aria-label="候选公司主体">
               {result.candidates.map((c, i) => (
                 <motion.label key={i} className={`candidate ${picked === i ? "on" : ""}`}
                   initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 + i * 0.06, duration: 0.35, ease: EASE }}>
-                  <input type="radio" checked={picked === i} onChange={() => choose(i)} />
+                  <input type="radio" name="company-candidate" checked={picked === i} onChange={() => choose(i)}
+                    aria-label={c.legal_name} aria-describedby={`candidate-${i}`} />
                   <div>
                     <div className="candidate-name">
                       {c.legal_name}
                       {c.confidence > 0 && <span className={`conf ${c.confidence >= 70 ? "hi" : c.confidence >= 40 ? "mid" : "lo"}`}>匹配度 {c.confidence}</span>}
                     </div>
-                    <div className="muted small">
+                    <div className="muted small" id={`candidate-${i}`}>
                       {[c.short_name, c.location, c.founded && `成立于 ${c.founded}`, c.credit_code].filter(Boolean).join(" · ")}
                     </div>
                     {c.description && <div className="candidate-desc">{c.description}</div>}
@@ -206,7 +207,7 @@ export default function NewProjectPage() {
                 </motion.label>
               ))}
               <label className={`candidate ${picked === -1 ? "on" : ""}`}>
-                <input type="radio" checked={picked === -1} onChange={() => choose(-1)} />
+                <input type="radio" name="company-candidate" checked={picked === -1} onChange={() => choose(-1)} />
                 <div>
                   <div className="candidate-name">都不是，我来填写</div>
                 </div>

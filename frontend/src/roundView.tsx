@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, type AnalysisCoverage, type ProjectRound, type RoundFigures, type RoundQuality, type RoundStage } from "./api";
 import { useToast } from "./motion";
+import { SOURCE_NAMES } from "./CollectionSources";
 import { useVisiblePoll } from "./Operational";
 import { ErrorNote, relTime, useAsync } from "./ui";
 import "./roundView.css";
@@ -91,19 +92,21 @@ const ROWS: [string, (f: RoundFigures) => string][] = [
     ? `至少 ${f.model_input_tokens.toLocaleString()}（${f.model_usage_missing} 次无用量回执）`
     : f.model_input_tokens.toLocaleString()],
 ];
-const SOURCE: Record<string, string> = { openalex_topic: "论文主题检索", europepmc_topic: "论文主题检索（Europe PMC）", search: "网页检索" };
+// The stale-query list showed raw keys such as "clinical_term".
+const SOURCE: Record<string, string> = { ...SOURCE_NAMES, openalex_topic: "论文主题检索", europepmc_topic: "论文主题检索（Europe PMC）", search: "网页检索" };
 
 /** Counts over this round's own records, against the round before; no judgment of the facts. */
 function QualityReport({ quality }: { quality: RoundQuality }) {
   const { current, previous, warnings, stale_queries: stale } = quality;
   return <details className="round-quality" open={warnings.length > 0 || stale.length > 0}>
-    <summary className="small">本轮质量{warnings.length ? ` · ${warnings.length} 项需注意` : ""}</summary>
+    {/* The figures are for the last finished round, which may be older than a newer round that stopped. */}
+    <summary className="small">已完成一轮的质量{current.finished_at ? ` · ${relTime(current.finished_at)}完成` : ""}{warnings.length ? ` · ${warnings.length} 项需注意` : ""}</summary>
     {warnings.length > 0 && <ul className="round-quality-notes">{warnings.map((w) => <li key={w}>{w}</li>)}</ul>}
-    <table className="round-quality-table"><thead><tr><th scope="col">指标</th><th scope="col">本轮</th><th scope="col">上一轮</th></tr></thead>
+    <table className="round-quality-table"><thead><tr><th scope="col">指标</th><th scope="col">该轮</th><th scope="col">前一轮</th></tr></thead>
       <tbody>{ROWS.map(([label, value]) => <tr key={label}><th scope="row">{label}</th><td>{value(current)}</td><td className="muted">{previous ? value(previous) : "—"}</td></tr>)}</tbody>
     </table>
     {stale.length > 0 && <div className="round-quality-stale"><p className="small">最近 {stale[0].rounds} 轮没有带来相关内容的检索词（论文主题会暂停一轮后再试）：</p>
-      <ul>{stale.map((s) => <li key={s.source + s.query} className="small">{SOURCE[s.source] ?? s.source} · {s.query.replace(/^"|"$/g, "")} <span className="muted">已初筛 {s.screened} 条，相关 0</span></li>)}</ul></div>}
+      <ul>{stale.map((s) => <li key={s.source + s.query} className="small">{SOURCE[s.source] ?? "其他来源"} · {s.query.replace(/^"|"$/g, "")} <span className="muted">已初筛 {s.screened} 条，相关 0</span></li>)}</ul></div>}
   </details>;
 }
 
