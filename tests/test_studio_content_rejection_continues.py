@@ -76,10 +76,9 @@ def test_malformed_or_conflicting_prefilter_reply_reads_rather_than_fails(tmp_pa
                                          lambda _: None)) == 2
 
 
-@pytest.mark.parametrize('code', ['provider_backoff', 'request_budget', 'project_paused', 'model_rate_limited',
-                                  'request_outcome_unknown', 'model_timeout'])
-def test_recoverable_and_uncertain_outcomes_still_stop_the_prefilter(tmp_path, code):
-    """An uncertain outcome holds the round for the owner; it is not silently continued."""
+@pytest.mark.parametrize('code', ['provider_backoff', 'request_budget', 'project_paused', 'model_rate_limited'])
+def test_recoverable_outcomes_still_stop_the_prefilter(tmp_path, code):
+    """Account, budget, backoff and pause errors stop the round for their own owners."""
     pipeline, pid = setup(tmp_path)
 
     class Backoff(Refuses):
@@ -153,3 +152,40 @@ def test_a_cut_off_triage_batch_stays_unassessed_and_the_rest_is_screened(tmp_pa
     assert llm.calls == 2 and store.untriaged(project.id) == []  # the cut batch is not resent
     assert sum('中断' in i['impact'] for i in items) == 20
     assert sum(i['importance'] == 'notable' for i in items) == 5
+
+
+@pytest.mark.parametrize('code', ['request_outcome_unknown', 'unknown_not_resent', 'model_timeout'])
+def test_an_uncertain_prefilter_reply_reads_the_batch_without_resending(tmp_path, code):
+    """A stalled or broken-off reply failed a live round; the batch is now read in full and marked."""
+    pipeline, pid = setup(tmp_path)
+
+    class Stalled(Refuses):
+        def json(self, *_a, **_k):
+            self.calls += 1
+            raise ModelError('x', code=code)
+    llm = Stalled()
+    eligible = pipeline.prefilter_bodies(pid, llm, pipeline.store.get_project(pid), {}, lambda _: None)
+    assert len(eligible) == 2 and llm.calls == 1
+
+
+def test_a_resumed_round_does_not_ask_again_for_an_uncertain_prefilter_batch(tmp_path):
+    from types import SimpleNamespace
+    pipeline, pid = setup(tmp_path)
+    saved = {}
+    pipeline._execution_state.current = SimpleNamespace(
+        read_checkpoint=saved.get, checkpoint=saved.__setitem__, _guard=None)
+
+    class Stalled(Refuses):
+        def json(self, *_a, **_k):
+            self.calls += 1
+            raise ModelError('x', code='request_outcome_unknown')
+    llm = Stalled()
+    project = pipeline.store.get_project(pid)
+    try:
+        first = pipeline.prefilter_bodies(pid, llm, project, {}, lambda _: None)
+        again = pipeline.prefilter_bodies(pid, llm, project, {}, lambda _: None)
+    finally:
+        pipeline._execution_state.current = None
+    assert first == again and len(first) == 2 and llm.calls == 1
+    [rows] = saved.values()
+    assert all(r['unassessed'] == 'request_outcome_unknown' for r in rows)

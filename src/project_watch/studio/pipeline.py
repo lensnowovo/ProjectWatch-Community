@@ -433,6 +433,9 @@ def _news(collectors, query, search_count=0):
 
 
 PREFILTER_FAIL_OPEN = UNUSABLE_REPLY
+# Reading priority only: a batch without a usable decision, definite or uncertain, is read in full.
+# Its uncertain request stays recorded as unknown and is never resent.
+BODY_PREFILTER_FAIL_OPEN = UNUSABLE_REPLY | TRIAGE_ISOLATED
 
 
 class Pipeline:
@@ -1604,10 +1607,12 @@ class Pipeline:
                 try:
                     data = llm.json(_BODY_PREFILTER_SYSTEM, user, max_tokens=4000) if llm.ready else {"results": []}
                 except ModelError as exc:
-                    # Prioritisation only: a definite "no usable answer" is never resent, and the
-                    # batch is read in full instead of failing the whole collection. An uncertain
-                    # outcome (unknown, timeout) still holds the round for the owner to see.
-                    if exc.code not in PREFILTER_FAIL_OPEN:
+                    # Prioritisation only: a batch without a usable answer is read in full instead
+                    # of failing the whole collection. An uncertain outcome (a reply that stalled or
+                    # broke off) is not resent either: it stays recorded as unknown, and the batch is
+                    # marked unassessed. One stalled reply used to fail a live round after its other
+                    # batches were done. Account, budget, backoff and pause errors still stop.
+                    if exc.code not in BODY_PREFILTER_FAIL_OPEN:
                         raise
                     _log.info("body prefilter batch had no usable reply (%s); reading all of it", exc.code)
                     data, unassessed = {"results": []}, exc.code
