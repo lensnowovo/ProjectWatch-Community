@@ -69,6 +69,18 @@ def _reference(code, source):
                 source_name=source.get('source_name', ''), locator=source.get('locator', ''))
 
 
+def _shown(db, pid, reference):
+    """A source stored under a local key (item:…, competition:summary:…, public-profile:…) shows
+    the collected item's title, link and date, as analysis citations do, not the key itself."""
+    from project_watch.studio.section_analysis import _item_label
+
+    label = _item_label(db, pid, {'text': reference['label'], 'url': reference['url']})
+    if not label:
+        return reference
+    return {**reference, 'label': label['text'], 'url': label.get('url') or reference['url'],
+            'date': reference['date'] or label.get('date', '')}
+
+
 def _permitted(db, pid, eid, internal_sources):
     sid = internal_sources.get(eid)
     if not sid:
@@ -561,9 +573,10 @@ def read(store, pid):
             page = record['page']
             dep = store.evidence.dependencies.get(pid, PREFIX + page) or {}
             result[page] = dict(text=''.join(r['text'] for r in record['raw']['sentences']),
-                               details=[dict(text=d['text'], refs=[_reference(r, record['numbered'][r]) for r in d['refs']]) for d in record['raw'].get('details', [])],
+                               details=[dict(text=d['text'], refs=[_shown(db, pid, _reference(r, record['numbered'][r])) for r in d['refs']])
+                                        for d in record['raw'].get('details', [])],
                                date=record['generated_at'], historical=dep.get('status') != 'current',
-                               refs=[_reference(code, s) for code, s in record['numbered'].items()])
+                               refs=[_shown(db, pid, _reference(code, s)) for code, s in record['numbered'].items()])
     return result
 
 

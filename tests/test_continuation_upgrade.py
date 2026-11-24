@@ -322,3 +322,14 @@ def test_a_deferred_job_says_when_it_continues(tmp_path, ahead, expected):
         assert label == f'等待服务额度或连接恢复，约 {local} 自动继续'
     else:
         assert label == '已保存进度，排队继续'
+
+
+@pytest.mark.parametrize('kind,phase', [('collect', 'collect'), ('analyze', 'judge'), ('details', None)])
+def test_a_stopped_job_is_placed_on_its_loop_node(tmp_path, kind, phase):
+    """A failed collection round cleared its step text and was not marked on the collect node."""
+    from project_watch.studio.runtime_health import job_phase
+    store, _, job = setup(tmp_path)
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET kind=?,status='failed',stage='' WHERE id=?", (kind, job['id']))
+    with closing(store._connect()) as db:
+        assert job_phase(db, row(store, job)) == phase

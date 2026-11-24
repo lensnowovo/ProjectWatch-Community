@@ -613,6 +613,9 @@ def _item_label(db, pid, ref):
         return {}
     if key.startswith('competition:summary:'):
         return {'text': '同行研究摘要（本机整理）'}
+    if key.startswith('public-profile:'):
+        url = key[len('public-profile:'):]
+        return {'text': '公开档案来源', 'url': url if url.startswith(('https://', 'http://')) else ''}
     if not key.startswith('item:'):
         return {}
     row = db.execute('SELECT title,url,source,published_at FROM studio_items WHERE project_id=? AND id=?',

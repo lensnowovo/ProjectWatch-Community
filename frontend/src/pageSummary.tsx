@@ -38,9 +38,13 @@ export function PageSummary({detail,subject,fallback}: {detail:ProjectDetail;sub
     } catch(e){setNotice(e instanceof Error?e.message:'摘要暂时无法生成，请稍后再试。');}
     finally{setSubmitting(false);}
   }
+  // Shown text may be the caller's fallback (the current judgment's own summary): say so, rather
+  // than "no new summary" under text that is plainly there.
+  const usingFallback = !selectSummary(detail,subject) && !!fallback;
   const status = notice || (requested && !last && !busy ? '已提交生成请求。' :
-    last?.status==='failed' ? '本次摘要未完成，可在任务中查看原因。' :
-    last?.status==='done' && (!detail.page_summaries?.[subject] || (detail.page_summaries[subject].date < last.created_at)) ? '本次材料未形成新的摘要。' : '');
+    last?.status==='failed' ? (usingFallback ? '页面摘要未完成，先显示当前判断的摘要；原因可在任务中查看。' : '本次摘要未完成，可在任务中查看原因。') :
+    last?.status==='done' && (!detail.page_summaries?.[subject] || (detail.page_summaries[subject].date < last.created_at))
+      ? (usingFallback ? '本次材料未形成页面摘要，先显示当前判断的摘要。' : '本次材料未形成新的摘要。') : '');
   const refs=[...new Map((summary?.refs||[]).map(r=>[`${r.kind}:${r.source_id||r.url||r.code}`,r])).values()];
   return <section className="page-reading" aria-label={labels[subject]}>
     <header><h2>{labels[subject]}</h2>{summary?.date&&<span>{summary.editorial?'整理于 ':''}{relTime(summary.date)}{summary.historical?' · 有新资料':''}</span>}<button className="btn small" disabled={submitting||!!busy}

@@ -51,8 +51,17 @@ def job_phase(db, job):
     phase = value.get('phase') if isinstance(value, dict) else None
     if isinstance(phase, str) and phase in ('collect', 'read', 'judge', 'revise'):
         return phase
-    # Older DSH receipts and classic jobs keep the existing display contract.
-    return stage_phase(job['stage'])
+    # Older DSH receipts and classic jobs keep the existing display contract. A stopped or
+    # waiting job has no step text (finish clears it), so its kind places it: a collection
+    # round that stopped was not marked on the collect node.
+    try:
+        kind = job['kind']
+    except (KeyError, IndexError):
+        kind = None
+    return stage_phase(job['stage']) or KIND_PHASE.get(kind)
+
+
+KIND_PHASE = {'collect': 'collect', 'analyze': 'judge', 'report': 'judge', 'brief': 'judge'}
 
 
 def project_jobs(store, project_id, *, worker='running'):
