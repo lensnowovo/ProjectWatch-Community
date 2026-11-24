@@ -57,20 +57,9 @@ internal static class Launcher {
                 CreateNoWindow = true
             };
             // The desktop edition chooses its own data home and bundled modules.
-            try {
-                start.EnvironmentVariables.Remove("PYTHONPATH");
-                start.EnvironmentVariables.Remove("PYTHONHOME");
-                start.EnvironmentVariables.Remove("PROJECT_WATCH_HOME");
-            } catch (ArgumentException) {
-                // .NET cannot read an environment holding two names that differ only in case
-                // (NO_PROXY and no_proxy, set by some shells): this used to stop the start with a
-                // misleading permissions message. Start with the inherited environment instead:
-                // -I ignores PYTHONPATH and PYTHONHOME, and --home names the data directory.
-                start = new ProcessStartInfo {
-                    FileName = start.FileName, Arguments = start.Arguments, WorkingDirectory = start.WorkingDirectory,
-                    UseShellExecute = false, CreateNoWindow = true
-                };
-            }
+            start.EnvironmentVariables.Remove("PYTHONPATH");
+            start.EnvironmentVariables.Remove("PYTHONHOME");
+            start.EnvironmentVariables.Remove("PROJECT_WATCH_HOME");
             using (var child = Process.Start(start)) {
                 if (gate != null) child.WaitForExit();
             }

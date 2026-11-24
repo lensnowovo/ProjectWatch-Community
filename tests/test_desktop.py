@@ -89,9 +89,14 @@ def test_old_version_cannot_start_after_upgrade(tmp_path, monkeypatch):
         desktop.check_installed_version(home.resolve())
 
 
-def test_launcher_starts_when_two_variable_names_differ_only_in_case():
-    """NO_PROXY and no_proxy together made .NET throw; the launcher showed a permissions message."""
+# The installed launcher's source digest. maintain.py refuses an upgrade whose launcher source
+# differs ("Bootstrap changed; explicit installer migration required"): a 0.3.1 candidate that
+# changed Launcher.cs could not upgrade a 0.3.0 install. Change this only together with an
+# installer migration that replaces the launcher, and test an upgrade from the previous release.
+RELEASED_LAUNCHER_SOURCE = 'bba1eb6665a3e9ce3cad67b65c7b974cbd4613ceaf6dbc97125b36781039e921'
+
+
+def test_launcher_source_is_unchanged_without_an_installer_migration():
+    import hashlib
     source = (Path(__file__).parents[1]/'scripts/windows/Launcher.cs').read_text(encoding='utf-8')
-    removal = source.index('start.EnvironmentVariables.Remove("PYTHONPATH")')
-    assert source.rfind('try {', 0, removal) > source.rfind('}', 0, removal)  # the removal is guarded
-    assert 'catch (ArgumentException)' in source[removal:] and '-I -B' in source
+    assert hashlib.sha256(source.encode()).hexdigest() == RELEASED_LAUNCHER_SOURCE
