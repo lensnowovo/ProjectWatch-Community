@@ -2555,7 +2555,9 @@ def _refusing_providers(exc):
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
         providers += [getattr(exc, 'provider_hash', ''), *(getattr(exc, 'provider_hashes', None) or [])]
-        exc = exc.__cause__ or exc.__context__
+        # Only what this error was raised from: an error being handled when it was raised
+        # (another provider's limit) is not what refused this job.
+        exc = exc.__cause__
     return [p for p in dict.fromkeys(providers) if p]
 
 

@@ -374,9 +374,12 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
             # Each socket read has its own timeout, so a body trickling in slowly had no
             # end: the watchdog then judged the request overdue and held the whole job.
             # The transport now ends it first, as a timed-out read of this one request.
+            # read1 returns what has arrived: a plain read waits for the whole chunk, so a small
+            # body trickling in slowly would never reach the deadline check.
+            read = getattr(response, 'read1', None) or response.read
             data = b''
             while len(data) < limit:
-                chunk = response.read(min(65536, limit - len(data)))
+                chunk = read(min(65536, limit - len(data)))
                 if not chunk:
                     break
                 data += chunk

@@ -65,6 +65,10 @@ class DirectOperations:
         config = asdict(settings)
         # Unrelated notification/refresh preferences must not bypass a held call.
         config = {k: config[k] for k in ('model', 'search', 'registry', 'proxy_url')}
+        # Nor the request width or the paper-index key (added in 0.3.1): the same held call keeps
+        # the fingerprint it had before an upgrade or a change of these.
+        config['model'] = {k: v for k, v in config['model'].items() if k != 'parallel_requests'}
+        config['search'] = {k: v for k, v in config['search'].items() if k != 'openalex_key'}
         fingerprint = hashlib.sha256(json.dumps([kind, inputs, config], sort_keys=True,
                                                 ensure_ascii=False).encode()).hexdigest()
         at = datetime.now(UTC)

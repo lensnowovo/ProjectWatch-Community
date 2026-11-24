@@ -522,3 +522,16 @@ def test_a_round_refused_briefly_does_not_wait_for_an_exhausted_free_source(env)
     with store._connect() as db:
         due = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
     assert datetime.fromisoformat(due) - datetime.now(UTC) < timedelta(minutes=6)
+
+
+def test_an_error_being_handled_is_not_taken_for_the_refusal():
+    from project_watch.studio.pipeline import _refusing_providers
+    other = dispatch.NotSent('provider_backoff')
+    other.provider_hash = 'daily-search'
+    try:
+        try:
+            raise other
+        except dispatch.NotSent:
+            raise ModelError('model limit', code='model_rate_limited')  # noqa: B904 - context, not cause
+    except ModelError as raised:
+        assert _refusing_providers(raised) == []

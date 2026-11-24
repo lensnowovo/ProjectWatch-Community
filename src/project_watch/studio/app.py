@@ -684,7 +684,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
         """
         project_or_404(project_id)
         with closing(store._connect()) as db:
-            jobs = db.execute("SELECT id,status,stage,finished_at FROM studio_jobs WHERE project_id=? "
+            jobs = db.execute("SELECT id,status,stage,finished_at,stalled_at,retry_after,yield_count FROM studio_jobs WHERE project_id=? "
                               "ORDER BY created_at DESC LIMIT 60", (project_id,)).fetchall()
             items = db.execute("SELECT count(*),max(rowid) FROM studio_items WHERE project_id=?", (project_id,)).fetchone()
             heads = db.execute("SELECT artifact_key,version_id FROM studio_insight_heads WHERE project_id=? "
