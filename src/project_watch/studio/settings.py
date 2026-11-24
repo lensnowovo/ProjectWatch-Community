@@ -90,6 +90,8 @@ class SearchConfig:
     # Google News links cannot be read as originals (R40: 297/347 items unread);
     # domestic Bing News RSS and the configured search service are the default.
     google_news: bool = False
+    # Optional: the free paper index (OpenAlex) otherwise shares one daily budget per network IP.
+    openalex_key: str = ""
 
     def enabled(self) -> list[str]:
         return list(self.providers) if self.providers is not None else (
@@ -423,12 +425,20 @@ class SettingsStore:
                     current.search = SearchConfig(
                         providers[0] if providers else "none",
                         keys.get(providers[0], "") if providers else "",
-                        providers, keys, current.search.mode, current.search.google_news)
+                        providers, keys, current.search.mode, current.search.google_news,
+                        current.search.openalex_key)
                 else:
                     if "provider" in search or "api_key" in search:
                         self._update_legacy_search(current, search)
                 if "google_news" in search:
                     current.search.google_news = bool(search["google_news"])
+                if "openalex_key" in search:
+                    if not isinstance(search["openalex_key"], str):
+                        raise ValueError("Key 格式不正确")
+                    if search["openalex_key"]:
+                        current.search.openalex_key = _clean_secret(search["openalex_key"])
+                if search.get("clear_openalex_key") is True:
+                    current.search.openalex_key = ""
                 if "mode" in search:
                     if search["mode"] not in ("auto", "combined"):
                         raise ValueError("搜索方式应为自动搭配或联合检索")
@@ -518,7 +528,7 @@ class SettingsStore:
         key = current.search.api_key if provider == current.search.provider else ""
         if search.get("api_key"):
             key = _clean_secret(search["api_key"])
-        current.search = SearchConfig(provider, key)
+        current.search = SearchConfig(provider, key, openalex_key=current.search.openalex_key)
 
     @staticmethod
     def public_view(settings: StudioSettings) -> dict:
@@ -543,6 +553,7 @@ class SettingsStore:
                 "ready": bool(settings.search.ready_providers()),
                 "mode": settings.search.mode,
                 "google_news": settings.search.google_news,
+                "openalex_key": mask(settings.search.openalex_key),
             },
             "registry": {
                 "provider": settings.registry.provider,

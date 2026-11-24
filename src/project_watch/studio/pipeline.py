@@ -584,7 +584,11 @@ class Pipeline:
                 if host == urlsplit(settings.model.base_url).hostname:
                     return "model", host + settings.model.api_key
                 search_hosts = {"api.bochaai.com", "api.tavily.com", "api.search.brave.com"}
-                return ("search" if host in search_hosts else "open_data"), host + json.dumps(settings.search.credentials(), sort_keys=True)
+                identity = host + json.dumps(settings.search.credentials(), sort_keys=True)
+                if host == "api.openalex.org" and settings.search.openalex_key:
+                    # The owner's own budget: the shared per-IP budget's backoff does not apply to it.
+                    identity += settings.search.openalex_key
+                return ("search" if host in search_hosts else "open_data"), identity
             from project_watch.studio.collection_pages import public_read_request
 
             http = execution.http(http, classify, public_read=public_read_request)

@@ -16,7 +16,8 @@ def public_read_request(method, url, headers, body):
     """
     endpoint = urlsplit(url)
     contracts = {
-        ('api.openalex.org', '/works'): {'page', 'per-page', 'sort', 'select', 'search', 'filter'},
+        # An owner's OpenAlex key only moves the request onto their own free daily budget.
+        ('api.openalex.org', '/works'): {'page', 'per-page', 'sort', 'select', 'search', 'filter', 'api_key'},
         ('www.ebi.ac.uk', '/europepmc/webservices/rest/search'): {
             'query', 'format', 'resultType', 'pageSize', 'cursorMark'},
         ('clinicaltrials.gov', '/api/v2/studies'): {'pageSize', 'sort', 'format', 'query.spons', 'query.term', 'pageToken'},
@@ -40,7 +41,7 @@ def _rows(data, key):
     return rows
 
 
-def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None, end=None):
+def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None, end=None, api_key=''):
     """Basic pagination is bounded at 10,000, avoiding unconfigured cursor keys."""
     scope = scope_params(query, mode)
     if type(page) is not int or type(per_page) is not int or page < 1 or not 1 <= per_page <= 100 or page * per_page > 10000:
@@ -56,6 +57,8 @@ def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None,
         raise ValueError('invalid paper window')
     if filters:
         params['filter'] = ','.join(filters)
+    if api_key:
+        params['api_key'] = api_key
     data = get_results(http, 'https://api.openalex.org/works?' + urlencode(params))
     rows = _rows(data, 'results')
     count = (data.get('meta') or {}).get('count')

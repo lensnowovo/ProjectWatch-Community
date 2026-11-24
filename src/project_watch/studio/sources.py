@@ -568,6 +568,8 @@ class Collectors:
         params = {"per-page": per_page, "sort": "publication_date:desc",
                   "select": "id,doi,display_name,publication_date,primary_location,authorships,cited_by_count,abstract_inverted_index"}
         params.update(scope_params(query, 'affiliation' if affiliation else 'author' if author else 'topic'))
+        if getattr(self.search_config, 'openalex_key', ''):
+            params["api_key"] = self.search_config.openalex_key
         data = get_results(self.http, "https://api.openalex.org/works?" + urlencode(params))
         items = []
         for work in data.get("results") or []:

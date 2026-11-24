@@ -131,7 +131,8 @@ class CollectionSources:
                         end=unit['window_end'][:10])
                 elif paper or filing:
                     method = openalex_page if paper else cninfo_page
-                    options = {'mode': unit['source'][9:]} if paper else {}
+                    options = {'mode': unit['source'][9:],
+                               'api_key': getattr(self.collectors.search_config, 'openalex_key', '')} if paper else {}
                     page = method(self.collectors.http, unit['query'], page=state['cursor'] or 1,
                                   start=(unit.get('window_start') or '')[:10] or None,
                                   end=unit['window_end'][:10], **options)

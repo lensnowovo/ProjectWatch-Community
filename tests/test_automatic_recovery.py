@@ -504,3 +504,21 @@ def test_different_page_does_not_suppress_old_definite_failure(env, new_version)
     assert store.resume_recoverable() == 1
     assert store.resume_recoverable() == 0
     assert rows(store) == before
+
+
+def test_a_round_refused_briefly_does_not_wait_for_an_exhausted_free_source(env):
+    """Live M2: a source backing off for minutes refused one request, and the round waited
+    11 h for the free paper database's daily reset, whose units it had already closed."""
+    from datetime import UTC, datetime, timedelta
+
+    store, pid = env
+    work = job(store, pid, 'collect')
+    with store._connect() as db:
+        db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?)", (work.job['id'], dispatch.PROVIDER_WAIT + 'free-papers', '{}'))
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('free-papers','2999-01-01T00:00:00+00:00',429)")
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('brief-503',?,503)",
+                   ((datetime.now(UTC) + timedelta(minutes=5)).isoformat(),))
+    assert store.defer_recoverable(work.job, 'provider_backoff', ['brief-503'])
+    with store._connect() as db:
+        due = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
+    assert datetime.fromisoformat(due) - datetime.now(UTC) < timedelta(minutes=6)

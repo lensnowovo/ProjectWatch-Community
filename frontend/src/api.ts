@@ -617,7 +617,7 @@ export interface SettingsView {
   model_profiles?: (SettingsView['model'] & { id: string })[];
   preferred_mode?: "api" | "agent";
   model: { protocol: string; base_url: string; model: string; api_key: string; max_output_tokens?: number; ready: boolean };
-  search: { provider: string; api_key: string; providers?: string[]; keys?: Record<string, string>; ready?: boolean; mode?: string; google_news?: boolean };
+  search: { provider: string; api_key: string; providers?: string[]; keys?: Record<string, string>; ready?: boolean; mode?: string; google_news?: boolean; openalex_key?: string };
   registry: { provider: string; api_key: string };
   commercial?: { providers: string[]; keys: Record<string, string>; ready: string[]; daily_limit: number; model_use?: boolean;
     presets: { id: string; label: string; description: string; endpoint: string }[] };
