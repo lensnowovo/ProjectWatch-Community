@@ -4,6 +4,7 @@ Human changes and retired watches win. The mapping records only watches created
 here, so source withdrawal cannot remove a manually managed relationship.
 """
 import json
+import re
 from contextlib import closing
 from datetime import date
 
@@ -17,6 +18,40 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_relation_delivery (
  PRIMARY KEY(project_id,peer_id,role));'''
 LABELS = {'supplier': '供应商', 'customer': '客户', 'partner': '合作方',
           'pilot_partner': '试点合作方', 'investor': '投资方', 'competitor': '竞品'}
+
+
+# A phrase naming several companies or a group ("A、B、C", "20家生态伙伴", "…旗下机构") is not
+# one company to watch: live data had such names watched alongside each member.
+_LISTING = re.compile(r"[、，,；;]|^\s*\d+\s*家|(旗下机构|旗下企业|等)$")
+
+
+def _listing(name):
+    # An alias in brackets ("…实验室（Jaipur Molecular Lab，JML）") is still one company.
+    return bool(_LISTING.search(re.sub(r"[（(][^）)]*[）)]", "", name or "")))
+
+
+def _family(role):
+    """Commercial roles share one watch per company; a competitor watch also feeds peer collection."""
+    return 'competitor' if role == 'competitor' else 'commercial'
+
+
+def _same_name(a, b):
+    """The same company spelled shorter or longer (华大序风 / 华大序风科技), never a bare prefix."""
+    a, b = _norm(a), _norm(b)
+    short, long = sorted((a, b), key=len)
+    return a == b or (len(short) >= 4 and short in long)
+
+
+def _company_watch(watches, mappings, peer_id, target, role):
+    """The relation watch already following this company in the same family, if any."""
+    linked = {m['watch_id'] for (peer, mapped_role), m in mappings.items()
+              if peer == peer_id and _family(mapped_role) == _family(role)}
+    for watch in watches:
+        if watch.get('scope_kind') != 'relation' or _family(watch.get('relation_type', '')) != _family(role):
+            continue
+        if watch['id'] in linked or _same_name(watch.get('relation_target', ''), target):
+            return watch
+    return None
 
 
 def _withdrawn(pipeline, project_id, artifact_key):
@@ -112,19 +147,58 @@ def sync(pipeline, project_id, *, guard=None):
             'SELECT * FROM studio_relation_delivery WHERE project_id=?', (project_id,)) }
         watches = [dict(r) for r in db.execute('SELECT * FROM studio_watchpoints WHERE project_id=?', (project_id,))]
         by_id = {r['id']: r for r in watches}
+        # A further role of a company already watched joins that watch: one company used to be
+        # watched five times over (customer, supplier, partner, ...). A retired watch is kept
+        # retired and no other is added for that company.
+        for (peer_id, role), relations in groups.items():
+            if (peer_id, role) in mappings or _listing(relations[0]['peer_name']):
+                continue
+            same = _company_watch(watches, mappings, peer_id, relations[0]['peer_name'], role)
+            if same is None or same['status'] == 'retired':
+                continue
+            db.execute('INSERT INTO studio_relation_delivery VALUES (?,?,?,?,?)',
+                       (project_id, peer_id, role, same['id'], str(same['lifecycle_version'])))
+            mappings[(peer_id, role)] = {'project_id': project_id, 'peer_id': peer_id, 'role': role,
+                                         'watch_id': same['id'], 'lifecycle_version': str(same['lifecycle_version'])}
+        # Earlier rounds created one watch per role, and some for a list of names. Untouched
+        # system watches of one company (same family) are merged into the oldest; a watch named
+        # after several companies retires. People's watches are left as they are.
+        keep = {}
+        for (peer_id, role), mapped in sorted(mappings.items(), key=lambda kv: by_id.get(kv[1]['watch_id'], {}).get('created_at', '')):
+            watch = by_id.get(mapped['watch_id'])
+            if not watch or watch['status'] == 'retired' or plan._owned_by_people(watch):
+                continue
+            if _listing(watch.get('relation_target', '')):
+                plan.update(watch['id'], {'status': 'retired'}, actor='system', reason='名称含多家公司，不单独关注',
+                            expected_lifecycle_version=str(watch['lifecycle_version']), db=db)
+                watch['status'] = 'retired'
+                result['retired'] += 1
+                continue
+            kept = keep.setdefault((peer_id, _family(role)), watch)
+            if kept['id'] == watch['id']:
+                continue
+            plan.update(watch['id'], {'status': 'retired'}, actor='system', reason='已并入同一公司的关注',
+                        expected_lifecycle_version=str(watch['lifecycle_version']), db=db)
+            watch['status'] = 'retired'
+            result['retired'] += 1
+            db.execute('UPDATE studio_relation_delivery SET watch_id=?,lifecycle_version=? WHERE project_id=? AND peer_id=? AND role=?',
+                       (kept['id'], str(kept['lifecycle_version']), project_id, peer_id, role))
+            mapped.update(watch_id=kept['id'], lifecycle_version=str(kept['lifecycle_version']))
+        # A watch serving several roles retires only when none of them is supported any more.
+        live = {m['watch_id'] for key, m in mappings.items() if key in groups or key in pending}
+        retired = set()
         for key, mapped in mappings.items():
             watch = by_id.get(mapped['watch_id'])
             if (key in groups or key in pending or not watch or watch['status'] == 'retired'
-                    or plan._owned_by_people(watch)):
+                    or watch['id'] in live or watch['id'] in retired or plan._owned_by_people(watch)):
                 continue
+            retired.add(watch['id'])
             plan.update(watch['id'], {'status': 'retired'}, actor='system', reason='原关联依据已失效',
                         expected_lifecycle_version=str(watch['lifecycle_version']), db=db)
             result['retired'] += 1
         for (peer_id, role), relations in groups.items():
             target = relations[0]['peer_name']
-            if (peer_id, role) in mappings or any(
-                    w.get('scope_kind') == 'relation' and _norm(w.get('relation_target', '')) == _norm(target)
-                    and w.get('relation_type') == role for w in watches):
+            if (peer_id, role) in mappings or _listing(target) or _company_watch(watches, mappings, peer_id, target, role):
                 continue  # Includes retired watches: never silently restore them.
             label = LABELS[role]
             fields = {'text': f'关注{target}的{label}动态', 'label': target,

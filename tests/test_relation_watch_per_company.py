@@ -1,0 +1,92 @@
+"""One relation watch per company: further roles join it; lists of names are not watched."""
+from test_studio_evidence_versions import sample
+
+from project_watch.studio.app import create_studio_app
+from project_watch.studio.monitoring_contracts import FactInput, LocatedRef, ObjectInput
+from project_watch.studio.relation_delivery import sync
+
+
+def project(tmp_path):
+    p = create_studio_app(tmp_path, start_worker=False).state.studio_pipeline
+    created = p.repository.create_project('Synthetic Optics')
+    p.store.upsert_project(created.id, {'legal_name': created.name}, consent=True)
+    return p, created.id, p.objects.ensure_subject(created.id)
+
+
+def relation(p, pid, subject, name, role, key, stage='order'):
+    text = f'Synthetic Optics and {name} signed a {role} agreement {key}.'
+    e = p.evidence.save(sample(pid, text).model_copy(update={'source_key': 'source-' + key,
+                                                           'visibility': 'public', 'read_scope': 'full'}))
+    ref = LocatedRef(evidence_version_id=e['id'], part_index=0, start=0, end=len(text), quote=text)
+    peers = [o for o in p.objects.list(pid) if o['name'] == name] if hasattr(p.objects, 'list') else []
+    peer = peers[0] if peers else p.objects.save(
+        pid, ObjectInput(kind='company', name=name, visibility='public', refs=(ref,)), actor='automatic')
+    p.objects.save_fact(pid, FactInput(subject_id=subject['id'], predicate='business_relation', text=text,
+        basis='actual', subject_attribution='explicit', visibility='public', refs=(ref,),
+        attributes={'kind': 'business_relation', 'peer_id': peer['id'], 'role': role, 'stage': stage}))
+    return peer, e
+
+
+def relation_watches(p, pid):
+    return [w for w in p.monitoring_plan.items(pid) if w['scope_kind'] == 'relation']
+
+
+def test_a_second_role_of_the_same_company_joins_its_watch(tmp_path):
+    p, pid, subject = project(tmp_path)
+    relation(p, pid, subject, 'Customer Beta', 'customer', 'a')
+    assert sync(p, pid)['added'] == 1
+    relation(p, pid, subject, 'Customer Beta', 'supplier', 'b')
+    assert sync(p, pid)['added'] == 0
+    watch, = relation_watches(p, pid)
+    assert watch['status'] != 'retired'
+
+
+def test_the_shared_watch_retires_only_when_every_role_is_gone(tmp_path):
+    p, pid, subject = project(tmp_path)
+    _, first = relation(p, pid, subject, 'Customer Beta', 'customer', 'a')
+    sync(p, pid)
+    _, second = relation(p, pid, subject, 'Customer Beta', 'supplier', 'b')
+    sync(p, pid)
+    p.evidence.dependencies.withdraw(pid, first['id'], 'correction', actor='test')
+    assert sync(p, pid)['retired'] == 0  # still a supplier
+    assert relation_watches(p, pid)[0]['status'] != 'retired'
+    p.evidence.dependencies.withdraw(pid, second['id'], 'correction', actor='test')
+    assert sync(p, pid)['retired'] == 1
+    assert relation_watches(p, pid)[0]['status'] == 'retired'
+
+
+def test_a_phrase_naming_several_companies_is_not_watched(tmp_path):
+    p, pid, subject = project(tmp_path)
+    relation(p, pid, subject, 'Alpha Labs、Beta Labs、Gamma Labs', 'customer', 'a')
+    assert sync(p, pid)['added'] == 0 and not relation_watches(p, pid)
+
+
+def test_name_rules():
+    from project_watch.studio.relation_delivery import _listing, _same_name
+    assert _listing('华大基因（300676.SZ）、吉因加、贝瑞科技') and _listing('20家生态伙伴') and _listing('华大研究院旗下机构')
+    assert not _listing('印度斋浦尔分子实验室（Jaipur Molecular Lab，JML）') and not _listing('上海凌恩生物科技有限公司')
+    assert _same_name('华大序风', '华大序风科技') and _same_name('中科基因', '北京中科基因技术股份有限公司')
+    assert not _same_name('华大', '华大基因') and not _same_name('华大基因', '华大时空')
+
+
+def test_duplicates_from_earlier_rounds_are_merged_into_the_oldest(tmp_path):
+    from contextlib import closing
+    p, pid, subject = project(tmp_path)
+    peer, _ = relation(p, pid, subject, 'Customer Beta', 'customer', 'a')
+    sync(p, pid)
+    first, = relation_watches(p, pid)
+    relation(p, pid, subject, 'Customer Beta', 'supplier', 'b')
+    # As an earlier release did: a second watch for the same company under another role.
+    second = p.monitoring_plan.add(pid, {'text': '关注Customer Beta的供应商动态', 'label': 'Customer Beta', 'axis': 'partners',
+        'scope_kind': 'relation', 'relation_type': 'supplier', 'relation_target': 'Customer Beta',
+        'objects': ['Customer Beta'], 'queries': ['Customer Beta'], 'sources': 'fact:synthetic',
+        'reason': '供应商线索，跟踪核实关系', 'tier': 'background', 'cadence': 'medium'},
+        actor='system', origin='system', visibility='public', reason='synthetic earlier release')
+    with closing(p.store._connect()) as db, db:
+        db.execute('INSERT INTO studio_relation_delivery VALUES (?,?,?,?,?)',
+                   (pid, peer['id'], 'supplier', second['id'], str(second['lifecycle_version'])))
+    assert sync(p, pid)['retired'] == 1
+    status = {w['id']: w['status'] for w in relation_watches(p, pid)}
+    assert status[second['id']] == 'retired' and status[first['id']] != 'retired'
+    with closing(p.store._connect()) as db:
+        assert {r[0] for r in db.execute('SELECT watch_id FROM studio_relation_delivery WHERE project_id=?', (pid,))} == {first['id']}
