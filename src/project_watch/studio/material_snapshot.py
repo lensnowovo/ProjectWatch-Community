@@ -66,40 +66,60 @@ def capture(execution):
     it cannot silently change the input of an already-started analysis.
     """
     pid, jid, store = execution.job['project_id'], execution.job['id'], execution.store
+    key = KEY + ':' + jid
+    with closing(store._connect()) as db:
+        # Read every original in one consistent read snapshot (WAL), without the write lock:
+        # checking thousands of materials inside it held other writers for 8 s on a live copy.
+        # The manifest equals one captured at the moment the snapshot began.
+        db.execute('BEGIN')
+        try:
+            value = _existing(db, pid, key) or _manifest(db, pid, jid)
+        finally:
+            db.rollback()
+    if 'id' in value:
+        return value
     with closing(store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         execution._guard(db)  # Local persistence does not spend or reset provider budgets.
-        key = KEY + ':' + jid
-        previous = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND artifact_key=?',
-                              (pid, key)).fetchone()
-        if previous:
-            return json.loads(previous[0])
-        materials, exclusions = [], []
-        for row in db.execute('SELECT evidence_version_id FROM studio_evidence_heads WHERE project_id=? ORDER BY source_key', (pid,)):
-            eid = row[0]
-            try:
-                evidence = _permitted(db, pid, eid)
-            except ValueError:
-                exclusions.append(dict(evidence_version_id=eid, reason='not_permitted'))
-                continue
-            materials.append(dict(evidence_version_id=eid, fingerprint=digest(evidence),
-                source_key=evidence['source_key'], classification='candidate',
-                source_type=evidence['source_type'], read_scope=evidence['read_scope']))
-        baseline = {r[0]: r[1] for r in db.execute(
-            'SELECT artifact_key,version_id FROM studio_insight_heads WHERE project_id=? ORDER BY artifact_key', (pid,))}
-        objects = {r[0]: r[1] for r in db.execute(
-            "SELECT id,version FROM studio_monitor_objects WHERE project_id=? AND visibility='public' ORDER BY id", (pid,))}
-        ledgers = [dict(stage=r[0], fingerprint=digest(json.loads(r[1]))) for r in db.execute(
-            "SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? AND "
-            "(stage='collection_round_v1' OR stage LIKE 'collection_extra:%') ORDER BY stage", (jid,))]
-        value = dict(protocol=1, project_id=pid, batch_id=jid, materials=materials,
-                     exclusions=exclusions, baseline_analysis=baseline, object_versions=objects,
-                     collection_receipts=ledgers, visibility='public')
+        existing = _existing(db, pid, key)
+        if existing:
+            return existing  # another attempt of this batch recorded it first
         signature = digest(value)
         value.update(id=digest([KEY, pid, jid, signature]), fingerprint=signature, created_at=now())
         db.execute('INSERT INTO studio_insight_versions VALUES (?,?,?,?,?,?)',
             (value['id'], pid, key, signature, json.dumps(value, ensure_ascii=False), value['created_at']))
         return value
+
+
+def _existing(db, pid, key):
+    previous = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND artifact_key=?',
+                          (pid, key)).fetchone()
+    return json.loads(previous[0]) if previous else None
+
+
+def _manifest(db, pid, jid):
+    """The permitted public originals, analysis baseline, object versions and collection receipts."""
+    materials, exclusions = [], []
+    for row in db.execute('SELECT evidence_version_id FROM studio_evidence_heads WHERE project_id=? ORDER BY source_key', (pid,)):
+        eid = row[0]
+        try:
+            evidence = _permitted(db, pid, eid)
+        except ValueError:
+            exclusions.append(dict(evidence_version_id=eid, reason='not_permitted'))
+            continue
+        materials.append(dict(evidence_version_id=eid, fingerprint=digest(evidence),
+            source_key=evidence['source_key'], classification='candidate',
+            source_type=evidence['source_type'], read_scope=evidence['read_scope']))
+    baseline = {r[0]: r[1] for r in db.execute(
+        'SELECT artifact_key,version_id FROM studio_insight_heads WHERE project_id=? ORDER BY artifact_key', (pid,))}
+    objects = {r[0]: r[1] for r in db.execute(
+        "SELECT id,version FROM studio_monitor_objects WHERE project_id=? AND visibility='public' ORDER BY id", (pid,))}
+    ledgers = [dict(stage=r[0], fingerprint=digest(json.loads(r[1]))) for r in db.execute(
+        "SELECT stage,data FROM studio_job_checkpoints WHERE job_id=? AND "
+        "(stage='collection_round_v1' OR stage LIKE 'collection_extra:%') ORDER BY stage", (jid,))]
+    return dict(protocol=1, project_id=pid, batch_id=jid, materials=materials,
+                exclusions=exclusions, baseline_analysis=baseline, object_versions=objects,
+                collection_receipts=ledgers, visibility='public')
 
 
 def read(store, project_id, snapshot_id):

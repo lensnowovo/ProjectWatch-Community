@@ -87,3 +87,11 @@ def test_old_version_cannot_start_after_upgrade(tmp_path, monkeypatch):
     monkeypatch.setattr(desktop.sys, 'executable', str(runtime/'pythonw.exe'))
     with pytest.raises(RuntimeError, match='版本已切换'):
         desktop.check_installed_version(home.resolve())
+
+
+def test_launcher_starts_when_two_variable_names_differ_only_in_case():
+    """NO_PROXY and no_proxy together made .NET throw; the launcher showed a permissions message."""
+    source = (Path(__file__).parents[1]/'scripts/windows/Launcher.cs').read_text(encoding='utf-8')
+    removal = source.index('start.EnvironmentVariables.Remove("PYTHONPATH")')
+    assert source.rfind('try {', 0, removal) > source.rfind('}', 0, removal)  # the removal is guarded
+    assert 'catch (ArgumentException)' in source[removal:] and '-I -B' in source
