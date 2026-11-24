@@ -1,5 +1,6 @@
 """Synthetic upgrade contracts; never connect to a provider or production store."""
 from contextlib import closing
+from datetime import timedelta
 
 import pytest
 from test_studio_runtime_health import age, row, setup
@@ -303,3 +304,21 @@ def test_material_change_between_batches_is_superseded_but_a_binding_change_fail
             extract_job()
         assert failed.value.code == 'model_error'
         assert execution.read_checkpoint('input_superseded_v1') is None
+
+
+@pytest.mark.parametrize('ahead,expected', [(timedelta(hours=8), True), (timedelta(seconds=20), False), (None, False)])
+def test_a_deferred_job_says_when_it_continues(tmp_path, ahead, expected):
+    from datetime import UTC, datetime
+    store, _, job = setup(tmp_path)
+    at = datetime(2026, 1, 1, 4, 0, tzinfo=UTC)
+    due = (at + ahead).isoformat() if ahead else None
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='queued',retry_after=?,yield_count=3,lease_token='' WHERE id=?",
+                   (due, job['id']))
+    with closing(store._connect()) as db:
+        label = projection(db, row(store, job), at=at)['label']
+    if expected:
+        local = (at + ahead).astimezone().strftime('%H:%M')
+        assert label == f'等待服务额度或连接恢复，约 {local} 自动继续'
+    else:
+        assert label == '已保存进度，排队继续'
