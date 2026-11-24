@@ -360,12 +360,29 @@ def _local_socket_failure(reason):
     return isinstance(reason, OSError) and not isinstance(reason, TimeoutError) and (
         getattr(reason, 'winerror', None) in _LOCAL_SOCKET_ERRORS or reason.errno in _LOCAL_SOCKET_ERRORS)
 
+# A timed request ends within its timeout plus this, before the watchdog's CALL_GRACE_SECONDS (60).
+TOTAL_GRACE_SECONDS = 30
+
+
 def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Transport:
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else system_proxies()
 
-    def read_body(response, limit, control):
+    def read_body(response, limit, control, deadline=None):
         if control is None:
-            return response.read(limit)
+            if deadline is None:
+                return response.read(limit)
+            # Each socket read has its own timeout, so a body trickling in slowly had no
+            # end: the watchdog then judged the request overdue and held the whole job.
+            # The transport now ends it first, as a timed-out read of this one request.
+            data = b''
+            while len(data) < limit:
+                chunk = response.read(min(65536, limit - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+                if time.monotonic() > deadline:
+                    raise TimeoutError('total read time exceeded')
+            return data
         expected = response.length
         chunked = response.chunked
         data = response.read(limit)
@@ -390,6 +407,7 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
             with suppress(ValueError, AttributeError):
                 streaming = json.loads(body).get('stream') is True
         redirect.seen_redirect = False
+        deadline = None if timeout is None else time.monotonic() + float(timeout) + TOTAL_GRACE_SECONDS
         try:
             handlers = [urllib.request.ProxyHandler(proxies), redirect]
             if control:
@@ -409,11 +427,11 @@ def urllib_transport(proxy_url: str = "", *, allow_redirects: bool = True) -> Tr
                         data = read_completion(response, MAX_RESPONSE_BYTES, trace.chunk, trace.identify)
                         response_headers = {**response_headers, 'content-type': 'application/json'}
                     else:
-                        data = read_body(response, MAX_RESPONSE_BYTES + 1, control)
+                        data = read_body(response, MAX_RESPONSE_BYTES + 1, control, deadline)
                         trace.chunk(len(data))
             except urllib.error.HTTPError as exc:
                 phase = 'response_body'
-                data = read_body(exc.fp, 64_000, control) if exc.fp else b""
+                data = read_body(exc.fp, 64_000, control, deadline) if exc.fp else b""
                 response_headers = {k.lower(): v for k, v in exc.headers.items()}
                 trace.headers(response_headers)
                 trace.chunk(len(data))
