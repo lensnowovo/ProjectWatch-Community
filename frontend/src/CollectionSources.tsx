@@ -3,12 +3,16 @@ import { api, type CollectionSourceDecision, type SourceSelection } from './api'
 import { ErrorNote, useAsync } from './ui';
 import './collectionSources.css';
 
-const NAMES: Record<string, string> = {
+/** Plain names for collection sources, wherever a source key would otherwise show. */
+export const SOURCE_NAMES: Record<string, string> = {
   search: '公开搜索', site: '官网页面', cninfo: '公开公告',
   openalex_affiliation: '论文 · 机构', openalex_author: '论文 · 作者', openalex_topic: '论文 · 主题',
+  europepmc_affiliation: '论文 · 机构（Europe PMC）', europepmc_topic: '论文 · 主题（Europe PMC）',
+  europepmc_patent: '专利（Europe PMC）', google_patent: '专利原文',
   patent_search: '专利线索', clinical_sponsor: '临床 · 申办方', clinical_term: '临床 · 产品与干预',
   cn_regulatory: '国内注册线索',
 };
+const NAMES = SOURCE_NAMES;
 const SELECTIONS: Record<SourceSelection, string> = {
   enabled: '纳入采集', disabled: '暂不采集', not_applicable: '不适用',
 };

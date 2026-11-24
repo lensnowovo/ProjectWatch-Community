@@ -217,12 +217,13 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
 export function Progress({ detail, onReload }: { detail: ProjectDetail; onReload: () => void }) {
   const work = projectWork(detail);
   const failed = work.failures.find(j => j.status === "failed");
+  const reason = work.stop ? errorMessage(work.stop.error) : failed?.error ? errorMessage(failed.error) : "";
   return <div className="progress op-project-progress">
     <ProjectActivity detail={detail} />
     {(needsAttention(work.state) || work.stop) && <div className="op-help muted small">
-      已有结果保留。
-      {work.stop ? <span>{errorMessage(work.stop.error)}</span>
-        : failed?.error && <span>{errorMessage(failed.error)}</span>}
+      {/* Most reasons already end with it; it was shown twice. */}
+      {!reason.includes("已有结果保留") && "已有结果保留。"}
+      {reason && <span>{reason}</span>}
     </div>}
     {/* Stage by stage: collected material is visible before analysis; a failed analysis can be redone from it. */}
     <RoundProgress projectId={detail.project.id} onReload={onReload} />

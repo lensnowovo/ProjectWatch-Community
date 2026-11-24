@@ -52,10 +52,18 @@ export function PageSummary({detail,subject,fallback}: {detail:ProjectDetail;sub
       </div>}
       {evidence&&<div className="page-reading-evidence">
         {summary.details?.map((d,i)=><div className="page-reading-detail" key={'detail-'+i}><p>{d.text}</p><Refs refs={d.refs}/></div>)}
-        {refs.map((r,i)=><div key={i}><Refs refs={[r]}/><span>{r.label}</span>{r.date&&<small>{r.date.slice(0,10)}</small>}</div>)}
+        {refs.map((r,i)=><div key={i}><Refs refs={[r]}/><span>{r.label}</span>{r.date&&<small>{refDate(r.date)}</small>}</div>)}
       </div>}
     </>:<p className="muted">{summaryStatus(detail,subject)}</p>}
   </section>;
+}
+
+/** Source dates in the page's own format (2026年11月20日), not raw ISO strings; partial dates stay as given. */
+function refDate(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const day = new Date(value.slice(0, 10) + 'T00:00:00');
+  return Number.isNaN(day.getTime()) ? value.slice(0, 10)
+    : day.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 export function summaryStatus(detail: ProjectDetail, subject: SummarySubject): string {

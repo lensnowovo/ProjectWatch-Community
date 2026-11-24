@@ -105,3 +105,37 @@ def test_dismissed_failures_leave_the_attention_list_but_stay_in_history(tmp_pat
     [row] = client.get("/api/studio/tasks").json()["jobs"]
     assert row["dismissed"] is True and row["status"] == "failed"
     assert client.post("/api/studio/tasks/nope/dismiss").status_code == 404
+
+
+def test_an_unclear_free_public_read_is_not_described_as_possibly_billed():
+    free = taskboard.advice({'error': 'request_outcome_unknown', 'unknown': 2, 'unknown_billable': 0})
+    assert '不涉及费用' in free['why'] and '计费' not in free['why'].replace('不涉及费用', '')
+    paid = taskboard.advice({'error': 'request_outcome_unknown', 'unknown': 2, 'unknown_billable': 1})
+    assert '可能已计费' in paid['why']
+    legacy = taskboard.advice({'error': 'request_outcome_unknown', 'unknown': 2})  # no breakdown: stay cautious
+    assert '可能已计费' in legacy['why']
+
+
+def test_every_job_kind_has_a_task_label():
+    """The tasks page showed the internal kind "page_summary" in its rows."""
+    from project_watch.studio.store import JOB_KINDS
+    assert [k for k in JOB_KINDS if k not in taskboard.KIND_LABEL] == []
+
+
+def test_the_tasks_page_shows_a_deferred_job_with_when_it_continues(tmp_path):
+    """The board's rows had no retry_after and the new waiting label made the page fail."""
+    from contextlib import closing
+
+    from fastapi.testclient import TestClient
+
+    from project_watch.studio.app import create_studio_app
+    app = create_studio_app(tmp_path, start_worker=False)
+    web = TestClient(app)
+    pid = web.post('/api/studio/projects', json={'entity': {'legal_name': 'Synthetic Deferred Co'}, 'consent': True}).json()['id']
+    job = app.state.studio_store.enqueue(pid, 'brief', input_version='manual:deferred')
+    with closing(app.state.studio_store._connect()) as db, db:
+        db.execute("UPDATE studio_jobs SET status='queued',retry_after='2999-01-01T00:00:00+00:00',yield_count=2 WHERE id=?",
+                   (job['id'],))
+    response = web.get('/api/studio/tasks')
+    assert response.status_code == 200, response.text
+    assert web.get(f'/api/studio/projects/{pid}').status_code == 200

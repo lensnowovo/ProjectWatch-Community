@@ -12,7 +12,8 @@ KIND_LABEL = {"internal": "分析内部资料", "external": "收集公开信息"
               "public_profile": "补充公开档案", "landscape": "整理竞争与行业", "business": "整理产品与用途",
               "competition": "更新竞对资料", "details": "整理商业关系与政策条件", "commercial": "查询专业数据来源",
               "insight": "深度分析", "scope": "公开范围维护", "assessment": "公开问题评估",
-              "collect": "收录公开信息", "analyze": "分析本轮信息", "report": "整理本轮动态"}
+              "collect": "收录公开信息", "analyze": "分析本轮信息", "report": "整理本轮动态",
+              "page_summary": "整理页面摘要", "internal_page_summary": "整理内部资料摘要"}
 INTAKE_LABEL = {"queued": "等待识别", "processing": "正在识别文字", "completed": "已识别", "needs_ocr": "部分页面未识别", "failed": "识别失败"}
 
 
@@ -26,7 +27,7 @@ def board(store, *, worker_state: str, model_ready: bool, model_binding: str = "
     with closing(store._connect()) as db:
         jobs = [dict(r) for r in db.execute(
             f"""SELECT j.id, j.project_id, j.kind, j.status, j.stage, j.error, j.created_at, j.started_at, j.finished_at,
-                       j.progress_at,j.heartbeat_at,j.stalled_at,j.yield_count,j.attempts,j.lease_until,
+                       j.progress_at,j.heartbeat_at,j.stalled_at,j.yield_count,j.attempts,j.lease_until,j.retry_after,
                        p.name AS project_name
                 FROM studio_jobs j JOIN projects p ON p.id=j.project_id
                 WHERE {_removed_filter('j')} {scope}
@@ -44,9 +45,12 @@ def board(store, *, worker_state: str, model_ready: bool, model_binding: str = "
             from project_watch.studio.dispatch import RECEIVED_MODEL_FAILURE, UNRESOLVED
 
             marks = ",".join("?" * len(ids))
-            calls = {r[0]: {"calls": r[1], "unknown": r[2], "model_failure": r[3]} for r in db.execute(
+            calls = {r[0]: {"calls": r[1], "unknown": r[2], "model_failure": r[3], "unknown_billable": r[4]}
+                     for r in db.execute(
                 f"SELECT job_id, sum(kind='model'), sum(CASE WHEN {UNRESOLVED} THEN 1 ELSE 0 END), "
-                f"sum(CASE WHEN ({RECEIVED_MODEL_FAILURE}) THEN 1 ELSE 0 END) "
+                f"sum(CASE WHEN ({RECEIVED_MODEL_FAILURE}) THEN 1 ELSE 0 END), "
+                # Keyless open-data reads cost nothing; pages may be a paid fetch service, so they count.
+                f"sum(CASE WHEN {UNRESOLVED} AND kind != 'open_data' THEN 1 ELSE 0 END) "
                 f"FROM studio_job_calls c WHERE job_id IN ({marks}) GROUP BY job_id", ids)}
         documents = [dict(r) for r in db.execute(
             f"""SELECT s.id, s.project_id, s.reference AS name, s.created_at, p.name AS project_name,
@@ -146,6 +150,10 @@ def advice(job: dict) -> dict:
     if job.get('model_failure') or job.get('unknown') or error.startswith(
             ('model_http_5xx', 'request_outcome_unknown', 'unknown_not_resent', 'interrupted')):
         n = job.get('unknown') or job.get('model_failure') or 1
+        if job.get('unknown') and job.get('unknown_billable') == 0 and not job.get('model_failure'):
+            # A public page or open-data read held by the watchdog was described as possibly billed.
+            return {'why': f'有 {n} 次公开资料读取没有取得明确结果，不涉及费用，也不会自动重发。已有结果保留。',
+                    'todo': '不影响下一次更新。', 'action': 'none'}
         return {'why': f'有 {n} 次请求没有取得明确结果，服务商可能已计费。这些请求不会自动重发，已有结果保留。',
                 'todo': '不影响下一次更新；如是分析未完成，可在项目页“用已保存材料重新分析”。', 'action': 'none'}
     if error.startswith(('project_budget', 'request_budget')):
