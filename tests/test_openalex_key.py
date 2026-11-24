@@ -20,7 +20,7 @@ def test_the_key_is_saved_masked_kept_and_cleared(tmp_path):
     assert store.update({'search': {'clear_openalex_key': True}}).search.openalex_key == ''
 
 
-def test_a_paper_page_carries_the_key_and_stays_a_public_read():
+def test_a_paper_page_carries_the_key():
     seen = []
 
     def get_json(url):
@@ -28,6 +28,7 @@ def test_a_paper_page_carries_the_key_and_stays_a_public_read():
         return {'results': [], 'meta': {'count': 0}}
     openalex_page(SimpleNamespace(get_json=get_json), 'synthetic battery chemistry', api_key=KEY)
     assert parse_qs(urlsplit(seen[0]).query)['api_key'] == [KEY]
-    assert public_read_request('GET', seen[0], {}, None)
+    # A credentialed read does not inherit the public-read failure policy: an unclear one is held.
+    assert not public_read_request('GET', seen[0], {}, None)
     openalex_page(SimpleNamespace(get_json=get_json), 'synthetic battery chemistry')
     assert 'api_key' not in parse_qs(urlsplit(seen[1]).query)  # no key: unchanged request

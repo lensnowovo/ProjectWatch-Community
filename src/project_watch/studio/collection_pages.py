@@ -16,8 +16,7 @@ def public_read_request(method, url, headers, body):
     """
     endpoint = urlsplit(url)
     contracts = {
-        # An owner's OpenAlex key only moves the request onto their own free daily budget.
-        ('api.openalex.org', '/works'): {'page', 'per-page', 'sort', 'select', 'search', 'filter', 'api_key'},
+        ('api.openalex.org', '/works'): {'page', 'per-page', 'sort', 'select', 'search', 'filter'},
         ('www.ebi.ac.uk', '/europepmc/webservices/rest/search'): {
             'query', 'format', 'resultType', 'pageSize', 'cursorMark'},
         ('clinicaltrials.gov', '/api/v2/studies'): {'pageSize', 'sort', 'format', 'query.spons', 'query.term', 'pageToken'},
