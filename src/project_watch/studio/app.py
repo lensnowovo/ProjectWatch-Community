@@ -31,6 +31,7 @@ from project_watch.studio.resolve import resolve_company
 from project_watch.studio.settings import SearchConfig, SettingsStore, SettingsUnavailable
 from project_watch.studio.sources import Collectors
 from project_watch.studio.store import StudioStore, shared_reads
+from project_watch.studio.store import digest as state_digest
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 DRAFT_TTL_SECONDS = 6 * 3600
@@ -672,6 +673,29 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             p["finance"] = finance.key_numbers(store.list_metrics(p["id"]))
         return projects
 
+    @app.get("/api/studio/projects/{project_id}/revision")
+    def project_revision(project_id: str):
+        """A small fingerprint of what the project page shows, for polling while work runs.
+
+        The full page (often 1-2 MB, seconds to build) was fetched every few seconds while any
+        job ran, competing with the jobs. The page now refetches it when this value changes.
+        Everything else the page shows is written by jobs, so a job's status or step changing
+        covers it; the page still refetches the whole view every 30 s.
+        """
+        project_or_404(project_id)
+        with closing(store._connect()) as db:
+            jobs = db.execute("SELECT id,status,stage,finished_at,stalled_at,retry_after,yield_count FROM studio_jobs WHERE project_id=? "
+                              "ORDER BY created_at DESC LIMIT 60", (project_id,)).fetchall()
+            items = db.execute("SELECT count(*),max(rowid) FROM studio_items WHERE project_id=?", (project_id,)).fetchone()
+            heads = db.execute("SELECT artifact_key,version_id FROM studio_insight_heads WHERE project_id=? "
+                               "ORDER BY artifact_key", (project_id,)).fetchall()
+            updated = db.execute("SELECT status,updated_at,config_version FROM studio_projects WHERE project_id=?",
+                                 (project_id,)).fetchone()
+        intake = sorted((j.source_id, j.status) for j in repository.list_intake(project_id))
+        state = [[list(r) for r in jobs], list(items), [list(r) for r in heads], list(updated or ()), intake,
+                 studio_worker.runtime_state(), worker_state.runtime_state()]
+        return {"revision": state_digest(state)}
+
     @app.get("/api/studio/projects/{project_id}")
     @shared_reads(store)
     def project_detail(project_id: str):
@@ -725,7 +749,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "metrics": metrics,
             "finance": finance.view(metrics),
             "landscape": _landscape_view(project_id),
-            "relationships": application.relationships.view(project_id),
+            "relationships": _relationships_for_page(application.relationships.view(project_id)),
             "detail_summary": ({'status': detail_result['status'], 'fact_count': len(detail_result['fact_ids']),
                                 'rejected': detail_result.get('rejected', 0), 'unquantified': detail_result.get('unquantified', 0)}
                                if detail_result else None),
@@ -1152,6 +1176,21 @@ def default_data_dir() -> Path:
         return Path(configured)
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
     return Path(base) / "ProjectWatch"
+
+
+# What the project page reads of each relationship (frontend ScopedRelationship). The rest
+# (matching detail, object versions, fact and evidence ids: a third of a 2 MB page) stays in
+# the relationship store, the material package and the agent tools.
+_RELATIONSHIP_PAGE_FIELDS = frozenset((
+    'scope_key', 'subject_id', 'peer_id', 'subject_product_id', 'peer_product_id', 'peer_name',
+    'subject_name', 'subject_product_name', 'peer_product_name', 'origin', 'support', 'relation_type',
+    'reason', 'status', 'scope_identity_changed', 'rationale', 'missing', 'company_wide', 'peer_names',
+    'created_at', 'basis_facts', 'basis_facts_truncated'))
+
+
+def _relationships_for_page(view):
+    return {**view, **{key: [{k: v for k, v in row.items() if k in _RELATIONSHIP_PAGE_FIELDS} for row in view[key]]
+                       for key in ('items', 'exclusions') if isinstance(view.get(key), list)}}
 
 
 def create_studio_app(data_dir: Path | str | None = None, *, start_worker: bool = True,

@@ -120,6 +120,29 @@ def read(store, project_id, snapshot_id):
         return {**value, 'materials': originals}
 
 
+def excluded_since(store, project_id, snapshot_id):
+    """Evidence of a snapshot no longer permitted (excluded or withdrawn during the run).
+
+    A changed original still raises: that is a different input, not an exclusion.
+    """
+    with closing(store._connect()) as db:
+        db.execute('BEGIN')
+        row = db.execute('SELECT record FROM studio_insight_versions WHERE project_id=? AND id=? AND artifact_key LIKE ?',
+                         (project_id, snapshot_id, KEY + ':%')).fetchone()
+        if not row:
+            raise KeyError('snapshot not found in project')
+        excluded = set()
+        for material in json.loads(row[0])['materials']:
+            try:
+                evidence = _permitted(db, project_id, material['evidence_version_id'])
+            except NotPermitted:
+                excluded.add(material['evidence_version_id'])
+                continue
+            if digest(evidence) != material['fingerprint']:
+                raise ValueError('snapshot evidence fingerprint changed')
+        return excluded
+
+
 def derive_permitted(execution, snapshot_id):
     """Explicit local successor retaining only still-permitted original versions.
 

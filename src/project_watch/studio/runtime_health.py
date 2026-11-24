@@ -220,6 +220,19 @@ def activity(db, job_id, at):
             **{f: known_sum(f) for f in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens')}}
 
 
+def waiting_until(job, at) -> str:
+    """Local time a queued job waits for (a provider backoff), if more than a minute away."""
+    try:
+        due = datetime.fromisoformat(job['retry_after'] or '')
+    except (TypeError, ValueError):
+        return ''
+    due = due if due.tzinfo else due.replace(tzinfo=UTC)
+    if due.year >= 9999 or (due - at).total_seconds() < 60:
+        return ''
+    local = due.astimezone()
+    return local.strftime('%H:%M') if local.date() == at.astimezone().date() else local.strftime('%m-%d %H:%M')
+
+
 def projection(db, job, *, worker='running', at=None):
     """Do not expose prompts, provider URLs, credentials or lease tokens."""
     at = at or datetime.now(UTC)
@@ -247,6 +260,10 @@ def projection(db, job, *, worker='running', at=None):
             state, label = 'blocked', '等待后台恢复'
         elif job['stalled_at']:
             state, label = 'recovering', '已保留进度，等待恢复'
+        elif waiting_until(job, at):
+            # A deferred job said only "已保存进度，排队继续" while it waited hours for a
+            # provider's quota or connection; say when it continues.
+            label = f"等待服务额度或连接恢复，约 {waiting_until(job, at)} 自动继续"
         elif job['yield_count']:
             label = '已保存进度，排队继续'
     elif state in ('failed', 'done'):

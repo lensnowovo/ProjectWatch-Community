@@ -40,7 +40,7 @@ def _rows(data, key):
     return rows
 
 
-def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None, end=None):
+def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None, end=None, api_key=''):
     """Basic pagination is bounded at 10,000, avoiding unconfigured cursor keys."""
     scope = scope_params(query, mode)
     if type(page) is not int or type(per_page) is not int or page < 1 or not 1 <= per_page <= 100 or page * per_page > 10000:
@@ -56,6 +56,8 @@ def openalex_page(http, query, *, mode='topic', page=1, per_page=20, start=None,
         raise ValueError('invalid paper window')
     if filters:
         params['filter'] = ','.join(filters)
+    if api_key:
+        params['api_key'] = api_key
     data = get_results(http, 'https://api.openalex.org/works?' + urlencode(params))
     rows = _rows(data, 'results')
     count = (data.get('meta') or {}).get('count')

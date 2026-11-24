@@ -64,7 +64,7 @@ type SectionId = "model" | "search" | "data" | "notify" | "network";
 type Form = {
   profile: string;
   model: { protocol: string; base_url: string; model: string; api_key: string; max_output_tokens: number };
-  search: { providers: string[]; keys: Record<string, string>; mode: string; google_news: boolean };
+  search: { providers: string[]; keys: Record<string, string>; mode: string; google_news: boolean; openalex_key: string; clear_openalex: boolean };
   registry: { provider: string; api_key: string };
   commercial: { providers: string[]; keys: Record<string, string>; daily_limit: number; clear: string[]; model_use: boolean };
   notify: NotifyView;
@@ -86,7 +86,7 @@ const SECTIONS: { id: SectionId | "overview" | "interface" | "usage"; label: str
 ];
 
 // Google News is opt-in: titles only, originals unreadable.
-const SEARCH_DEFAULT: Form["search"] = { providers: [], keys: {}, mode: "auto", google_news: false };
+const SEARCH_DEFAULT: Form["search"] = { providers: [], keys: {}, mode: "auto", google_news: false, openalex_key: "", clear_openalex: false };
 
 // Saved values as an editable form; secrets always start empty (empty keeps the stored key).
 function fromSaved(data: SettingsView): Form {
@@ -119,7 +119,8 @@ function changedSections(form: Form, saved: Form): SectionId[] {
   const changed: Record<SectionId, boolean> = {
     model: form.profile !== saved.profile || m.protocol !== sm.protocol || endpoint(m.base_url) !== endpoint(sm.base_url) || m.model !== sm.model
       || m.max_output_tokens !== sm.max_output_tokens || !!m.api_key,
-    search: !sameSet(s.providers, ss.providers) || s.mode !== ss.mode || s.google_news !== ss.google_news || typed(s.keys),
+    search: !sameSet(s.providers, ss.providers) || s.mode !== ss.mode || s.google_news !== ss.google_news || typed(s.keys)
+      || !!s.openalex_key.trim() || s.clear_openalex,
     data: form.registry.provider !== saved.registry.provider || !!form.registry.api_key
       || !sameSet(form.commercial.providers, saved.commercial.providers) || form.commercial.daily_limit !== saved.commercial.daily_limit
       || form.commercial.model_use !== saved.commercial.model_use
@@ -170,9 +171,10 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
     setSaveError(null);
     try {
       const { clear, ...commercial } = form.commercial;
+      const { clear_openalex, ...search } = form.search;
       const next: SettingsView = await api.saveSettings({
         active_model_profile: form.profile,
-        model: form.model, search: form.search, registry: form.registry, notify: form.notify,
+        model: form.model, search: clear_openalex ? { ...search, clear_openalex_key: true } : search, registry: form.registry, notify: form.notify,
         commercial: clear.length ? { ...commercial, clear_keys: clear } : commercial,
         proxy_url: form.proxy, refresh_hours: form.hours,
         collection_overlap_days: form.overlap, collection_baseline_days: form.baseline,
@@ -321,6 +323,16 @@ export default function SettingsPage({ onSaved }: { onSaved: (ready: boolean) =>
             <label className="field checkbox-field">
               <span><input type="checkbox" checked={form.search.google_news} onChange={(e) => set("search", { ...form.search, google_news: e.target.checked })} /> 同时使用 Google News</span>
               <small className="muted">默认关闭。新闻默认用必应（原文直链）和已配置的搜索服务；Google News 只有标题，链接读不到正文。</small>
+            </label>
+            <label className="field">
+              <span>OpenAlex 论文数据库 Key（可选）</span>
+              <input type="password" autoComplete="off" aria-label="OpenAlex API Key" value={form.search.openalex_key}
+                placeholder={data.search.openalex_key && !form.search.clear_openalex ? `本机已有 Key ${data.search.openalex_key}，留空保留` : "粘贴 OpenAlex API Key"}
+                onChange={(e) => set("search", { ...form.search, openalex_key: e.target.value, clear_openalex: false })} />
+              <small className="muted">不填时，同一网络共用每天的免费额度；用完后当天论文来源记为未采集，下一轮补上。
+                {data.search.openalex_key && <> <button type="button" className="btn btn-ghost btn-sm" aria-pressed={form.search.clear_openalex}
+                  onClick={() => set("search", { ...form.search, openalex_key: "", clear_openalex: !form.search.clear_openalex })}>
+                  {form.search.clear_openalex ? "撤销删除" : "删除已保存的 Key"}</button>{form.search.clear_openalex && "（保存后生效）"}</>}</small>
             </label>
             <TestRows tests={tests} keys={Object.keys(tests ?? {}).filter((k) => k !== "model")} />
             </details>

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,9 @@ from project_watch.studio.store import now
 LEASE_RENEW_BELOW = timedelta(seconds=60)
 
 
+_SLOT_INIT = threading.Lock()
+
+
 class JobYield(Exception):
     """A completed durable phase gives the single worker back to the queue."""
 
@@ -33,6 +37,8 @@ CREATE TABLE IF NOT EXISTS studio_job_calls (
     response_status INTEGER, response_headers TEXT, response_body BLOB,
     created_at TEXT NOT NULL, PRIMARY KEY(job_id,call_key)
 );
+-- Duplicate-request checks (dispatch.SAME_REQUEST) look a request up by key across a project's jobs.
+CREATE INDEX IF NOT EXISTS studio_job_calls_key ON studio_job_calls(call_key);
 CREATE TABLE IF NOT EXISTS studio_job_checkpoints (
     job_id TEXT NOT NULL REFERENCES studio_jobs(id), stage TEXT NOT NULL,
     data TEXT NOT NULL, PRIMARY KEY(job_id,stage)
@@ -66,6 +72,26 @@ def waiting_on_request(store, job_id):
         return db.execute("SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id "
                           "WHERE c.job_id=? AND c.status='started' AND j.status IN ('running','queued') LIMIT 1",
                           (job_id,)).fetchone() is not None
+
+
+def _busy_retry(write, *, seconds=60.0):
+    """Run a transaction again while the database stays busy, up to ``seconds``.
+
+    Used for request receipts: losing one to another writer's long transaction leaves a
+    paid answer unrecorded and the request unknown. Other errors are raised at once.
+    """
+    import sqlite3
+
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return write()
+        except sqlite3.OperationalError as exc:
+            if 'locked' not in str(exc).lower() and 'busy' not in str(exc).lower():
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
 
 
 def _diagnostic_stage(prefix, key):
@@ -118,6 +144,21 @@ class JobExecution:
             return False
         with closing(self.store._connect()) as db:
             return _still_open(db, self.job['id'], call_key)
+
+    def _model_slot(self, kind):
+        """At most the job's width of model requests admitted at once, however its steps are nested.
+
+        Taken before admission (so a waiting request is checked for pause, stop and lease when
+        it gets its turn, and no started row waits) and released once its answer is recorded.
+        A request never calls another, so it cannot wait on a second slot."""
+        from contextlib import nullcontext
+        if kind != 'model':
+            return nullcontext()
+        with _SLOT_INIT:
+            if getattr(self, '_slots', None) is None:
+                from project_watch.studio.parallel_steps import WAVE_DEFAULT, width
+                self._slots = threading.BoundedSemaphore(width(self, WAVE_DEFAULT))
+        return self._slots
 
     def _guard(self, db):
         if self.cancel_requested():
@@ -241,6 +282,11 @@ class JobExecution:
             self._progress(db)
 
     def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
+        with self._model_slot(kind):
+            return self._call(kind, key, transport, provider=provider, read_only=read_only,
+                              public_read=public_read, timeout=timeout)
+
+    def _call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
         if kind not in self.budgets or not key or len(key) > 200:
             raise ValueError("invalid request journal key")
         # Provider values are only hashes, not URLs, keys or private prompts.
@@ -319,88 +365,94 @@ class JobExecution:
                                 or (public_read and transport_failure)))
             not_sent = isinstance(exc, HttpError) and exc.code == "connection_not_sent"
             failure_code = 'public_read_failed' if transport_failure else 'response_too_large'
-            with closing(self.store._connect()) as db, db:
-                if failed_read:
-                    db.execute("BEGIN IMMEDIATE")
-                    self._receipt_guard(db)
-                db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
-                           ("not_sent" if not_sent else "failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
-                if not_sent:
-                    exc.provider_hash = provider_hash
-                    db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
-                    db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,0) ON CONFLICT(provider) "
-                               "DO UPDATE SET retry_after=excluded.retry_after,status=0",
-                               (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(0, attempt))).isoformat()))
-                phase = getattr(exc, 'transport_phase', 'unknown')
-                failure = getattr(exc, 'failure_kind', 'timeout' if isinstance(exc, TimeoutError)
-                                  else 'transport_error' if isinstance(exc, ConnectionError) else 'unknown')
-                diagnostic = {'call_key': key,
-                    'phase': phase if phase in ('connect_or_headers', 'response_body') else 'unknown',
-                    'failure': failure if failure in ('timeout', 'transport_error') else 'unknown'}
-                from project_watch.studio.http import safe_diagnostics
-                diagnostic['transport'] = safe_diagnostics(getattr(exc, 'diagnostics', {}))
-                if failed_read:
-                    diagnostic['code'] = failure_code
-                    diagnostic['policy'] = 'public_read' if public_read else 'oversized_read'
-                resend = (kind == 'model' and not not_sent and not failed_read and phase == 'response_body'
-                          and dispatch.cut_stream(diagnostic['transport']) and not self.cancel_requested())
-                if resend:
-                    # The provider took the request and its stream broke off. A model request
-                    # changes nothing outside this job, so it is sent once more under a new key;
-                    # a second break of the same logical request stays unknown and holds.
-                    batch = dispatch.batch_of(self.job)
-                    resend = not db.execute(
-                        "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
-                        "AND (c.call_key=? OR c.call_key GLOB ?||':429:*') AND c.status IN ('unknown','resent') AND c.retryable=? "
-                        "AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' AND j.input_version IN (?,?))) LIMIT 1",
-                        (self.job['project_id'], logical_key, logical_key, dispatch.CUT_RESEND, self.job['id'],
-                         batch, 'collect:' + (batch or ''), dispatch.REDO_PREFIX + (batch or ''))).fetchone()
+            def record_failure(exc=exc):
+                # The paid outcome is worth a wait: a busy database is retried (idempotent writes).
+                with closing(self.store._connect()) as db, db:
+                    if failed_read:
+                        db.execute("BEGIN IMMEDIATE")
+                        self._receipt_guard(db)
+                    db.execute("UPDATE studio_job_calls SET status=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?",
+                               ("not_sent" if not_sent else "failed_read" if failed_read else "unknown", int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                    if not_sent:
+                        exc.provider_hash = provider_hash
+                        db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
+                        db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,0) ON CONFLICT(provider) "
+                                   "DO UPDATE SET retry_after=excluded.retry_after,status=0",
+                                   (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(0, attempt))).isoformat()))
+                    phase = getattr(exc, 'transport_phase', 'unknown')
+                    failure = getattr(exc, 'failure_kind', 'timeout' if isinstance(exc, TimeoutError)
+                                      else 'transport_error' if isinstance(exc, ConnectionError) else 'unknown')
+                    diagnostic = {'call_key': key,
+                        'phase': phase if phase in ('connect_or_headers', 'response_body') else 'unknown',
+                        'failure': failure if failure in ('timeout', 'transport_error') else 'unknown'}
+                    from project_watch.studio.http import safe_diagnostics
+                    diagnostic['transport'] = safe_diagnostics(getattr(exc, 'diagnostics', {}))
+                    if failed_read:
+                        diagnostic['code'] = failure_code
+                        diagnostic['policy'] = 'public_read' if public_read else 'oversized_read'
+                    resend = (kind == 'model' and not not_sent and not failed_read and phase == 'response_body'
+                              and dispatch.cut_stream(diagnostic['transport']) and not self.cancel_requested())
                     if resend:
-                        db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
-                                   (dispatch.CUT_RESEND, self.job["id"], key))
-                    diagnostic['auto_resend'] = bool(resend)
-                # No exception text, URL, credentials or response body in diagnostics.
-                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
-                           'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], _diagnostic_stage('call_error:', key), json.dumps(diagnostic)))
+                        # The provider took the request and its stream broke off. A model request
+                        # changes nothing outside this job, so it is sent once more under a new key;
+                        # a second break of the same logical request stays unknown and holds.
+                        batch = dispatch.batch_of(self.job)
+                        resend = not db.execute(
+                            "SELECT 1 FROM studio_job_calls c JOIN studio_jobs j ON j.id=c.job_id WHERE j.project_id=? "
+                            f"AND {dispatch.SAME_REQUEST} AND c.status IN ('unknown','resent') AND c.retryable=? "
+                            "AND (j.id=? OR (? IS NOT NULL AND j.kind='analyze' AND j.input_version IN (?,?))) LIMIT 1",
+                            (self.job['project_id'], *dispatch.same_request(logical_key), dispatch.CUT_RESEND, self.job['id'],
+                             batch, 'collect:' + (batch or ''), dispatch.REDO_PREFIX + (batch or ''))).fetchone()
+                        if resend:
+                            db.execute("UPDATE studio_job_calls SET retryable=? WHERE job_id=? AND call_key=?",
+                                       (dispatch.CUT_RESEND, self.job["id"], key))
+                        diagnostic['auto_resend'] = bool(resend)
+                    # No exception text, URL, credentials or response body in diagnostics.
+                    db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
+                               'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                               (self.job['id'], _diagnostic_stage('call_error:', key), json.dumps(diagnostic)))
+                    return resend
+            resend = _busy_retry(record_failure)
             if failed_read:
                 raise HttpError(failure_code) from exc
             if resend:
                 raise HttpError('stream_cut_resend', transport_phase='response_body',
                                 failure_kind='transport_error', diagnostics=getattr(exc, 'diagnostics', None)) from exc
             raise
-        with closing(self.store._connect()) as db, db:
-            db.execute("BEGIN IMMEDIATE")
-            # A complete answer is recorded even if the lease lapsed meanwhile: the
-            # row is still ``started``, so no other attempt could have resent or
-            # filled it, and the resumed job replays it instead of paying again.
-            # A job the watchdog already held as unknown stays unknown.
-            if not _still_open(db, self.job['id'], key):
-                raise RuntimeError("job lease expired or replaced")
-            self._progress(db)
-            safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
-            if response.diagnostics:
-                from project_watch.studio.http import safe_diagnostics
-                db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
-                           'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
-                           (self.job['id'], _diagnostic_stage('call_transport:', key), json.dumps(safe_diagnostics(response.diagnostics))))
-            from project_watch.studio.usage import FIELDS, reported
+        def record():
+            with closing(self.store._connect()) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                # A complete answer is recorded even if the lease lapsed meanwhile: the
+                # row is still ``started``, so no other attempt could have resent or
+                # filled it, and the resumed job replays it instead of paying again.
+                # A job the watchdog already held as unknown stays unknown.
+                if not _still_open(db, self.job['id'], key):
+                    raise RuntimeError("job lease expired or replaced")
+                self._progress(db)
+                safe_headers = {k.lower(): v[:500] for k, v in response.headers.items() if k.lower() in ("content-type", "content-encoding", "etag", "last-modified")}
+                if response.diagnostics:
+                    from project_watch.studio.http import safe_diagnostics
+                    db.execute('INSERT INTO studio_job_checkpoints VALUES (?,?,?) '
+                               'ON CONFLICT(job_id,stage) DO UPDATE SET data=excluded.data',
+                               (self.job['id'], _diagnostic_stage('call_transport:', key), json.dumps(safe_diagnostics(response.diagnostics))))
+                from project_watch.studio.usage import FIELDS, reported
 
-            counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)
-            db.execute("UPDATE studio_job_calls SET status='completed',response_status=?,response_headers=?,response_body=?,"
-                       'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
-                       (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
-                        int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
-            if key != logical_key:
-                # The automatic resend of a cut stream came back: the earlier row stays
-                # counted as spent but is no longer an unresolved outcome.
-                db.execute("UPDATE studio_job_calls SET status=? WHERE job_id=? AND (call_key=? OR call_key GLOB ?||':429:*') "
-                           "AND status='unknown' AND retryable=?",
-                           (dispatch.RESENT, self.job['id'], logical_key, logical_key, dispatch.CUT_RESEND))
-            if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
-                db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
-                db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
-                    (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(response.status, attempt, response.headers))).isoformat(), response.status))
+                counts = reported(response) if kind == 'model' else dict.fromkeys(FIELDS)
+                db.execute("UPDATE studio_job_calls SET status='completed',response_status=?,response_headers=?,response_body=?,"
+                           'input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_creation_tokens=?,elapsed_ms=?,finished_at=? WHERE job_id=? AND call_key=?',
+                           (response.status, json.dumps(safe_headers), response.body, *(counts[f] for f in FIELDS),
+                            int((time.monotonic() - started) * 1000), now(), self.job["id"], key))
+                if key != logical_key:
+                    # The automatic resend of a cut stream came back: the earlier row stays
+                    # counted as spent but is no longer an unresolved outcome.
+                    db.execute(f"UPDATE studio_job_calls AS c SET status=? WHERE job_id=? AND {dispatch.SAME_REQUEST} "
+                               "AND status='unknown' AND retryable=?",
+                               (dispatch.RESENT, self.job['id'], *dispatch.same_request(logical_key), dispatch.CUT_RESEND))
+                if response.status in (401, 402, 403, 429, 500, 502, 503, 504, 529):
+                    db.execute("UPDATE studio_job_calls SET retryable=1 WHERE job_id=? AND call_key=?", (self.job["id"], key))
+                    db.execute("INSERT INTO studio_provider_backoff VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET retry_after=excluded.retry_after,status=excluded.status",
+                        (provider_hash, (datetime.now(UTC) + timedelta(seconds=dispatch.retry_delay(response.status, attempt, response.headers))).isoformat(), response.status))
+        _busy_retry(record)  # a received answer is not dropped for a busy database
         with closing(self.store._connect()) as db:
             self._lease_guard(db)  # saved; a superseded owner still stops here
         if self.cancel_requested():
@@ -421,6 +473,22 @@ class JobExecution:
         with closing(self.store._connect()) as db:
             return db.execute(f"SELECT count(*) FROM studio_job_calls c WHERE c.job_id=? AND {dispatch.UNRESOLVED}",
                               (self.job['id'],)).fetchone()[0]
+
+    def consecutive_unresolved(self, kind='model') -> int:
+        """How many of this job's latest requests of a kind in a row have no recorded answer.
+
+        Requests never sent are skipped; an answered request ends the run. Two in a row
+        means the provider is not answering, not an isolated network drop.
+        """
+        with closing(self.store._connect()) as db:
+            rows = db.execute("SELECT c.status FROM studio_job_calls c WHERE c.job_id=? AND c.kind=? AND c.status!='not_sent' "
+                              "ORDER BY c.created_at DESC, c.rowid DESC LIMIT 20", (self.job['id'], kind)).fetchall()
+        count = 0
+        for (status,) in rows:
+            if status not in ('unknown', 'started'):
+                break
+            count += 1
+        return count
 
     def budget_used(self, kind, *, db=None):
         """Admission consumption, including adopted receipts; not new usage."""

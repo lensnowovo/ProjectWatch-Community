@@ -256,7 +256,7 @@ def test_a_job_that_could_not_read_all_material_is_partial(project):
     project.add(12)
     project.fail = {(EXTRACT, None)}
     _, result, calls = project.summarize()
-    assert len(of(calls, EXTRACT)) <= 1 + 3  # sends stop after repeated failures
+    assert len(of(calls, EXTRACT)) <= 3 + 3  # sends stop after two failed waves
     assert result['status'] == 'partial' and result['draft_failure']['unread'] == 12
 
 

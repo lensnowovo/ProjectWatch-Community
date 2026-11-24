@@ -144,7 +144,8 @@ def test_after_repeated_failures_no_further_batch_is_sent(project):
     project.add(12)
     project.fail = {(EXTRACT, None)}
     project.run('b1')
-    assert len(project.of(EXTRACT)) <= 1 + sd.PARALLEL  # the first alone, then at most one wave
+    # Without an unresolved request the first wave is full; sends stop after two failed waves.
+    assert len(project.of(EXTRACT)) <= 2 * sd.PARALLEL
 
 
 def test_references_outside_the_candidates_are_dropped(project):

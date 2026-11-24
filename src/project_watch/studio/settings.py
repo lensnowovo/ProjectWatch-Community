@@ -70,6 +70,9 @@ class ModelConfig:
     # actual usage and the provider's rules determine billing and plan consumption.
     # Providers with a lower ceiling are stepped down automatically (see llm.LLM).
     max_output_tokens: int = 1000000
+    # Independent model requests one job may have open at once (1-4). Unknown results
+    # are still held, never resent; a provider's rate limit backs all of them off.
+    parallel_requests: int = 3
 
     @property
     def ready(self) -> bool:
@@ -87,6 +90,8 @@ class SearchConfig:
     # Google News links cannot be read as originals (R40: 297/347 items unread);
     # domestic Bing News RSS and the configured search service are the default.
     google_news: bool = False
+    # Optional: the free paper index (OpenAlex) otherwise shares one daily budget per network IP.
+    openalex_key: str = ""
 
     def enabled(self) -> list[str]:
         return list(self.providers) if self.providers is not None else (
@@ -389,6 +394,11 @@ class SettingsStore:
                     if limit not in OUTPUT_LIMITS:
                         raise ValueError("单次回复上限只支持 8K/16K/32K/64K/100K/128K/256K/512K/1M")
                     current.model.max_output_tokens = limit
+                if "parallel_requests" in model:
+                    width = int(model["parallel_requests"] or 0)
+                    if not 1 <= width <= 4:
+                        raise ValueError("同时进行的模型请求数只支持 1–4")
+                    current.model.parallel_requests = width
                 if model.get("api_key"):
                     current.model.api_key = _clean_secret(model["api_key"])
                 elif previous_endpoint != (current.model.protocol, current.model.base_url.rstrip("/")):
@@ -415,12 +425,20 @@ class SettingsStore:
                     current.search = SearchConfig(
                         providers[0] if providers else "none",
                         keys.get(providers[0], "") if providers else "",
-                        providers, keys, current.search.mode, current.search.google_news)
+                        providers, keys, current.search.mode, current.search.google_news,
+                        current.search.openalex_key)
                 else:
                     if "provider" in search or "api_key" in search:
                         self._update_legacy_search(current, search)
                 if "google_news" in search:
                     current.search.google_news = bool(search["google_news"])
+                if "openalex_key" in search:
+                    if not isinstance(search["openalex_key"], str):
+                        raise ValueError("Key 格式不正确")
+                    if search["openalex_key"]:
+                        current.search.openalex_key = _clean_secret(search["openalex_key"])
+                if search.get("clear_openalex_key") is True:
+                    current.search.openalex_key = ""
                 if "mode" in search:
                     if search["mode"] not in ("auto", "combined"):
                         raise ValueError("搜索方式应为自动搭配或联合检索")
@@ -510,7 +528,7 @@ class SettingsStore:
         key = current.search.api_key if provider == current.search.provider else ""
         if search.get("api_key"):
             key = _clean_secret(search["api_key"])
-        current.search = SearchConfig(provider, key)
+        current.search = SearchConfig(provider, key, openalex_key=current.search.openalex_key)
 
     @staticmethod
     def public_view(settings: StudioSettings) -> dict:
@@ -524,6 +542,7 @@ class SettingsStore:
                 "model": settings.model.model,
                 "api_key": mask(settings.model.api_key),
                 "max_output_tokens": settings.model.max_output_tokens,
+                "parallel_requests": settings.model.parallel_requests,
                 "ready": settings.model.ready,
             },
             "search": {
@@ -534,6 +553,7 @@ class SettingsStore:
                 "ready": bool(settings.search.ready_providers()),
                 "mode": settings.search.mode,
                 "google_news": settings.search.google_news,
+                "openalex_key": mask(settings.search.openalex_key),
             },
             "registry": {
                 "provider": settings.registry.provider,

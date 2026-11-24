@@ -36,6 +36,22 @@ def test_a_slow_write_transaction_is_logged_with_its_origin(tmp_path, monkeypatc
     assert 'slow_writer' in messages[0] and 'test_a_slow_write_transaction' in messages[1]
 
 
+def test_the_log_says_whether_the_time_went_to_sql_or_to_code_between_statements(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(write_fencing, 'SLOW_WRITE_SECONDS', 0.5)
+    db = connect(tmp_path / 'db.sqlite3')
+    db.create_function('pause', 1, lambda seconds: time.sleep(seconds) or 0)
+    with caplog.at_level(logging.WARNING, logger=write_fencing.__name__):
+        with db:
+            db.execute('INSERT INTO t VALUES (1)')
+            db.execute('SELECT pause(?)', (0.6,)).fetchone()  # slow SQL, values not logged
+        with db:
+            db.execute('INSERT INTO t VALUES (2)')
+            time.sleep(0.6)  # slow code between statements
+    sql, code = [r.getMessage() for r in caplog.records]
+    assert 'in SQL: 0.6 s SELECT pause(?))' in sql  # the slowest statement, without its values
+    assert '0.0 s in SQL)' in code  # the time went to code between statements
+
+
 def test_reads_are_not_timed(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(write_fencing, 'SLOW_WRITE_SECONDS', 0.0)
     db = connect(tmp_path / 'db.sqlite3')

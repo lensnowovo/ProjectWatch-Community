@@ -2,7 +2,7 @@ import { INTERNAL_INFORMATION_VISIBLE, visibleProjectTab } from "../internalInfo
 import { AnimatePresence, motion } from "motion/react";
 import { collectionChannelExecution, collectionExecutionLabel } from "../externalCollection";
 import { DiscoveredSources } from "../DiscoveredSources";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Category, type BodyCoverage, type ProjectDetail } from "../api";
 import { CompetitionView, IndustryView, NewsView } from "../landscape";
@@ -73,7 +73,17 @@ export default function ProjectPage({ onChanged }: { onChanged: () => void }) {
     return ()=>window.removeEventListener('project-summary-requested',reload);
   },[reload]);
   const stopped = data?.execution?.analysis === "stopped" && data?.execution?.parsing === "stopped";
-  useVisiblePoll(reload, busy && !stopped ? 4000 : 30000);
+  // While work runs, a small revision is checked every 4 s and the full page (often 1-2 MB) is
+  // fetched only when it changed; the full page is still refreshed every 30 s.
+  const revision = useRef<{ id: string; value: string } | null>(null);
+  const checkRevision = useCallback(async () => {
+    const { revision: value } = await api.projectRevision(id);
+    const previous = revision.current;
+    revision.current = { id, value };
+    if (previous?.id === id && previous.value !== value) await reload();
+  }, [id, reload]);
+  useVisiblePoll(checkRevision, 4000, Boolean(busy && !stopped));
+  useVisiblePoll(reload, 30000);
 
   if (loading && !data) return <Page className="page-wide page-project"><div className="project-head-skel"><Skeleton lines={2} /></div><TabSkeleton label="加载项目" /></Page>;
   if (error && !data) return <Page><ErrorNote error={error} /></Page>;

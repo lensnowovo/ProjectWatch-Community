@@ -584,7 +584,11 @@ class Pipeline:
                 if host == urlsplit(settings.model.base_url).hostname:
                     return "model", host + settings.model.api_key
                 search_hosts = {"api.bochaai.com", "api.tavily.com", "api.search.brave.com"}
-                return ("search" if host in search_hosts else "open_data"), host + json.dumps(settings.search.credentials(), sort_keys=True)
+                identity = host + json.dumps(settings.search.credentials(), sort_keys=True)
+                if host == "api.openalex.org" and settings.search.openalex_key:
+                    # The owner's own budget: the shared per-IP budget's backoff does not apply to it.
+                    identity += settings.search.openalex_key
+                return ("search" if host in search_hosts else "open_data"), identity
             from project_watch.studio.collection_pages import public_read_request
 
             http = execution.http(http, classify, public_read=public_read_request)
@@ -1372,6 +1376,12 @@ class Pipeline:
                 # out used to end screening for the round, and its remaining items were never
                 # screened afterwards. Other errors (account, backoff, budget, pause) still stop.
                 if exc.code not in TRIAGE_ISOLATED:
+                    raise
+                # Isolated drops are logged and screening goes on; two unanswered requests in a
+                # row mean the provider is not answering, and the round holds instead of sending
+                # one batch after another that may each be billed.
+                if (exc.code != 'model_content_rejected' and execution is not None
+                        and execution.consecutive_unresolved() > 1):
                     raise
                 refused = exc.code == 'model_content_rejected'
                 self.store.save_triage([{"id": b["id"], "relevant": True, "importance": "routine",
@@ -2161,6 +2171,31 @@ class Pipeline:
                 execution.checkpoint('input_superseded_v1', {'job_kind': job['kind']})
             return []
 
+    def parallel_width(self) -> int:
+        """Independent model requests a job may have open at once (settings, 1-4)."""
+        from project_watch.studio.parallel_steps import MAX_WIDTH, WAVE_DEFAULT
+        try:
+            value = int(getattr(self.settings_store.load().model, 'parallel_requests', WAVE_DEFAULT))
+        except (TypeError, ValueError):
+            value = WAVE_DEFAULT  # a hand-edited setting never stops a job
+        return max(1, min(MAX_WIDTH, value))
+
+    def _thread_scope(self, execution):
+        """Context for a parallel step of ``execution``: the job thread's execution, stop flag and write fence."""
+        from contextlib import contextmanager
+        cancel = getattr(self._execution_state, 'cancel_requested', None)
+
+        @contextmanager
+        def scope():
+            self._execution_state.current = execution
+            self._execution_state.cancel_requested = cancel
+            try:
+                with self.store.write_scope(execution._guard):
+                    yield
+            finally:
+                self._execution_state.current = None
+        return scope
+
     def _extract_all_parts(self, project_id, inputs, llm, system, payload, prefix, current_inputs,
                            *, isolate_failures=True, skipped=None):
         """Visit independent batches; retain completed outputs when a sibling fails.
@@ -2168,7 +2203,9 @@ class Pipeline:
         With ``skipped`` (a list), a definite unusable reply (truncated, invalid,
         refused) is recorded there and its batch left out; the other batches are
         returned. Provider uncertainty (unknown, timeout) still propagates.
+        Batches not yet answered are sent up to ``parallel_width()`` at a time.
         """
+        from project_watch.studio import parallel_steps
         from project_watch.studio.step_outcomes import attempt
         execution = getattr(self._execution_state, 'current', None)
         saved = execution.read_checkpoint(prefix + '_inputs') if execution else None
@@ -2187,38 +2224,57 @@ class Pipeline:
             size += len(part['text'])
         if batch:
             batches.append(batch)
-        proposals = []
-        blocked = False
-        for index, parts in enumerate(batches):
+
+        def admitted():
             project = self.store.get_project(project_id)
             if project and project['activated'] and project['status'] == 'paused':
-                # Parked with the finished batches checkpointed; resume continues at this batch.
+                # Parked with the finished batches checkpointed; resume continues at the unanswered ones.
                 raise ModelError('项目已暂停，恢复后继续', code='project_paused')
             if inputs['binding'] != self.model_binding() or not project or not project['activated'] or project['status'] != 'active':
                 raise ModelError('分析输入或授权已变化，请按当前资料重新开始')
+
+        proposals, pending = {}, []
+        for index, parts in enumerate(batches):
+            admitted()
             stage = f'{prefix}_proposal_{index}'
             proposal = execution.read_checkpoint(stage) if execution else None
             if proposal is None and execution and len(batches) == 1:
                 proposal = execution.read_checkpoint(prefix + '_proposal')  # completed legacy single batch
             if proposal is None:
-                # Before paying for a batch, confirm the material has not moved on. A saved batch is
-                # replayed without rebuilding every input (seconds each); applying checks it again.
-                current = current_inputs()
-                if not current:
-                    raise ModelError('分析输入或授权已变化，请按当前资料重新开始')
-                if current['input_version'] != inputs['input_version']:
-                    # Only the material moved on: a newer job covers it.
-                    raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
-                def extract(parts=parts):
+                pending.append((index, stage, parts))
+            else:
+                proposals[index] = proposal
+
+        def material_unchanged():
+            # Before paying for a batch, confirm the material has not moved on. A saved batch is
+            # replayed without rebuilding every input; applying checks it again. With parallel
+            # batches, siblings already sent when the material changes still finish (at most
+            # width-1 of them); no new batch is sent.
+            current = current_inputs()
+            if not current:
+                raise ModelError('分析输入或授权已变化，请按当前资料重新开始')
+            if current['input_version'] != inputs['input_version']:
+                # Only the material moved on: a newer job covers it.
+                raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
+
+        blocked = []
+
+        def answer(index, stage, parts):
+            def step():
+                admitted()
+                material_unchanged()
+
+                def extract():
                     return llm.json(system, json.dumps(payload({**inputs, 'parts': parts}), ensure_ascii=False), max_tokens=8000)
                 if execution and isolate_failures:
                     success, proposal = attempt(execution, stage, extract)
                     if not success:
-                        blocked = True
-                        continue
+                        blocked.append(index)
+                        return
                 elif skipped is not None:
                     # A resumed job does not pay again for a batch already found unusable.
                     code = execution.read_checkpoint(stage + '_unusable') if execution else None
+                    proposal = None
                     if code is None:
                         try:
                             proposal = extract()
@@ -2230,16 +2286,19 @@ class Pipeline:
                                 execution.checkpoint(stage + '_unusable', code)
                     if code is not None:
                         skipped.append(code)
-                        continue
+                        return
                 else:
                     proposal = extract()
                 if execution:
                     execution.checkpoint(stage, proposal)
-            proposals.append(proposal)
+                proposals[index] = proposal
+            return step
+
+        parallel_steps.run(execution, [answer(*item) for item in pending])
         # Profile application consumes the entire input version. Successful
         # sibling batches remain checkpointed, but must not replace a complete
         # profile or mark an unknown batch as consumed.
-        return None if blocked else proposals
+        return None if blocked else [proposals[i] for i in sorted(proposals)]
 
     def schedule_competition(self, project_id: str) -> dict | None:
         project, settings = self.store.get_project(project_id), self.settings_store.load()
@@ -2440,6 +2499,8 @@ class Pipeline:
         execution = JobExecution(self.store, job, cancel_requested=getattr(
             self._execution_state, 'cancel_requested', None)) if job.get("lease_token") else None
         if execution:
+            execution.parallel_width = self.parallel_width()
+            execution.thread_scope = self._thread_scope(execution)
             execution.allowed_call_kinds = {
                 'business': frozenset({'model', 'page', 'site'}),
                 'details': frozenset({'model', 'page', 'site'}),
@@ -2486,6 +2547,18 @@ class Pipeline:
                     execution.checkpoint("dispatch_completed", {"completed": True})
         finally:
             self._execution_state.current = previous_execution
+
+
+def _refusing_providers(exc):
+    """The providers named by a refusal, through the errors that wrap it (ModelError from NotSent)."""
+    providers, seen = [], set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        providers += [getattr(exc, 'provider_hash', ''), *(getattr(exc, 'provider_hashes', None) or [])]
+        # Only what this error was raised from: an error being handled when it was raised
+        # (another provider's limit) is not what refused this job.
+        exc = exc.__cause__
+    return [p for p in dict.fromkeys(providers) if p]
 
 
 def _db_busy(exc):
@@ -2697,7 +2770,7 @@ class StudioWorker:
             if getattr(exc, 'code', '') == 'project_paused':
                 self.pipeline.store.defer_paused(job)
             elif getattr(exc, 'code', '') in dispatch.RECOVERABLE_ERRORS:
-                self.pipeline.store.defer_recoverable(job, getattr(exc, 'code', ''))
+                self.pipeline.store.defer_recoverable(job, getattr(exc, 'code', ''), _refusing_providers(exc))
             elif getattr(exc, 'code', '') == 'legacy_batches_waiting':
                 self.pipeline.store.defer_legacy_batches(job)
             else:

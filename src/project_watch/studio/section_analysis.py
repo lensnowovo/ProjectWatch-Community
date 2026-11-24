@@ -539,7 +539,10 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
         except (ValueError, TypeError, KeyError, AttributeError):
             result.update(status='rejected', issues=['section_normalization_failed'])
     guard()
-    material_snapshot.read(execution.store, pid, context['id'])
+    # Material the owner dismissed, or screening excluded, while this analysis ran used to fail
+    # the whole publication. Only a section that cites it is withheld; the others publish.
+    excluded = material_snapshot.excluded_since(execution.store, pid, context['id'])
+    published, withheld = [], []
     with closing(execution.store._connect()) as db, db:
         db.execute('BEGIN IMMEDIATE')
         material_snapshot._guard(execution, db)
@@ -550,10 +553,17 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
             exists = db.execute('SELECT 1 FROM studio_insight_versions WHERE id=?', (identity,)).fetchone()
             if exists:
                 # Replaying a publication must never move a newer head backwards.
+                published.append(name)
                 continue
             evidence_ids = sorted({sources[ref]['evidence_version_id'] for ref in outcomes[name]['refs']})
-            for eid in evidence_ids:
-                material_snapshot._permitted(db, pid, eid)
+            try:
+                if excluded.intersection(evidence_ids):
+                    raise material_snapshot.NotPermitted('cited material excluded during the run')
+                for eid in evidence_ids:
+                    material_snapshot._permitted(db, pid, eid)
+            except material_snapshot.NotPermitted:
+                withheld.append(name)
+                continue
             dependency = pipeline.evidence.dependencies.track(pid, key, 'insight', evidence_ids, db=db)
             if context['object_versions']:
                 dependency = pipeline.evidence.dependencies.track_objects(pid, key, context['object_versions'], db=db,
@@ -572,8 +582,10 @@ def publish(pipeline, execution, context, raw, sources, outcomes, guard, *, targ
                        (identity, pid, key, signature, json.dumps(record, ensure_ascii=False), record['generated_at']))
             db.execute('INSERT INTO studio_insight_heads VALUES (?,?,?) ON CONFLICT(project_id,artifact_key) DO UPDATE SET version_id=excluded.version_id',
                        (pid, key, identity))
-    return dict(status='completed' if set(accepted) == set(targets) else 'partial', targets=list(targets),
-                snapshot_id=context['id'], sections=outcomes, published=list(accepted))
+            published.append(name)
+    return dict(status='completed' if set(published) == set(targets) else 'partial', targets=list(targets),
+                snapshot_id=context['id'], sections=outcomes, published=published,
+                **({'withheld_excluded_material': withheld} if withheld else {}))
 
 
 def _strip_codes(value):

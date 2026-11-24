@@ -439,6 +439,42 @@ def test_a_disconnect_does_not_wait_for_another_providers_daily_budget(env):
     assert due() > timedelta(days=300)  # a job waiting on a backing-off provider still waits for it
 
 
+@pytest.mark.parametrize('reason,providers', [('provider_backoff', ['model']), ('model_rate_limited', [])])
+def test_a_short_refusal_does_not_wait_for_a_finished_steps_daily_budget(env, reason, providers):
+    """A job stopped by a short model limit resumes then, not when the search budget it
+    used in an earlier step resets."""
+    from datetime import UTC, datetime, timedelta
+
+    from project_watch.studio.store import now
+    store, pid = env
+    work = job(store, pid, 'business')
+    with store._connect() as db:
+        for provider, kind in (('daily-search', 'search'), ('model', 'model')):
+            db.execute("INSERT INTO studio_job_calls(job_id,call_key,kind,provider,status,created_at) "
+                       "VALUES (?,?,?,?,?,?)", (work.job['id'], provider, kind, provider, 'completed', now()))
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('daily-search','2999-01-01T00:00:00+00:00',429)")
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('model',?,429)",
+                   ((datetime.now(UTC) + timedelta(minutes=5)).isoformat(),))
+    assert store.defer_recoverable(work.job, reason, providers)
+    with store._connect() as db:
+        due = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
+    assert timedelta(minutes=4) < datetime.fromisoformat(due) - datetime.now(UTC) < timedelta(minutes=6)
+
+
+def test_the_refusing_provider_is_found_through_wrapping_errors():
+    from project_watch.studio.pipeline import _refusing_providers
+    refusal = dispatch.NotSent('provider_backoff')
+    refusal.provider_hash = 'p1'
+    try:
+        try:
+            raise refusal
+        except dispatch.NotSent as exc:
+            raise ModelError('wrapped', code='provider_backoff') from exc
+    except ModelError as wrapped:
+        assert _refusing_providers(wrapped) == ['p1']
+    assert _refusing_providers(ModelError('plain', code='model_rate_limited')) == []
+
+
 def test_a_job_refused_by_a_backing_off_provider_waits_for_it_without_a_call_row(env):
     """Refused before any request (another job's backoff): wait for that backoff, not 30 s polls."""
     from datetime import UTC, datetime, timedelta
@@ -468,3 +504,34 @@ def test_different_page_does_not_suppress_old_definite_failure(env, new_version)
     assert store.resume_recoverable() == 1
     assert store.resume_recoverable() == 0
     assert rows(store) == before
+
+
+def test_a_round_refused_briefly_does_not_wait_for_an_exhausted_free_source(env):
+    """Live M2: a source backing off for minutes refused one request, and the round waited
+    11 h for the free paper database's daily reset, whose units it had already closed."""
+    from datetime import UTC, datetime, timedelta
+
+    store, pid = env
+    work = job(store, pid, 'collect')
+    with store._connect() as db:
+        db.execute("INSERT INTO studio_job_checkpoints VALUES (?,?,?)", (work.job['id'], dispatch.PROVIDER_WAIT + 'free-papers', '{}'))
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('free-papers','2999-01-01T00:00:00+00:00',429)")
+        db.execute("INSERT INTO studio_provider_backoff VALUES ('brief-503',?,503)",
+                   ((datetime.now(UTC) + timedelta(minutes=5)).isoformat(),))
+    assert store.defer_recoverable(work.job, 'provider_backoff', ['brief-503'])
+    with store._connect() as db:
+        due = db.execute('SELECT retry_after FROM studio_jobs WHERE id=?', (work.job['id'],)).fetchone()[0]
+    assert datetime.fromisoformat(due) - datetime.now(UTC) < timedelta(minutes=6)
+
+
+def test_an_error_being_handled_is_not_taken_for_the_refusal():
+    from project_watch.studio.pipeline import _refusing_providers
+    other = dispatch.NotSent('provider_backoff')
+    other.provider_hash = 'daily-search'
+    try:
+        try:
+            raise other
+        except dispatch.NotSent:
+            raise ModelError('model limit', code='model_rate_limited')  # noqa: B904 - context, not cause
+    except ModelError as raised:
+        assert _refusing_providers(raised) == []

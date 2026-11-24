@@ -137,6 +137,10 @@ def test_fingerprint_uses_actual_inputs_and_binding_not_unrelated_settings(tmp_p
     settings.refresh_hours = 12
     with pytest.raises(OperationBlocked):
         ops.run('resolve', {'name': 'same', 'bp': 'v1'}, settings, lambda: {})
+    settings.model.parallel_requests = 1  # request width and paper-index key are not the call's binding
+    settings.search.openalex_key = 'synthetic-openalex'
+    with pytest.raises(OperationBlocked):
+        ops.run('resolve', {'name': 'same', 'bp': 'v1'}, settings, lambda: {})
     assert ops.run('resolve', {'name': 'same', 'bp': 'v2'}, settings, lambda: {'new': True})[0]['new']
     settings.model.api_key = 'new-synthetic-key'
     assert ops.run('resolve', {'name': 'same', 'bp': 'v1'}, settings, lambda: {'new': True})[0]['new']

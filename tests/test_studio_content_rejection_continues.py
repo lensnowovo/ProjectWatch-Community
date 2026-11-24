@@ -211,3 +211,32 @@ def test_a_cut_off_triage_batch_stays_unassessed_and_the_rest_is_screened(tmp_pa
     assert llm.calls == 2 and store.untriaged(project.id) == []  # the cut batch is not resent
     assert sum('中断' in i['impact'] for i in items) == 20
     assert sum(i['importance'] == 'notable' for i in items) == 5
+
+
+@pytest.mark.parametrize('unanswered,holds', [(1, False), (2, True)])
+def test_screening_holds_when_the_provider_stops_answering(tmp_path, unanswered, holds):
+    """One cut batch is isolated; a second unanswered request in a row stops the round."""
+    from types import SimpleNamespace
+    store, project, pipeline = _setup(tmp_path, 25)
+    pipeline._execution_state.current = SimpleNamespace(
+        job={'id': 'synthetic'}, read_checkpoint=lambda stage: 2, checkpoint=lambda *a: None, _guard=None,
+        consecutive_unresolved=lambda: unanswered)
+
+    class Cut:
+        ready = True
+        calls = 0
+
+        def json(self, *_a, **_k):
+            self.calls += 1
+            raise ModelError('synthetic stream cut', code='request_outcome_unknown')
+    llm = Cut()
+    try:
+        if holds:
+            with pytest.raises(ModelError):
+                pipeline.triage(project.id, llm, store.get_project(project.id), {"competitors": []}, lambda _: None)
+            assert llm.calls == 1
+        else:
+            pipeline.triage(project.id, llm, store.get_project(project.id), {"competitors": []}, lambda _: None)
+            assert llm.calls == 2  # every batch tried once, none resent
+    finally:
+        pipeline._execution_state.current = None
