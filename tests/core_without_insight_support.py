@@ -174,6 +174,9 @@ def unknown_outcome_not_retried(client, app, transport, entity):
     assert failed['status'] == 'failed' and failed['error']
     after = sum(c['host'] == 'open.bigmodel.cn' for c in transport.calls)
     assert after == before + 1
+    # The worker schedules new work 5 s after its last pass; a slow first step (a loaded full
+    # regression) let the second step run a newly scheduled job. Only the held one is in question.
+    worker._last_schedule = datetime.now(UTC)
     assert not worker.step()
     assert sum(c['host'] == 'open.bigmodel.cn' for c in transport.calls) == after
     transport.model_failure = None
