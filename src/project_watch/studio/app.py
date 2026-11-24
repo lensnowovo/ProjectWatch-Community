@@ -725,7 +725,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             "metrics": metrics,
             "finance": finance.view(metrics),
             "landscape": _landscape_view(project_id),
-            "relationships": application.relationships.view(project_id),
+            "relationships": _relationships_for_page(application.relationships.view(project_id)),
             "detail_summary": ({'status': detail_result['status'], 'fact_count': len(detail_result['fact_ids']),
                                 'rejected': detail_result.get('rejected', 0), 'unquantified': detail_result.get('unquantified', 0)}
                                if detail_result else None),
@@ -1152,6 +1152,21 @@ def default_data_dir() -> Path:
         return Path(configured)
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
     return Path(base) / "ProjectWatch"
+
+
+# What the project page reads of each relationship (frontend ScopedRelationship). The rest
+# (matching detail, object versions, fact and evidence ids: a third of a 2 MB page) stays in
+# the relationship store, the material package and the agent tools.
+_RELATIONSHIP_PAGE_FIELDS = frozenset((
+    'scope_key', 'subject_id', 'peer_id', 'subject_product_id', 'peer_product_id', 'peer_name',
+    'subject_name', 'subject_product_name', 'peer_product_name', 'origin', 'support', 'relation_type',
+    'reason', 'status', 'scope_identity_changed', 'rationale', 'missing', 'company_wide', 'peer_names',
+    'created_at', 'basis_facts', 'basis_facts_truncated'))
+
+
+def _relationships_for_page(view):
+    return {**view, **{key: [{k: v for k, v in row.items() if k in _RELATIONSHIP_PAGE_FIELDS} for row in view[key]]
+                       for key in ('items', 'exclusions') if isinstance(view.get(key), list)}}
 
 
 def create_studio_app(data_dir: Path | str | None = None, *, start_worker: bool = True,
