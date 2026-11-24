@@ -13,8 +13,8 @@ def project(tmp_path):
     return p, created.id, p.objects.ensure_subject(created.id)
 
 
-def relation(p, pid, subject, name, role, key, stage='order'):
-    text = f'Synthetic Optics and {name} signed a {role} agreement {key}.'
+def relation(p, pid, subject, name, role, key, stage='order', text=None):
+    text = text or f'Synthetic Optics and {name} signed a {role} agreement {key}.'
     e = p.evidence.save(sample(pid, text).model_copy(update={'source_key': 'source-' + key,
                                                            'visibility': 'public', 'read_scope': 'full'}))
     ref = LocatedRef(evidence_version_id=e['id'], part_index=0, start=0, end=len(text), quote=text)
@@ -90,3 +90,11 @@ def test_duplicates_from_earlier_rounds_are_merged_into_the_oldest(tmp_path):
     assert status[second['id']] == 'retired' and status[first['id']] != 'retired'
     with closing(p.store._connect()) as db:
         assert {r[0] for r in db.execute('SELECT watch_id FROM studio_relation_delivery WHERE project_id=?', (pid,))} == {first['id']}
+
+
+def test_a_party_in_a_dispute_is_not_watched_as_a_partner(tmp_path):
+    """Live M2: a patent litigant was recorded as a partner and watched."""
+    p, pid, subject = project(tmp_path)
+    relation(p, pid, subject, 'Rival Gamma', 'partner', 'a', stage='strategic',
+             text='Synthetic Optics and Rival Gamma settled the patent litigation in Europe.')
+    assert sync(p, pid)['added'] == 0 and not relation_watches(p, pid)

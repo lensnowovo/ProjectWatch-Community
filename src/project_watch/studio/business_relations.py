@@ -1,8 +1,13 @@
 """Source-backed commercial roles; cooperation is not an order or cash receipt."""
 
+import re
 from datetime import date
 
 from project_watch.studio.business_identity import current_located_names, ownership_refs
+
+# A dispute is not a commercial relationship: live extraction recorded a patent litigant as a partner.
+ADVERSARIAL = re.compile(r"诉讼|起诉|被诉|侵权|仲裁|纠纷|禁令|索赔|专利战|反诉|lawsuit|litigation|infring|arbitration|injunction",
+                         re.IGNORECASE)
 
 
 def current_fact(service, project_id, fact):
@@ -40,6 +45,8 @@ def project_relation(service, project_id, fact, *, include_internal=True):
         reasons.append('commercial_stage')
     if role == 'unknown':
         reasons.append('role')
+    if ADVERSARIAL.search(fact.get('text') or '') or any(ADVERSARIAL.search(r.get('quote') or '') for r in fact['refs']):
+        reasons.append('adversarial_context')
     for ref in fact['refs']:
         evidence = service.evidence.get(project_id, ref['evidence_version_id'], include_internal=include_internal)
         if evidence['read_scope'] == 'summary':
