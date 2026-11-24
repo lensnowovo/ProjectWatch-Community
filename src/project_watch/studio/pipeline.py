@@ -1373,6 +1373,12 @@ class Pipeline:
                 # screened afterwards. Other errors (account, backoff, budget, pause) still stop.
                 if exc.code not in TRIAGE_ISOLATED:
                     raise
+                # Isolated drops are logged and screening goes on; two unanswered requests in a
+                # row mean the provider is not answering, and the round holds instead of sending
+                # one batch after another that may each be billed.
+                if (exc.code != 'model_content_rejected' and execution is not None
+                        and execution.consecutive_unresolved() > 1):
+                    raise
                 refused = exc.code == 'model_content_rejected'
                 self.store.save_triage([{"id": b["id"], "relevant": True, "importance": "routine",
                                          "summary": b["title"][:200],

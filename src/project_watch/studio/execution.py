@@ -450,6 +450,22 @@ class JobExecution:
             return db.execute(f"SELECT count(*) FROM studio_job_calls c WHERE c.job_id=? AND {dispatch.UNRESOLVED}",
                               (self.job['id'],)).fetchone()[0]
 
+    def consecutive_unresolved(self, kind='model') -> int:
+        """How many of this job's latest requests of a kind in a row have no recorded answer.
+
+        Requests never sent are skipped; an answered request ends the run. Two in a row
+        means the provider is not answering, not an isolated network drop.
+        """
+        with closing(self.store._connect()) as db:
+            rows = db.execute("SELECT c.status FROM studio_job_calls c WHERE c.job_id=? AND c.kind=? AND c.status!='not_sent' "
+                              "ORDER BY c.created_at DESC, c.rowid DESC LIMIT 20", (self.job['id'], kind)).fetchall()
+        count = 0
+        for (status,) in rows:
+            if status not in ('unknown', 'started'):
+                break
+            count += 1
+        return count
+
     def budget_used(self, kind, *, db=None):
         """Admission consumption, including adopted receipts; not new usage."""
         if db is None:
