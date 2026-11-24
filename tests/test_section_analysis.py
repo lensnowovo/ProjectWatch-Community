@@ -671,3 +671,24 @@ def test_an_unknown_item_citation_keeps_its_key(host):
     sources['S1'].update(title='item:missing', url='', source='', date='')
     _, view = apply(host, dict(operations=part()))
     assert view['analysis']['cited'][0]['text'] == 'item:missing'
+
+
+def test_material_dismissed_during_the_run_withholds_only_the_sections_citing_it(host):
+    """A live analysis failed at publication because one snapshot item was dismissed meanwhile."""
+    research, context, sources = host
+    outcomes = section_analysis.evaluate(research.execution, dict(operations=part()), sources, reviewer, lambda: None)
+    with closing(research.store._connect()) as db, db:
+        db.execute("UPDATE studio_items SET status='dismissed' WHERE project_id=?", (research.project_id,))
+    result = section_analysis.publish(research.pipeline, research.execution, context, dict(operations=part()),
+                                      sources, outcomes, lambda: None)
+    assert result['status'] == 'partial' and result['published'] == []
+    assert result['withheld_excluded_material'] == ['operations']
+    view = insight.load(research.store, research.project_id)
+    assert view is None or view['analysis'].get('operations', {}).get('summary') != part()['summary']
+
+
+def test_material_excluded_but_not_cited_does_not_stop_publication(host, monkeypatch):
+    monkeypatch.setattr(material_snapshot, 'excluded_since', lambda *a: {'synthetic-uncited-evidence'})
+    result, view = apply(host, dict(operations=part()))
+    assert result['published'] == ['operations'] and 'withheld_excluded_material' not in result
+    assert view['analysis']['operations']['summary'] == part()['summary']
