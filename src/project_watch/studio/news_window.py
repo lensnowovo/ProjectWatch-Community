@@ -22,7 +22,10 @@ def summarize(store, days, *, project_id=None, category=None, importance=None, e
     ids = {p['id'] for p in projects}
     counts = dict(total=0, in_period=0, matching=0, undated=0, future=0, older=0,
                   pending=0, routine=0, major=0, notable=0)
-    for event in iter_events(store, project_id=project_id, category=category):
+    # Dates alone place most events; only those in the period need their assessment, which
+    # reads their sources. Reading every event with its sources took 15 s on a large project.
+    in_period = []
+    for event in store.event_dates(project_id=project_id, category=category):
         if event['project_id'] not in ids:
             continue
         counts['total'] += 1
@@ -38,6 +41,10 @@ def summarize(store, days, *, project_id=None, category=None, importance=None, e
         elif stamp < start:
             counts['older'] += 1
         else:
+            in_period.append(event['id'])
+    for n in range(0, len(in_period), 500):
+        for event in store.list_events(event_ids=in_period[n:n + 500], limit=500, project_id=project_id,
+                                       category=category):
             counts['in_period'] += 1
             level = 'pending' if event.get('importance_status') == 'pending' else event['importance']
             counts[level] += 1
