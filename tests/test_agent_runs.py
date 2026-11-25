@@ -184,7 +184,8 @@ def test_a_stop_before_codex_starts_cancels_the_run(tmp_path, codex):
     claimed = runner._claim()
     web.post(f'/api/studio/projects/{project}/agent-runs/{run_id}/cancel')
     runner.execute(claimed)
-    assert web.get(f'/api/studio/projects/{project}/agent-auto').json()['last']['status'] == 'cancelled'
+    last = web.get(f'/api/studio/projects/{project}/agent-auto').json()['last']
+    assert last['status'] == 'cancelled' and last['error'] == '已停止，Codex 未启动'
     assert not codex.exists()
 
 
@@ -208,3 +209,12 @@ def test_a_run_that_writes_nothing_back_is_not_reported_complete(tmp_path, codex
     runner.step()
     last = web.get(f'/api/studio/projects/{project}/agent-auto').json()['last']
     assert last['status'] == 'failed' and '没有写回' in last['error'] and last['summary']
+
+
+def test_a_write_that_was_sent_but_not_confirmed_is_unknown(tmp_path, codex, monkeypatch):
+    _app, web, connection, project, runner = setup(tmp_path)
+    monkeypatch.setenv('FAKE_CODEX_MODE', 'unconfirmed')
+    enable(web, project, connection, run_now=True)
+    runner.step()
+    last = web.get(f'/api/studio/projects/{project}/agent-auto').json()['last']
+    assert last['status'] == 'unknown' and '未确认' in last['error']

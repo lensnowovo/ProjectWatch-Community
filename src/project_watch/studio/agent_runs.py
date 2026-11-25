@@ -375,7 +375,7 @@ class AgentRunner:
         except Exception as exc:  # the project, grant or connection changed underneath
             return self._finish(run_id, 'failed', error=str(exc)[:300] or type(exc).__name__)
         if run_id in self._stopping or self._closing.is_set():
-            return self._finish(run_id, 'cancelled', error=self._stopping.get(run_id, '') or '应用正在退出')
+            return self._finish(run_id, 'cancelled', error='已停止，Codex 未启动')
         folder = self.home / 'agent-runs' / run_id
         work = folder / 'work'
         work.mkdir(parents=True, exist_ok=True)
@@ -413,7 +413,7 @@ class AgentRunner:
                 with self._lock:
                     self._child = None
                 child.close()
-        summary, usage, lines, wrote = '', {}, [], 0
+        summary, usage, lines, wrote, attempted = '', {}, [], 0, 0
         with suppress(OSError):
             summary = (folder / 'last.txt').read_text(encoding='utf-8')[:4000].strip()
         with suppress(OSError):
@@ -424,6 +424,9 @@ class AgentRunner:
                     lines.append(line)
                     continue
                 item = event.get('item') or {}
+                if (event.get('type') == 'item.started' and item.get('type') == 'mcp_tool_call'
+                        and item.get('tool') in WRITE_TOOLS):
+                    attempted += 1
                 if (event.get('type') == 'item.completed' and item.get('type') == 'mcp_tool_call'
                         and item.get('tool') in WRITE_TOOLS and item.get('status') == 'completed'):
                     wrote += 1
@@ -435,8 +438,10 @@ class AgentRunner:
         if reason and status != 'done':
             status, error = 'unknown', reason
         if status == 'done' and not wrote:
-            # Codex finished without saving anything: say so instead of reporting a completed round.
-            status, error = 'failed', 'Codex 结束了，但没有写回结果'
+            # Codex finished without a confirmed write: never report that as a completed round. A write that was
+            # sent but not confirmed may still have been saved, so its outcome is unknown rather than failed.
+            status, error = (('unknown', '写回结果未确认，请查看项目记录') if attempted
+                             else ('failed', 'Codex 结束了，但没有写回结果'))
         if status == 'failed' and not error:
             error = (next((line for line in reversed(lines) if line.strip()), '') or f'Codex 退出码 {code}')[-300:]
         self._finish(run_id, status, exit_code=code, summary=summary, error=error,
