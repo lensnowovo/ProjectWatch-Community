@@ -195,6 +195,11 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     application.materials = MaterialService(application, repository, blob_store, settings_store)
     app.state.studio_application = application
     attach_agent_routes(app, application)
+    from project_watch.studio import agent_runs
+
+    agent_runner = agent_runs.AgentRunner(application, data_dir)
+    agent_runs.attach(app, application, agent_runner)
+    app.state.agent_runner = agent_runner
     drafts: dict[str, dict] = {}
     drafts_lock = threading.Lock()
     draining = threading.Event()
@@ -234,10 +239,12 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
             async with original(inner_app):
                 if start_worker:
                     studio_worker.start()
+                    agent_runner.start()
                 try:
                     yield
                 finally:
                     drain_runtime()
+                    agent_runner.join()
                     # Manual stepping can also open the input-version observer.
                     # Always release it, even when no background thread started.
                     studio_worker.stop()
@@ -967,6 +974,8 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
     def drain_runtime(cancel_pending: bool = False):
         """Default waits for tasks; explicit cancellation may leave paid outcomes unknown."""
         draining.set()
+        # A Codex run cannot write back once writes are refused; stop it and record the outcome as unknown.
+        agent_runner.request_stop()
         if cancel_pending:
             studio_worker.request_stop(cancel_pending=True)
         else:

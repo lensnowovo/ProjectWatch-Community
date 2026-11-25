@@ -13,8 +13,8 @@ import { relTime } from './ui';
 export type HeaderTarget = "brief" | "numbers" | "external" | "overview";
 
 /** Shared company snapshot from existing records; no new model/search requests. */
-export default function ProjectHeader({ detail, actions, status }: {
-  detail: ProjectDetail; actions: ReactNode; status?: ReactNode; goto: (target: HeaderTarget) => void;
+export default function ProjectHeader({ detail, actions, status, notice }: {
+  detail: ProjectDetail; actions: ReactNode; status?: ReactNode; notice?: ReactNode; goto: (target: HeaderTarget) => void;
 }) {
   const { project } = detail;
   const stage = (project.stage || "").split(/[（(]/)[0].trim();
@@ -60,6 +60,7 @@ export default function ProjectHeader({ detail, actions, status }: {
       </div>
       {changes.length>0 && <section className="company-hero-changes" aria-label="近期记录"><h2>近期记录 <span>公司自身</span></h2>{changes.map(e=><button key={e.id} onClick={()=>setSource(e)}><span className="company-change-meta"><span>{e.label}</span><time>{e.dateLabel} {e.date}</time></span><strong>{e.text}</strong><small>{e.fact ? '公开来源' : '公司资料'} · 查看依据 ↗</small></button>)}</section>}
     </div>
+    {notice}
     {status && <details className="company-hero-runtime"><summary><span className="company-runtime-label"><WorkIndicator state={work.state} label={work.label}/>{work.alongside && <WorkIndicator state={work.alongside.state} label={`另有 ${work.alongside.label}`}/>}</span><span className="company-runtime-meta">{project.last_external_at && <span>外部信息更新于 {relTime(project.last_external_at)}</span>}<span>运行详情 ⌄</span></span></summary><div className="hero-status">{status}</div></details>}
     <DossierSource entry={source} onClose={()=>setSource(null)}/>
   </header>;

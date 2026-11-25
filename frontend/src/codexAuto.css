@@ -1,0 +1,5 @@
+.codex-auto { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.codex-auto .codex-live { display: inline-flex; align-items: center; gap: 6px; }
+.codex-auto .codex-live .scope-running { margin: 0; }
+.codex-auto details { flex-basis: 100%; }
+.codex-auto details p { margin: 6px 0 0; white-space: pre-wrap; color: var(--ink-2); }

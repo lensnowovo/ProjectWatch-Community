@@ -17,7 +17,7 @@ import '../src/styles.css';
 api.signals = async () => ({cadence:{hours:24}});
 
 const states = ['running','mixed','waiting_response','queued','partial','dismissed','failed','needs_confirmation','stalled','recovering','paused','idle','agent'];
-const labels = {running:'正在执行',mixed:'执行中 + 另一类未完成',waiting_response:'等待模型响应',queued:'排队中',partial:'部分完成',dismissed:'已收起提醒的未完成任务',failed:'未完成',needs_confirmation:'请求结果待确认',stalled:'长时间无进展',recovering:'等待恢复',paused:'已暂停',idle:'监控待命',agent:'Agent 按需更新'};
+const labels = {running:'正在执行',mixed:'执行中 + 另一类未完成',waiting_response:'等待模型响应',queued:'排队中',partial:'部分完成',dismissed:'已收起提醒的未完成任务',failed:'未完成',needs_confirmation:'请求结果待确认',stalled:'长时间无进展',recovering:'等待恢复',paused:'已暂停',idle:'监控待命',agent:'由 Agent 更新'};
 const phases = {collect:'检索公司新闻',read:'阅读报道正文',judge:'更新跟踪问题',revise:'修订监控方案',none:'阶段未记录'};
 const probe = {calls:0,active:0,max:0};
 function PollProbe() {

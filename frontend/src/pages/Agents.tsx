@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from "motion/react";
-import { api, type Project } from "../api";
+import { api, type CodexStatus, type Project } from "../api";
 import { Page } from "../motion";
 import { useVisiblePoll } from "../Operational";
 import { ErrorNote, relTime } from "../ui";
@@ -11,6 +11,7 @@ type Client = "codex" | "workbuddy";
 type Instance = Awaited<ReturnType<typeof api.instanceAgentConnections>>[number];
 type Connection = Awaited<ReturnType<typeof api.agentConnection>>;
 type LinkState = "idle" | "waiting" | "stale" | "live";
+type Made = { project: Project; connection: Connection; auto?: boolean };
 
 const LABEL: Record<Client, string> = { codex: "Codex", workbuddy: "WorkBuddy" };
 const HINT: Record<Client, string> = { codex: "本机 Codex CLI 或桌面版", workbuddy: "WorkBuddy 的 MCP 连接器" };
@@ -26,7 +27,7 @@ export default function AgentsPage() {
   const [error, setError] = useState<unknown>(null);
   const [copied, setCopied] = useState("");
   const [creating, setCreating] = useState(false);
-  const [result, setResult] = useState<{ project: Project; connection: Connection } | null>(null);
+  const [result, setResult] = useState<Made | null>(null);
   const nameField = useRef<HTMLInputElement>(null);
   const reduce = useReducedMotion();
 
@@ -54,6 +55,11 @@ export default function AgentsPage() {
   // Fast while waiting for a first contact (or the first load); a quiet client is only checked now and then.
   useVisiblePoll(reload, !instances || waiting ? 3000 : seen && !live ? 10000 : 30000);
   const state: LinkState = waiting ? "waiting" : seen ? (live ? "live" : "stale") : "idle";
+  // Whether ProjectWatch can start this machine's Codex by itself (installed and logged in).
+  const [codex, setCodex] = useState<CodexStatus | null>(null);
+  const codexSeen = client === "codex" && !!seen;
+  useEffect(() => { if (codexSeen) api.codexStatus().then(setCodex).catch(() => setCodex(null)); }, [codexSeen]);
+  const canAuto = codexSeen && !!codex?.available && codex.logged_in;
 
   const generate = async () => {
     setBusy(true); setError(null); setCopied(""); setCreating(false); setResult(null);
@@ -134,13 +140,14 @@ export default function AgentsPage() {
         {...panel}>
         <h2 id="agent-project">新建项目</h2>
         {result ? <ProjectReady client={client} result={result} copied={copied} copy={copy} onAnother={startProject} />
-          : <NewAgentProject client={client} connectionId={seen.connection_id} nameField={nameField}
+          : <NewAgentProject client={client} connectionId={seen.connection_id} nameField={nameField} canAuto={canAuto}
+              codex={codexSeen ? codex : null}
               onDone={async (value) => { setResult(value); setCreating(false); setMoveFocus(true); setProjects(await api.projects()); }}
               onError={setError} />}
       </motion.section>}
     </AnimatePresence>
 
-    {seen && projects.length > 0 && <ExistingProjects key={client + seen.connection_id} client={client} connectionId={seen.connection_id} projects={projects}
+    {seen && projects.length > 0 && <ExistingProjects key={client + seen.connection_id} client={client} connectionId={seen.connection_id} projects={projects} canAuto={canAuto}
       initial={params.get("project") ?? ""} copy={copy} copied={copied} onError={setError} />}
 
     <p className="sr-only" role="status" aria-live="polite">{seen && live ? `${LABEL[client]} 已连接` : waiting ? `等待 ${LABEL[client]} 连接` : ""}</p>
@@ -223,10 +230,11 @@ function Connected({ seen, live, onNew, hasProjects, onReconnect, busy, copy, co
   </div>;
 }
 
-function NewAgentProject({ client, connectionId, nameField, onDone, onError }: {
-  client: Client; connectionId: string; nameField: React.RefObject<HTMLInputElement>;
-  onDone: (value: { project: Project; connection: Connection }) => void; onError: (e: unknown) => void;
+function NewAgentProject({ client, connectionId, nameField, canAuto, codex, onDone, onError }: {
+  client: Client; connectionId: string; nameField: React.RefObject<HTMLInputElement>; canAuto: boolean;
+  codex: CodexStatus | null; onDone: (value: Made) => void; onError: (e: unknown) => void;
 }) {
+  const [auto, setAuto] = useState(true);
   const [name, setName] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [internal, setInternal] = useState(false);
@@ -245,7 +253,12 @@ function NewAgentProject({ client, connectionId, nameField, onDone, onError }: {
         setMade(project);
       }
       const connection = await api.agentConnection(project.id, client, internal && files.length > 0, connectionId);
-      onDone({ project, connection });
+      let started = false;
+      if (canAuto && auto) {
+        try { await api.setAgentAuto(project.id, { enabled: true, connection_id: connectionId, run_now: true }); started = true; }
+        catch (e) { onError(e); }
+      }
+      onDone({ project, connection, auto: started });
     } catch (e) { onError(e); } finally { setBusy(false); }
   };
   return <>
@@ -258,15 +271,29 @@ function NewAgentProject({ client, connectionId, nameField, onDone, onError }: {
       onChange={e => setInternal(e.target.checked)} />允许 {LABEL[client]} 读取这些内部材料（可能发送至它的模型服务）</label>}
     <label className="setup-consent"><input type="checkbox" checked={consent} disabled={busy}
       onChange={e => setConsent(e.target.checked)} />允许 {LABEL[client]} 读取本项目、写回结果并调整监控范围，30 天，可撤销</label>
+    {canAuto && <label className="setup-consent"><input type="checkbox" checked={auto} disabled={busy}
+      onChange={e => setAuto(e.target.checked)} />建好后由 ProjectWatch 启动 Codex 研究，之后每 7 天更新一次（使用你的 Codex 额度，授权随之续期，可在项目页关闭）</label>}
+    {client === "codex" && codex && !canAuto && <p className="muted small">{codex.available
+      ? "本机 Codex 未登录（在终端运行 codex login），建好后需要把研究指令发给 Codex。"
+      : "未检测到本机 Codex CLI，建好后需要把研究指令发给 Codex。"}</p>}
     <button className="btn btn-primary" onClick={create} disabled={busy || !name.trim() || !consent}>
       {busy ? "正在建立…" : made ? "补授权" : "建立项目并授权"}</button>
   </>;
 }
 
 function ProjectReady({ client, result, copied, copy, onAnother }: {
-  client: Client; result: { project: Project; connection: Connection }; copied: string;
+  client: Client; result: Made; copied: string;
   copy: (text: string, label: string) => void; onAnother: () => void;
 }) {
+  if (result.auto) return <div className="agent-ready">
+    <p><strong>{result.project.name}</strong> 已建好，Codex 已开始研究。通常几分钟，结果会写入项目页。</p>
+    <div className="actions">
+      <Link className="btn btn-primary" autoFocus to={`/projects/${result.project.id}`}>查看项目</Link>
+      <button className="btn btn-ghost" onClick={onAnother}>再建一个</button>
+    </div>
+    <details><summary>手动研究指令</summary><pre className="agent-config">{result.connection.prompt}</pre>
+      <CopyButton done={copied === "研究"} onClick={() => copy(result.connection.prompt, "研究")}>复制研究指令</CopyButton></details>
+  </div>;
   return <div className="agent-ready">
     <p><strong>{result.project.name}</strong> 已建好并授权给 {LABEL[client]}。把研究指令发给它即可开始。</p>
     <div className="actions">
@@ -278,8 +305,8 @@ function ProjectReady({ client, result, copied, copy, onAnother }: {
   </div>;
 }
 
-function ExistingProjects({ client, connectionId, projects, initial, copy, copied, onError }: {
-  client: Client; connectionId: string; projects: Project[]; initial: string;
+function ExistingProjects({ client, connectionId, projects, initial, copy, copied, onError, canAuto }: {
+  client: Client; connectionId: string; projects: Project[]; initial: string; canAuto: boolean;
   copy: (text: string, label: string) => void; copied: string; onError: (e: unknown) => void;
 }) {
   const [projectId, setProjectId] = useState(projects.some(p => p.id === initial) ? initial : "");
@@ -287,9 +314,11 @@ function ExistingProjects({ client, connectionId, projects, initial, copy, copie
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [autoOn, setAutoOn] = useState(false);
+  const agentProject = canAuto && projects.find(p => p.id === projectId)?.execution_mode === "agent";
   const [grants, setGrants] = useState<Awaited<ReturnType<typeof api.agentGrants>>>([]);
   useEffect(() => {
-    setConnection(null); setConsent(false); setInternal(false); setGrants([]);
+    setConnection(null); setConsent(false); setInternal(false); setGrants([]); setAutoOn(false);
     let live = true;
     if (projectId) api.agentGrants(projectId).then(v => { if (live) setGrants(v); }).catch(e => { if (live) onError(e); });
     return () => { live = false; };
@@ -311,8 +340,17 @@ function ExistingProjects({ client, connectionId, projects, initial, copy, copie
           允许 {LABEL[client]} 读取本项目、写回结果并调整监控范围，30 天，可撤销</label>
         <button className="btn btn-primary" disabled={busy || !consent || !!connection} onClick={authorize}>{busy ? "正在授权…" : "授权给已连接的工具"}</button>
       </>}
-      {connection && <div className="agent-ready"><p>已授权。把研究指令发给 {LABEL[client]}。</p>
-        <CopyButton done={copied === "已有"} onClick={() => copy(connection.prompt, "已有")}>复制研究指令</CopyButton></div>}
+      {connection && <div className="agent-ready">{autoOn
+        ? <p>已授权，Codex 已开始研究，之后每 7 天更新一次。</p>
+        : <><p>已授权。{agentProject ? "可让 ProjectWatch 启动 Codex，也可以自己发研究指令。" : `把研究指令发给 ${LABEL[client]}。`}</p>
+          <div className="actions">
+            {agentProject && <button className="btn btn-primary" disabled={busy} onClick={async () => {
+              setBusy(true); onError(null);
+              try { await api.setAgentAuto(projectId, { enabled: true, connection_id: connectionId, run_now: true }); setAutoOn(true); }
+              catch (e) { onError(e); } finally { setBusy(false); }
+            }}>让 Codex 自动研究</button>}
+            <CopyButton done={copied === "已有"} onClick={() => copy(connection.prompt, "已有")}>复制研究指令</CopyButton>
+          </div></>}</div>}
       {grants.some(g => !g.revoked_at) && <div className="agent-grants">{grants.filter(g => !g.revoked_at).map(g => <div className="actions" key={g.id}>
         <span>{g.label} · {g.allow_internal ? "含内部材料" : "公开信息"} · {new Date(g.expires_at * 1000).toLocaleDateString()} 到期</span>
         <button className="btn btn-sm" disabled={busy} aria-label={`撤销 ${g.label} 的授权`} onClick={async () => {

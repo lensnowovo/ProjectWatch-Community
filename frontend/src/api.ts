@@ -1,5 +1,15 @@
 import { validationMessage } from "./entityValidation";
 export type Importance = "major" | "notable" | "routine";
+export interface CodexStatus { available: boolean; logged_in: boolean; version: string }
+export interface AgentRun {
+  id: string; trigger: "created" | "manual" | "schedule"; status: "queued" | "running" | "done" | "failed" | "unknown" | "cancelled";
+  created_at: string; started_at: string | null; finished_at: string | null; summary: string; error: string;
+  input_tokens: number | null; output_tokens: number | null;
+}
+export interface AgentAuto {
+  enabled: boolean; connection_id: string | null; cadence_days: number; runs: AgentRun[];
+  active: AgentRun | null; last: AgentRun | null; next_at: string | null;
+}
 export type Category = "company" | "competitor" | "chain" | "industry" | "policy" | "paper" | "trial" | "patent";
 
 export interface Ref {
@@ -891,6 +901,12 @@ export const api = {
       "POST", `/api/studio/projects/${id}/agent-connection`, { client, allow_internal: allowInternal, ...(connectionId ? { connection_id: connectionId } : {}) }),
   agentGrants: (id: string) => request<{ id: string; label: string; revoked_at: string | null; expires_at: number; allow_internal: boolean }[]>("GET", `/api/studio/projects/${id}/agent-grants`),
   revokeAgent: (id: string, grant: string) => request("DELETE", `/api/studio/projects/${id}/agent-grants/${grant}`),
+  codexStatus: (refresh = false) => request<CodexStatus>("GET", `/api/studio/agent/codex${refresh ? "?refresh=true" : ""}`),
+  agentAuto: (id: string) => request<AgentAuto>("GET", `/api/studio/projects/${id}/agent-auto`),
+  setAgentAuto: (id: string, body: { enabled: boolean; connection_id?: string; cadence_days?: number; run_now?: boolean }) =>
+    request<AgentAuto>("PUT", `/api/studio/projects/${id}/agent-auto`, body),
+  runAgent: (id: string) => request<AgentAuto>("POST", `/api/studio/projects/${id}/agent-runs`),
+  cancelAgentRun: (id: string, run: string) => request<AgentAuto>("POST", `/api/studio/projects/${id}/agent-runs/${run}/cancel`),
   createAgentProject: (name: string, drafts: string[]) => request<Project>("POST", "/api/studio/projects", {
     entity: { legal_name: name }, consent: true, execution_mode: "agent", draft_ids: drafts,
   }),
