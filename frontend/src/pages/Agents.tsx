@@ -74,7 +74,7 @@ export default function AgentsPage() {
   const spring = { type: "spring" as const, stiffness: 340, damping: 32, mass: 0.9 };
   const panel = reduce
     ? { initial: false as const, animate: { opacity: 1 }, exit: { opacity: 1 }, transition: { duration: 0 } }
-    : { initial: { opacity: 0, y: 14, filter: "blur(6px)" }, animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+    : { initial: { opacity: 0, y: 14, filter: "blur(6px)" }, animate: { opacity: 1, y: 0, filter: "blur(0px)", transitionEnd: { filter: "none" } },
         exit: { opacity: 0, y: -8, filter: "blur(4px)" }, transition: spring };
   const pick = (c: Client) => { setClient(c); setCopied(""); setCreating(false); setResult(null); setMoveFocus(false); };
 
@@ -106,7 +106,7 @@ export default function AgentsPage() {
         </div>
 
         <AnimatePresence mode="wait" initial={false}>
-          <motion.div key={client + state} className="agent-panel" {...panel}>
+          <motion.div key={client + state} className="agent-panel" {...panel} onAnimationComplete={() => setMoveFocus(false)}>
             {seen ? <Connected seen={seen} live={live} onNew={startProject} hasProjects={projects.length > 0}
                 onReconnect={generate} busy={busy} copy={copy} copied={copied} focus={moveFocus} />
               : waiting ? <>
@@ -175,9 +175,9 @@ function Pairing({ client, state, reduce }: { client: Client; state: LinkState; 
     {state === "live" && !reduce && <motion.span key="glow" className="glow" initial={{ scale: 0.9, opacity: 0.55 }}
       animate={{ scale: 2.2, opacity: 0 }} transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }} />}
     <div className={`icon icon-${client}`}>
-      <AnimatePresence mode="popLayout" initial={false}>
+      <AnimatePresence initial={false}>
         <motion.svg key={client} viewBox="0 0 48 48" initial={{ opacity: 0, scale: 0.6, filter: "blur(6px)" }}
-          animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }} exit={{ opacity: 0, scale: 0.6, filter: "blur(6px)" }}
+          animate={{ opacity: 1, scale: 1, filter: "blur(0px)", transitionEnd: { filter: "none" } }} exit={{ opacity: 0, scale: 0.6, filter: "blur(6px)" }}
           transition={{ type: "spring", stiffness: 380, damping: 30 }}>
           {client === "codex"
             ? <><path d="M13 17 l8 7 l-8 7" /><path d="M25 32 h10" /></>
