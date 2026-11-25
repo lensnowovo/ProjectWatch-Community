@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, MotionConfig, motion, useReducedMotion } from "motion/react";
 import { api, type Project } from "../api";
-import { EASE, Page } from "../motion";
+import { Page } from "../motion";
 import { useVisiblePoll } from "../Operational";
 import { ErrorNote, relTime } from "../ui";
 import "./agents.css";
@@ -70,50 +70,67 @@ export default function AgentsPage() {
   };
   const startProject = () => { setCreating(true); setResult(null); setTimeout(() => nameField.current?.focus(), 80); };
   const step = state === "idle" ? 0 : result ? 3 : state === "live" ? 2 : 1;
+  // Apple-like motion: soft springs that settle without bounce on panels, a little bounce on the check.
+  const spring = { type: "spring" as const, stiffness: 340, damping: 32, mass: 0.9 };
   const panel = reduce
     ? { initial: false as const, animate: { opacity: 1 }, exit: { opacity: 1 }, transition: { duration: 0 } }
-    : { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 },
-        transition: { duration: 0.26, ease: EASE } };
+    : { initial: { opacity: 0, y: 14, filter: "blur(6px)" }, animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+        exit: { opacity: 0, y: -8, filter: "blur(4px)" }, transition: spring };
+  const pick = (c: Client) => { setClient(c); setCopied(""); setCreating(false); setResult(null); setMoveFocus(false); };
 
   return <Page className="page-workspace setup-page agents-page">
     <header className="settings-heading"><span className="muted small">已有工具，接着用</span>
       <h1>连接 Agent</h1><p>在 Codex 或 WorkBuddy 对话，在这里查看项目与结果。</p></header>
 
     {/* Nothing until the saved connections are known, so a connected client never flashes as unconnected. */}
-    {instances && <section className="card card-pad setup-service agent-connect" aria-labelledby="agent-connect">
-      <h2 id="agent-connect" className="sr-only">连接工具</h2>
-      <Steps step={step} />
-      <div className="agent-clients" role="radiogroup" aria-label="客户端">
-        {(Object.keys(LABEL) as Client[]).map(c => <label key={c} className={client === c ? "selected" : ""}>
-          <input type="radio" name="agent-client" checked={client === c} disabled={busy}
-            onChange={() => { setClient(c); setCopied(""); setCreating(false); setResult(null); setMoveFocus(false); }} />
-          <span><strong>{LABEL[c]}</strong><small>{HINT[c]}</small></span>
-        </label>)}
-      </div>
-      <ConnectionHero client={client} state={state} />
+    {instances && <MotionConfig reducedMotion="user">
+      <section className="card agent-stage" aria-labelledby="agent-connect">
+        <h2 id="agent-connect" className="sr-only">连接工具</h2>
+        <div className="agent-seg" role="radiogroup" aria-label="客户端">
+          {(Object.keys(LABEL) as Client[]).map(c => <label key={c} className={client === c ? "on" : ""}>
+            <input type="radio" name="agent-client" checked={client === c} disabled={busy} onChange={() => pick(c)} />
+            {client === c && <motion.span layoutId="agent-seg-thumb" className="thumb" transition={spring} />}
+            <span className="seg-label">{LABEL[c]}</span>
+          </label>)}
+        </div>
 
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div key={client + state} className="agent-panel" {...panel}>
-          {seen ? <Connected client={client} seen={seen} live={live} onNew={startProject} hasProjects={projects.length > 0}
-              onReconnect={generate} busy={busy} copy={copy} copied={copied} focus={moveFocus} />
-            : waiting ? <div className="agent-steps">
-              <ol>
-                <li><span><b>放入配置</b><small>写入 {waiting.destination}，保存后重新载入 MCP</small></span>
-                  <CopyButton autoFocus={moveFocus} done={copied === "配置"} onClick={() => copy(waiting.configuration, "配置")}>复制配置</CopyButton></li>
-                <li><span><b>发送连接检查</b><small>在 {LABEL[client]} 里发送，收到后这里自动变为已连接</small></span>
-                  <CopyButton done={copied === "检查"} onClick={() => copy(waiting.prompt, "检查")}>复制检查指令</CopyButton></li>
-              </ol>
-              <details><summary>查看配置</summary><pre className="agent-config">{waiting.configuration}</pre></details>
-              <p className="muted small">ProjectWatch 需保持打开。配置含授权信息，请勿分享配置或数据目录。</p>
-              {generated && latestSeen && <button className="btn btn-ghost btn-sm" onClick={() => { setGenerated(null); setMoveFocus(true); }}>取消，继续用原连接</button>}
-            </div>
-            : <button className="btn btn-primary" disabled={busy} onClick={generate}>{busy ? "正在准备…" : `生成 ${LABEL[client]} 连接配置`}</button>}
-        </motion.div>
-      </AnimatePresence>
-    </section>}
+        <Pairing client={client} state={state} reduce={!!reduce} />
+        <div className="agent-headline">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={client + state} {...panel}>
+              <strong>{TITLE[state](LABEL[client])}</strong>
+              <span>{state === "idle" ? HINT[client] : state === "waiting" ? "完成下面两步，这里会自动确认"
+                : state === "live" ? `最近确认 ${sinceSeen(seen?.last_seen_at ?? null)}` : `上次连接 ${relTime(seen?.last_seen_at)}`}</span>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div key={client + state} className="agent-panel" {...panel}>
+            {seen ? <Connected seen={seen} live={live} onNew={startProject} hasProjects={projects.length > 0}
+                onReconnect={generate} busy={busy} copy={copy} copied={copied} focus={moveFocus} />
+              : waiting ? <>
+                <ol className="agent-group">
+                  <li><span className="n" aria-hidden="true">1</span>
+                    <span className="t"><b>放入配置</b><small>写入 {waiting.destination}，保存后重新载入 MCP</small></span>
+                    <CopyButton autoFocus={moveFocus} done={copied === "配置"} onClick={() => copy(waiting.configuration, "配置")}>复制配置</CopyButton></li>
+                  <li><span className="n" aria-hidden="true">2</span>
+                    <span className="t"><b>发送连接检查</b><small>在 {LABEL[client]} 里发送</small></span>
+                    <CopyButton done={copied === "检查"} onClick={() => copy(waiting.prompt, "检查")}>复制检查指令</CopyButton></li>
+                </ol>
+                <details className="agent-more"><summary>查看配置</summary><pre className="agent-config">{waiting.configuration}</pre></details>
+                <p className="agent-note">ProjectWatch 需保持打开。配置含授权信息，请勿分享配置或数据目录。</p>
+                {generated && latestSeen && <button className="btn btn-ghost btn-sm" onClick={() => { setGenerated(null); setMoveFocus(true); }}>取消，继续用原连接</button>}
+              </>
+              : <button className="btn btn-primary agent-cta" disabled={busy} onClick={generate}>{busy ? "正在准备…" : `生成 ${LABEL[client]} 连接配置`}</button>}
+          </motion.div>
+        </AnimatePresence>
+        <PageDots step={step} />
+      </section>
+    </MotionConfig>}
 
     <AnimatePresence initial={false}>
-      {seen && (creating || result) && <motion.section key="project" className="card card-pad setup-service" aria-labelledby="agent-project"
+      {seen && (creating || result) && <motion.section key="project" className="card card-pad setup-service agent-project" aria-labelledby="agent-project"
         {...panel}>
         <h2 id="agent-project">新建项目</h2>
         {result ? <ProjectReady client={client} result={result} copied={copied} copy={copy} onAnother={startProject} />
@@ -133,37 +150,50 @@ export default function AgentsPage() {
 }
 
 const STEPS = ["选择工具", "放入配置并检查", "新建项目"];
-function Steps({ step }: { step: number }) {
-  return <ol className="agent-progress" aria-label="连接进度">
-    {STEPS.map((label, i) => <li key={label} className={i < step ? "done" : i === step ? "current" : ""}
-      aria-current={i === step ? "step" : undefined}>
-      <span className="dot" aria-hidden="true">{i < step
-        ? <svg viewBox="0 0 16 16"><path d="M3.5 8.5 l3 3 l6 -7" /></svg> : i + 1}</span>
-      <span>{label}</span>{i < step && <span className="sr-only">（已完成）</span>}
-    </li>)}
-  </ol>;
+/** iOS-style page dots: the current step stretches into a pill. */
+function PageDots({ step }: { step: number }) {
+  const current = Math.min(step, 2);
+  return <div className="agent-dots">
+    <span className="sr-only">第 {current + 1} 步，共 3 步：{STEPS[current]}</span>
+    {STEPS.map((label, i) => <motion.span key={label} aria-hidden="true" className={i <= current ? "on" : ""}
+      animate={{ width: i === current ? 22 : 7 }} transition={{ type: "spring", stiffness: 420, damping: 34 }} />)}
+  </div>;
 }
 
-const CAPTION: Record<LinkState, (c: string) => string> = {
-  idle: () => "尚未连接",
-  waiting: c => `等待 ${c} 发来连接检查`,
-  stale: c => `${c} 最近没有连接`,
+const TITLE: Record<LinkState, (c: string) => string> = {
+  idle: c => `连接 ${c}`,
+  waiting: c => `正在等待 ${c}`,
+  stale: c => `${c} 有一段时间没连接`,
   live: c => `${c} 已连接`,
 };
 
-/** ProjectWatch and the client, joined by a line whose style shows the connection state. Decorative:
- *  the panel text and the live region carry the same state for assistive technology. */
-function ConnectionHero({ client, state }: { client: Client; state: LinkState }) {
-  return <div className={`agent-hero is-${state}`} aria-hidden="true">
-    <svg viewBox="0 0 480 96" preserveAspectRatio="xMidYMid meet">
-      <path className="track" d="M150 48 H330" />
-      <path key={state} className="beam" d="M150 48 H330" pathLength={1} />
-      <circle className="packet" r="4.5" cx="150" cy="48" />
-      <g className="node"><rect x="6" y="22" width="144" height="52" rx="12" /><text x="78" y="53">ProjectWatch</text></g>
-      <g className="node node-client"><rect x="330" y="22" width="144" height="52" rx="12" /><text x="402" y="53">{LABEL[client]}</text></g>
-      <g key={`badge-${state}`} className="badge"><circle cx="240" cy="48" r="15" /><path d="M233 48.5 l5 5 l9.5 -10" /></g>
-    </svg>
-    <span className="agent-hero-caption">{CAPTION[state](LABEL[client])}</span>
+/** The client's icon in the middle: rings ripple out while waiting, a check springs on when connected.
+ *  Decorative; the headline and the live region carry the state. */
+function Pairing({ client, state, reduce }: { client: Client; state: LinkState; reduce: boolean }) {
+  return <div className={`agent-pairing is-${state}`} aria-hidden="true">
+    {state === "waiting" && !reduce && [0, 1, 2].map(i => <span key={i} className="ring" style={{ animationDelay: `${i * 0.9}s` }} />)}
+    {state === "live" && !reduce && <motion.span key="glow" className="glow" initial={{ scale: 0.9, opacity: 0.55 }}
+      animate={{ scale: 2.2, opacity: 0 }} transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }} />}
+    <div className={`icon icon-${client}`}>
+      <AnimatePresence mode="popLayout" initial={false}>
+        <motion.svg key={client} viewBox="0 0 48 48" initial={{ opacity: 0, scale: 0.6, filter: "blur(6px)" }}
+          animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }} exit={{ opacity: 0, scale: 0.6, filter: "blur(6px)" }}
+          transition={{ type: "spring", stiffness: 380, damping: 30 }}>
+          {client === "codex"
+            ? <><path d="M13 17 l8 7 l-8 7" /><path d="M25 32 h10" /></>
+            : <><path d="M11 15 h26 a3 3 0 0 1 3 3 v12 a3 3 0 0 1 -3 3 h-15 l-7 6 v-6 h-4 a3 3 0 0 1 -3 -3 v-12 a3 3 0 0 1 3 -3 z" />
+              <circle cx="18" cy="24" r="1.6" className="fill" /><circle cx="24" cy="24" r="1.6" className="fill" /><circle cx="30" cy="24" r="1.6" className="fill" /></>}
+        </motion.svg>
+      </AnimatePresence>
+    </div>
+    <AnimatePresence>
+      {state === "live" && <motion.span key="badge" className="badge" initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 520, damping: 18, delay: reduce ? 0 : 0.15 }}>
+        <svg viewBox="0 0 24 24"><motion.path d="M6.5 12.5 l3.8 3.8 l7.5 -8.3" initial={{ pathLength: reduce ? 1 : 0 }}
+          animate={{ pathLength: 1 }} transition={{ duration: 0.35, delay: reduce ? 0 : 0.3, ease: "easeOut" }} /></svg>
+      </motion.span>}
+    </AnimatePresence>
   </div>;
 }
 
@@ -177,25 +207,19 @@ function CopyButton({ done, onClick, children, primary, autoFocus }: {
 
 const sinceSeen = (iso: string | null) => iso && Date.now() - Date.parse(iso) < 60_000 ? "刚刚" : relTime(iso);
 
-function Connected({ client, seen, live, onNew, hasProjects, onReconnect, busy, copy, copied, focus }: {
-  client: Client; seen: Instance; live: boolean; onNew: () => void; hasProjects: boolean; onReconnect: () => void; busy: boolean;
+function Connected({ seen, live, onNew, hasProjects, onReconnect, busy, copy, copied, focus }: {
+  seen: Instance; live: boolean; onNew: () => void; hasProjects: boolean; onReconnect: () => void; busy: boolean;
   copy: (text: string, label: string) => void; copied: string; focus: boolean;
 }) {
-  if (!live) return <div className="agent-stale">
-    <div><strong>上次连接 {relTime(seen.last_seen_at)}</strong>
-      <span className="muted small">在 {LABEL[client]} 里发送连接检查，确认后这里会显示已连接。</span></div>
-    <div className="actions">
-      <CopyButton primary autoFocus={focus} done={copied === "复查"} onClick={() => copy(seen.prompt, "复查")}>复制检查指令</CopyButton>
-      <button className="btn" onClick={onNew}>{hasProjects ? "新建项目" : "新建第一个项目"}</button>
-      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
-    </div>
+  const create = hasProjects ? "新建项目" : "新建第一个项目";
+  if (!live) return <div className="agent-actions">
+    <CopyButton primary autoFocus={focus} done={copied === "复查"} onClick={() => copy(seen.prompt, "复查")}>复制检查指令</CopyButton>
+    <button className="btn" onClick={onNew}>{create}</button>
+    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
   </div>;
-  return <div className="agent-connected">
-    <span className="muted small">最近确认 {sinceSeen(seen.last_seen_at)} · 本机连接 {seen.connection_id.slice(0, 8)}</span>
-    <div className="actions">
-      <button className="btn btn-primary" autoFocus={focus} onClick={onNew}>{hasProjects ? "新建项目" : "新建第一个项目"}</button>
-      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
-    </div>
+  return <div className="agent-actions">
+    <button className="btn btn-primary agent-cta" autoFocus={focus} onClick={onNew}>{create}</button>
+    <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
   </div>;
 }
 

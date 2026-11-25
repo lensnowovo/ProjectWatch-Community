@@ -1,93 +1,84 @@
-/* Agent connection: connect first, confirm, then create projects. */
+/* Agent connection, in the manner of a device pairing sheet: one centred subject, springs, no chrome. */
+.agent-stage { display: grid; justify-items: center; gap: 22px; padding: 30px 28px 22px; text-align: center; }
+.agent-stage > * { width: 100%; max-width: 540px; }
 
-/* Progress: three steps, the finished ones checked. */
-.agent-progress { list-style: none; display: flex; align-items: center; gap: 0; margin: 0 0 18px; padding: 0; font-size: 13px; color: var(--ink-2); }
-.agent-progress li { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-.agent-progress li:not(:last-child)::after { content: ""; flex: 1; height: 1px; margin: 0 10px; background: var(--line-strong); transition: background .3s; }
-.agent-progress li.done:not(:last-child)::after { background: var(--ok); }
-.agent-progress .dot { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
-  border: 1px solid var(--line-strong); font-size: 12px; font-variant-numeric: tabular-nums; transition: background .3s, border-color .3s, color .3s; }
-.agent-progress .dot svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.agent-progress li.current { color: var(--ink); font-weight: 600; }
-.agent-progress li.current .dot { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
-.agent-progress li.done .dot { border-color: var(--ok); background: var(--ok-soft); color: var(--ok); }
-.agent-progress li > span:nth-child(2) { white-space: nowrap; }
+/* Segmented control with a sliding thumb. */
+.agent-stage .agent-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; width: auto; min-width: 260px; max-width: 100%;
+  padding: 3px; border-radius: 11px; background: var(--paper-2); box-shadow: inset 0 0 0 1px var(--line); }
+.agent-seg label { position: relative; display: grid; place-items: center; margin: 0; padding: 7px 22px; border-radius: 8px;
+  cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-2); transition: color .2s; }
+.agent-seg label.on { color: var(--ink); }
+.agent-seg input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; min-height: 0; opacity: 0; cursor: pointer; }
+.agent-seg .thumb { position: absolute; inset: 0; border-radius: 8px; background: var(--paper);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 3px 10px rgba(0, 0, 0, .06), 0 0 0 .5px rgba(0, 0, 0, .04); }
+.agent-seg .seg-label { position: relative; }
+.agent-seg label:has(input:focus-visible) { outline: 2px solid var(--brass); outline-offset: 2px; }
 
-/* Connection diagram: ProjectWatch — line — client. */
-.agent-hero { display: grid; justify-items: center; gap: 6px; margin: 0 0 18px; padding: 16px 12px 14px;
-  border: 1px solid var(--line); border-radius: 12px; transition: border-color .35s, background .35s; }
-.agent-hero svg { width: 100%; max-width: 480px; height: auto; overflow: visible; }
-.agent-hero .node rect { fill: var(--paper); stroke: var(--line-strong); stroke-width: 1.5; transition: stroke .35s; }
-.agent-hero .node text { text-anchor: middle; font-size: 15px; font-weight: 600; fill: var(--ink); }
-.agent-hero .track { stroke: var(--line-strong); stroke-width: 2; stroke-dasharray: 4 6; fill: none; }
-.agent-hero .beam { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; opacity: 0; }
-.agent-hero .packet { opacity: 0; fill: var(--primary); }
-.agent-hero .badge { opacity: 0; transform-box: fill-box; transform-origin: center; }
-.agent-hero .badge circle { fill: var(--ok); }
-.agent-hero .badge path { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
-.agent-hero-caption { font-size: 14px; color: var(--ink-2); }
+/* The subject: an app-icon tile, rings while waiting, a check badge once connected. */
+.agent-pairing { position: relative; display: grid; place-items: center; height: 180px; }
+.agent-pairing .icon { position: relative; z-index: 1; display: grid; place-items: center; width: 92px; height: 92px; border-radius: 24px;
+  color: #fff; box-shadow: 0 12px 32px rgba(0, 0, 0, .18), 0 2px 6px rgba(0, 0, 0, .12), inset 0 1px 0 rgba(255, 255, 255, .16);
+  transition: filter .5s, opacity .5s, transform .5s cubic-bezier(.22, 1, .36, 1); }
+.agent-pairing .icon-codex { background: linear-gradient(160deg, #3a3f48, #15171c); }
+.agent-pairing .icon-workbuddy { background: linear-gradient(160deg, #3d6a58, #1e3a30); }
+.agent-pairing .icon svg { grid-area: 1 / 1; width: 50px; height: 50px; fill: none; stroke: currentColor; stroke-width: 3;
+  stroke-linecap: round; stroke-linejoin: round; }
+.agent-pairing .icon svg .fill { fill: currentColor; stroke: none; }
+.agent-pairing .ring, .agent-pairing .glow { position: absolute; top: 50%; left: 50%; width: 92px; height: 92px; margin: -46px 0 0 -46px;
+  border-radius: 50%; pointer-events: none; }
+.agent-pairing .ring { border: 1.5px solid var(--primary); opacity: 0; animation: agent-ripple 2.7s cubic-bezier(.25, .6, .35, 1) infinite; }
+@keyframes agent-ripple { 0% { transform: scale(1); opacity: 0; } 15% { opacity: .5; } 100% { transform: scale(2.4); opacity: 0; } }
+.agent-pairing .glow { background: radial-gradient(circle, var(--ok) 0%, transparent 70%); }
+.agent-pairing .badge { position: absolute; z-index: 2; top: 50%; left: 50%; margin: 22px 0 0 26px; display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(160deg, #46b874, #2c8a55); box-shadow: 0 0 0 3px var(--paper), 0 4px 12px rgba(0, 0, 0, .2); }
+.agent-pairing .badge svg { width: 22px; height: 22px; fill: none; stroke: #fff; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+.agent-pairing.is-idle .icon { transform: scale(.96); }
+.agent-pairing.is-stale .icon { filter: grayscale(.7); opacity: .72; }
 
-.agent-hero.is-waiting .track { stroke: var(--primary); opacity: .45; }
-.agent-hero.is-waiting .node-client rect { stroke: var(--primary); animation: agent-breathe 1.8s ease-in-out infinite; }
-.agent-hero.is-waiting .packet { animation: agent-travel 1.8s cubic-bezier(.45, 0, .55, 1) infinite; }
-.agent-hero.is-live { border-color: var(--ok); background: var(--ok-soft); }
-.agent-hero.is-live .node rect { stroke: var(--ok); }
-.agent-hero.is-live .beam { stroke: var(--ok); opacity: 1; animation: agent-draw .55s cubic-bezier(.22, 1, .36, 1) forwards; }
-.agent-hero.is-live .badge { animation: agent-pop .4s .45s cubic-bezier(.34, 1.56, .64, 1) forwards; }
-.agent-hero.is-live .agent-hero-caption { color: var(--ok); font-weight: 600; }
-.agent-hero.is-stale .track { stroke: var(--brass); }
-.agent-hero.is-stale .node-client rect { stroke: var(--brass); }
+.agent-headline { display: grid; min-height: 52px; }
+.agent-headline strong { display: block; font-size: 22px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+.agent-headline span { display: block; margin-top: 4px; font-size: 14px; color: var(--ink-2); }
 
-@keyframes agent-draw { to { stroke-dashoffset: 0; } }
-@keyframes agent-pop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
-@keyframes agent-travel { 0% { opacity: 0; transform: translateX(0); } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(180px); } }
-@keyframes agent-breathe { 50% { stroke-opacity: .35; } }
+.agent-panel { display: grid; justify-items: center; gap: 14px; }
+.agent-stage .btn { border-radius: 999px; }
+.agent-cta { min-width: 220px; min-height: 44px; padding-inline: 26px; font-size: 15px; }
+.agent-actions { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; }
 
-/* Client choice. */
-.agent-clients { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 0 0 14px; }
-.setup-service .agent-clients label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 12px 14px; border: 1px solid var(--line-strong);
-  border-radius: 10px; cursor: pointer; font-size: 14px; transition: border-color .2s, background .2s; }
-.setup-service .agent-clients label:hover { border-color: var(--primary); }
-.setup-service .agent-clients label.selected { border-color: var(--primary); background: var(--primary-soft); }
-.setup-service .agent-clients input { flex: none; width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--primary); }
-.agent-clients label > span { display: grid; gap: 2px; }
-.agent-clients small { color: var(--ink-2); font-size: 12px; }
-.agent-clients label:focus-within { outline: 2px solid var(--brass); outline-offset: 3px; }
-
-/* Waiting: two numbered actions. */
-.agent-steps ol { list-style: none; counter-reset: step; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
-.agent-steps li { counter-increment: step; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
-.agent-steps li > span { display: grid; gap: 2px; grid-template-columns: auto 1fr; column-gap: 8px; }
-.agent-steps li > span::before { content: counter(step); grid-row: span 2; display: grid; place-items: center; width: 22px; height: 22px;
-  border-radius: 50%; background: var(--primary-soft); color: var(--primary); font-size: 12px; font-weight: 600; }
-.agent-steps li small { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+/* Waiting: a grouped list with hairline separators. */
+.agent-group { list-style: none; width: 100%; margin: 0; padding: 0; border-radius: 14px; background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line); text-align: left; }
+.agent-group li { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 13px 16px; }
+.agent-group li + li { box-shadow: inset 0 1px 0 var(--line); }
+.agent-group .n { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--primary-soft);
+  color: var(--primary); font-size: 12px; font-weight: 600; }
+.agent-group .t { display: grid; gap: 2px; min-width: 0; font-size: 14px; }
+.agent-group small { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.agent-more { width: 100%; text-align: left; font-size: 13px; }
+.agent-note { margin: 0; font-size: 12px; color: var(--muted); }
 
 .agent-copy { display: inline-flex; align-items: center; gap: 6px; transition: background .2s, border-color .2s, color .2s; }
 .agent-copy svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
   stroke-dasharray: 16; stroke-dashoffset: 16; animation: agent-draw .3s ease-out forwards; }
 .agent-copy.is-done:not(.btn-primary) { border-color: var(--ok); color: var(--ok); }
+@keyframes agent-draw { to { stroke-dashoffset: 0; } }
 
-.agent-connected { display: grid; gap: 4px 16px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; }
-.agent-connected strong { display: block; font-size: 16px; }
-.agent-connected .actions { margin-top: 6px; }
+/* Page dots. */
+.agent-dots { display: flex; justify-content: center; gap: 6px; padding-top: 4px; }
+.agent-dots > span[aria-hidden] { display: block; height: 7px; width: 7px; border-radius: 999px; background: var(--line-strong); transition: background .3s; }
+.agent-dots > span.on { background: var(--primary); }
 
+.agent-project { border-radius: 16px; }
 .agent-ready { display: grid; gap: 12px; }
 .agent-ready p { margin: 0; }
 .agent-grants { margin-top: 16px; display: grid; gap: 8px; font-size: 13px; }
-.agent-stale { display: grid; gap: 12px; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: 10px; }
-.agent-stale strong { display: block; font-size: 16px; }
 
 @media (max-width: 600px) {
-  .agent-steps li { align-items: flex-start; }
-  .agent-progress { font-size: 12px; }
-  .agent-progress li:not(:last-child)::after { margin: 0 6px; }
-  .agent-progress li:not(.current) > span:nth-child(2) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .agent-stage { padding: 24px 16px 18px; gap: 18px; }
+  .agent-pairing { height: 150px; }
+  .agent-group li { grid-template-columns: auto 1fr; }
+  .agent-group li .agent-copy { grid-column: 2; justify-self: start; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .agent-hero, .agent-hero *, .agent-copy svg, .agent-progress *, .agent-progress li::after { animation: none !important; transition: none !important; }
-  .agent-hero.is-live .beam { stroke-dashoffset: 0; }
-  .agent-hero.is-live .badge { opacity: 1; }
+  .agent-stage *, .agent-copy svg { animation: none !important; transition: none !important; }
   .agent-copy svg { stroke-dashoffset: 0; }
-  .agent-hero.is-waiting .packet { opacity: 1; transform: translateX(90px); }
 }
