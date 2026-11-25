@@ -78,6 +78,9 @@ class ProjectQueryCache:
                 if len(encoded.encode()) > (16_000_000 if signature[0] == "deepseek" else 2_000_000):
                     raise HttpError("response_too_large")
             except BaseException as exc:
+                from project_watch.studio.execution import JobYield
+                if isinstance(exc, JobYield):
+                    raise  # handed back before anything was sent (exit): nothing to record
                 unknown = (not isinstance(exc, HttpError) or exc.code in
                            ("request_outcome_unknown", "connection_failed"))
                 with closing(self.store._connect()) as db, db:
