@@ -9,37 +9,29 @@ const OUTCOME: Record<AgentRun["status"], string> = {
   queued: "排队中", running: "正在研究", done: "完成", failed: "未完成", unknown: "中途停止", cancelled: "已取消",
 };
 
-/** Auto research by the local Codex for one Agent project: state, and polling while a run is active. */
-export function useCodexAuto(projectId: string, onFinished?: () => void) {
-  const [auto, setAuto] = useState<AgentAuto | null>(null);
+export type CodexAutoState = { auto: AgentAuto | null; setAuto: (next: AgentAuto) => void };
+
+/** Auto research by the local Codex for one Agent project. One instance per page; polls while a run is active. */
+export function useCodexAuto(projectId: string, enabled: boolean, onFinished?: () => void): CodexAutoState {
+  const [auto, setState] = useState<AgentAuto | null>(null);
   const active = useRef(false);
   // The caller's reload may be a new function each render; keep the latest without refetching.
   const finished = useRef(onFinished);
   finished.current = onFinished;
-  const load = useCallback(async () => {
-    const next = await api.agentAuto(projectId);
+  const setAuto = useCallback((next: AgentAuto) => {
     if (active.current && !next.active) finished.current?.();
     active.current = !!next.active;
-    setAuto(next);
-  }, [projectId]);
-  useEffect(() => { load().catch(() => undefined); }, [load]);
-  // The header button and the status line are separate; an action in one updates both at once.
-  useEffect(() => {
-    const listen = (event: Event) => {
-      const { id, next } = (event as CustomEvent<{ id: string; next: AgentAuto }>).detail;
-      if (id === projectId) { active.current = !!next.active; setAuto(next); }
-    };
-    window.addEventListener("codex-auto", listen);
-    return () => window.removeEventListener("codex-auto", listen);
-  }, [projectId]);
-  useVisiblePoll(load, auto?.active ? 5000 : 60000, !!auto?.enabled || !!auto?.active);
-  const publish = (next: AgentAuto) => window.dispatchEvent(new CustomEvent("codex-auto", { detail: { id: projectId, next } }));
-  return { auto, setAuto: publish, reload: load };
+    setState(next);
+  }, []);
+  const load = useCallback(async () => { setAuto(await api.agentAuto(projectId)); }, [projectId, setAuto]);
+  useEffect(() => { if (enabled) load().catch(() => undefined); }, [enabled, load]);
+  useVisiblePoll(load, auto?.active ? 5000 : 60000, enabled && (!!auto?.enabled || !!auto?.active));
+  return { auto, setAuto };
 }
 
 /** Header action for an Agent project: start Codex now, or go connect it. */
-export function CodexUpdateButton({ projectId, onReload }: { projectId: string; onReload: () => void }) {
-  const { auto, setAuto } = useCodexAuto(projectId, onReload);
+export function CodexUpdateButton({ projectId, codex }: { projectId: string; codex: CodexAutoState }) {
+  const { auto, setAuto } = codex;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   if (!auto?.enabled) return <Link className="btn" to={`/agents?project=${projectId}`}>用 Agent 更新</Link>;
@@ -54,9 +46,9 @@ export function CodexUpdateButton({ projectId, onReload }: { projectId: string; 
   </>;
 }
 
-/** One line under the header: what Codex did last and when it runs next. */
-export function CodexAutoStatus({ projectId, onReload }: { projectId: string; onReload: () => void }) {
-  const { auto, setAuto } = useCodexAuto(projectId, onReload);
+/** One line under the header: what Codex did last, when it runs next, and the switch. */
+export function CodexAutoStatus({ projectId, codex }: { projectId: string; codex: CodexAutoState }) {
+  const { auto, setAuto } = codex;
   const [error, setError] = useState<unknown>(null);
   if (!auto || (!auto.enabled && !auto.active && !auto.last)) return null;
   const last = auto.last;

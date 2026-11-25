@@ -24,7 +24,7 @@ import { TechRoutes } from "../tech";
 import { projectWork, needsAttention, isMoving } from "../workState";
 import { ProjectActivity, useVisiblePoll } from "../Operational";
 import { RoundProgress } from '../roundView';
-import { CodexAutoStatus, CodexUpdateButton } from "../codexAuto";
+import { CodexAutoStatus, CodexUpdateButton, useCodexAuto } from "../codexAuto";
 import { IndustryJudgment, TechnologyJudgment } from "../judgment";
 import { insightRevision, workRevision } from "../workState";
 import { ClinicalView, PapersView, PatentsView } from "../researchPages";
@@ -170,6 +170,8 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
   const { project } = detail;
   const [adding, setAdding] = useState(false);
   const removed = project.status === "removed";
+  // One source for the header button and the status line under it.
+  const codex = useCodexAuto(project.id, project.execution_mode === "agent", onReload);
   const restore = async () => {
     setError(null);
     try { await api.restoreProject(project.id); toast("已恢复关注"); onRemoved(); onReload(); }
@@ -204,12 +206,12 @@ function Header({ detail, goto, onReload, status, onRemoved }: { detail: Project
       </div>}
       <ProjectHeader detail={detail} goto={goto} actions={removed ? null : <>
         {INTERNAL_INFORMATION_VISIBLE && <button className="btn project-upload" onClick={() => setAdding(true)}>＋ 上传资料</button>}
-        {project.execution_mode === "agent" ? <CodexUpdateButton projectId={project.id} onReload={onReload} /> : <>
+        {project.execution_mode === "agent" ? <CodexUpdateButton projectId={project.id} codex={codex} /> : <>
           <button className="btn" onClick={refresh} disabled={!project.activated || refreshing}>{refreshing ? '正在检查…' : '立即更新'}</button>
           <button className="btn btn-ghost" onClick={toggle}>{project.status === "paused" ? "恢复监控" : "暂停监控"}</button>
         </>}
       </>} status={status} notice={project.execution_mode === "agent" && !removed
-        ? <CodexAutoStatus projectId={project.id} onReload={onReload} /> : null} />
+        ? <CodexAutoStatus projectId={project.id} codex={codex} /> : null} />
       {INTERNAL_INFORMATION_VISIBLE && <UploadDialog projectId={project.id} open={adding} onClose={() => setAdding(false)} onAdded={onReload} />}
       <ErrorNote error={error} />
     </>

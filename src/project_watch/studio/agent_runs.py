@@ -23,6 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from project_watch.studio.store import now
 
 TIMEOUT_SECONDS = 45 * 60
+# Codex features that could reach this computer or other services. The read-only sandbox only stops writes; with
+# these off the run has web search and the bridge, which the project grant bounds. Code mode stays on: this Codex
+# routes MCP calls through it, and without a shell its scripts cannot read files (checked with a canary file).
+LOCAL_TOOLS = ('shell_tool', 'unified_exec', 'view_image', 'image_generation', 'multi_agent', 'plugins', 'apps', 'hooks')
+WRITE_TOOLS = ('submit_monitoring_results', 'update_monitoring_scope')
 RENEW_BEFORE_SECONDS = 3 * 24 * 3600
 ACTIVE = ('queued', 'running')
 SCHEMA = '''CREATE TABLE IF NOT EXISTS studio_agent_runs (
@@ -79,10 +84,14 @@ def _child_env(command):
     env = dict(os.environ)
     for name in ('CODEX_MANAGED_BY_NPM', 'CODEX_MANAGED_BY_BUN', 'CODEX_MANAGED_BY_PNPM', 'CODEX_MANAGED_BY_VITE_PLUS'):
         env.pop(name, None)
-    if 'node_modules' in command[0]:
+    marker = os.sep + os.path.join('node_modules', '@openai', 'codex') + os.sep
+    if marker in command[0]:
+        # As the npm launcher does: lets Codex find its bundled helpers.
         env['CODEX_MANAGED_BY_NPM'] = '1'
-    # The bridge reads only its connection file; never inherit this instance's secrets by accident.
-    env.pop('PROJECT_WATCH_AGENT_CONFIG', None)
+        env['CODEX_MANAGED_PACKAGE_ROOT'] = command[0][:command[0].index(marker) + len(marker) - 1]
+    # Nothing of this instance's configuration or secrets reaches Codex; the bridge reads its connection file.
+    for name in [n for n in env if n.upper().startswith('PROJECT_WATCH_')]:
+        env.pop(name)
     return env
 
 
@@ -174,11 +183,13 @@ class AgentRunner:
         self.store = service.store
         self.home = Path(home)
         self._wake = threading.Event()
-        self._stop = threading.Event()
         self._lock = threading.Lock()
         self._child = None
         self._current = None
         self._thread = None
+        self._closing = threading.Event()
+        # run id -> why it was stopped; checked before and right after Codex starts.
+        self._stopping: dict[str, str] = {}
         with closing(self.store._connect()) as db, db:
             db.executescript(SCHEMA)
 
@@ -190,7 +201,7 @@ class AgentRunner:
         except ValueError:
             value = {}
         return {'enabled': bool(value.get('enabled')), 'connection_id': value.get('connection_id'),
-                'cadence_days': int(value.get('cadence_days') or 7)}
+                'cadence_days': int(value.get('cadence_days') or 7), 'enabled_at': value.get('enabled_at')}
 
     def _save_settings(self, project_id, value):
         self.store.set_state('agent_auto:' + project_id, json.dumps(value))
@@ -207,8 +218,9 @@ class AgentRunner:
         last = next((r for r in runs if r['status'] not in ACTIVE), None)
         next_at = None
         if settings['enabled'] and not any(r['status'] in ACTIVE for r in runs):
-            base = _utc(runs[0]['created_at']) if runs else None
-            next_at = (base + timedelta(days=settings['cadence_days'])).isoformat() if base else now()
+            # From the latest run or from switching on, whichever is later: switching on never starts a run by itself.
+            starts = [_utc(t) for t in (runs[0]['created_at'] if runs else None, settings['enabled_at']) if t]
+            next_at = (max(starts) + timedelta(days=settings['cadence_days'])).isoformat() if starts else None
         return {**settings, 'runs': runs, 'active': next((r for r in runs if r['status'] in ACTIVE), None),
                 'last': last, 'next_at': next_at}
 
@@ -229,6 +241,8 @@ class AgentRunner:
         project = self.service.project(project_id)
         if project.get('execution_mode') != 'agent':
             raise HTTPException(409, '只有 Agent 项目可以由 Codex 自动研究')
+        if body.enabled and project.get('status') == 'removed':
+            raise HTTPException(409, '项目已移出关注')
         current = self.settings(project_id)
         connection_id = body.connection_id or current['connection_id']
         if body.enabled:
@@ -237,8 +251,9 @@ class AgentRunner:
             _path, config = self.connection(connection_id)
             if project_id not in (config.get('projects') or {}):
                 raise HTTPException(409, '先把项目授权给已连接的 Codex')
+        enabled_at = (current['enabled_at'] or now() if current['enabled'] else now()) if body.enabled else None
         self._save_settings(project_id, {'enabled': body.enabled, 'connection_id': connection_id,
-                                         'cadence_days': body.cadence_days})
+                                         'cadence_days': body.cadence_days, 'enabled_at': enabled_at})
         if body.enabled and body.run_now:
             self.enqueue(project_id, 'created')
         return self.view(project_id)
@@ -247,6 +262,8 @@ class AgentRunner:
         settings = self.settings(project_id)
         if not settings['connection_id']:
             raise HTTPException(409, '先开启 Codex 自动研究')
+        if self.service.project(project_id).get('status') == 'removed':
+            raise HTTPException(409, '项目已移出关注')
         with self._lock, closing(self.store._connect()) as db, db:
             if db.execute(f"SELECT 1 FROM studio_agent_runs WHERE project_id=? AND status IN {ACTIVE}",
                           (project_id,)).fetchone():
@@ -267,8 +284,8 @@ class AgentRunner:
                 return
             if row['status'] != 'running':
                 return
-        # Results written before the stop stay; the outcome of the rest is unknown.
-        self._interrupt('已停止；停止前可能已写回部分结果')
+            # Results written before the stop stay; the outcome of the rest is unknown.
+            self._interrupt(run_id, '已停止；停止前可能已写回部分结果')
 
     def _finish(self, run_id, status, **fields):
         columns = ['status=?', 'finished_at=?'] + [f'{k}=?' for k in fields]
@@ -284,6 +301,11 @@ class AgentRunner:
             project_id = key.split(':', 1)[1]
             settings = self.settings(project_id)
             if not settings['enabled']:
+                continue
+            try:
+                if self.service.project(project_id).get('status') == 'removed':
+                    continue
+            except Exception:  # the project no longer exists
                 continue
             view = self.view(project_id)
             if view['next_at'] and _utc(view['next_at']) <= datetime.now(UTC):
@@ -305,7 +327,7 @@ class AgentRunner:
             db.execute("UPDATE studio_agent_runs SET status='running',started_at=? WHERE id=?", (now(), row['id']))
             return dict(row)
 
-    def _grant(self, run, path, config):
+    def _grant(self, run, path, config, renew):
         """The saved project grant, renewed while auto research stays on. A revoked grant stops the project."""
         from project_watch.studio.agent_connections import generate
 
@@ -318,23 +340,42 @@ class AgentRunner:
         if not grant or grant['revoked_at']:
             self._save_settings(project_id, {**self.settings(project_id), 'enabled': False})
             raise RuntimeError('授权已撤销，已关闭自动研究')
-        if grant['expires_at'] - time.time() < RENEW_BEFORE_SECONDS:
+        if grant['expires_at'] <= time.time() and not renew:
+            raise RuntimeError('授权已过期，请重新授权')
+        if renew and grant['expires_at'] - time.time() < RENEW_BEFORE_SECONDS:
             generate(self.service, project_id, 'codex', bool(grant['allow_internal']), self.home, config['url'],
                      run['connection_id'])
 
     def execute(self, run):
+        try:
+            self._execute(run)
+        except Exception as exc:  # never leave a run marked running
+            launched = self._current == run['id']
+            self._finish(run['id'], 'unknown' if launched else 'failed', error=(str(exc) or type(exc).__name__)[:300])
+            raise
+        finally:
+            with self._lock:
+                self._current = None
+                self._child = None
+                self._stopping.pop(run['id'], None)
+
+    def _execute(self, run):
         run_id, project_id = run['id'], run['project_id']
         command = locate_codex()
         if not command:
             return self._finish(run_id, 'failed', error='未找到本机 Codex CLI')
         try:
-            path, config = self.connection(run['connection_id'])
-            self._grant(run, path, config)
             project = self.service.project(project_id)
+            if project.get('status') == 'removed':
+                return self._finish(run_id, 'failed', error='项目已移出关注')
+            path, config = self.connection(run['connection_id'])
+            self._grant(run, path, config, renew=self.settings(project_id)['enabled'])
         except HTTPException as exc:
             return self._finish(run_id, 'failed', error=str(exc.detail))
         except Exception as exc:  # the project, grant or connection changed underneath
             return self._finish(run_id, 'failed', error=str(exc)[:300] or type(exc).__name__)
+        if run_id in self._stopping or self._closing.is_set():
+            return self._finish(run_id, 'cancelled', error=self._stopping.get(run_id, '') or '应用正在退出')
         folder = self.home / 'agent-runs' / run_id
         work = folder / 'work'
         work.mkdir(parents=True, exist_ok=True)
@@ -343,6 +384,7 @@ class AgentRunner:
         prefix = f'mcp_servers.{name}'
         argv = [*command, 'exec', '--ignore-user-config', '--skip-git-repo-check', '--sandbox', 'read-only',
                 '--ephemeral', '--json', '--color', 'never', '-C', str(work), '-o', str(folder / 'last.txt'),
+                *[arg for tool in LOCAL_TOOLS for arg in ('--disable', tool)],
                 '-c', 'web_search="live"',
                 '-c', f'{prefix}.command={json.dumps(python)}',
                 '-c', f'{prefix}.args={json.dumps(args)}',
@@ -356,56 +398,65 @@ class AgentRunner:
                 child = Child(argv, _child_env(command), log)
             except OSError as exc:
                 return self._finish(run_id, 'failed', error=f'Codex 无法启动：{exc}'[:300])
-            self._child, self._current = child, run_id
+            with self._lock:
+                self._child, self._current = child, run_id
+                stopped = run_id in self._stopping or self._closing.is_set()
             try:
+                if stopped:
+                    child.terminate()
                 code = child.wait(TIMEOUT_SECONDS)
                 status = 'done' if code == 0 else 'failed'
             except subprocess.TimeoutExpired:
                 child.terminate()
                 error = f'超过 {TIMEOUT_SECONDS // 60} 分钟未结束，已停止；可能已写回部分结果'
             finally:
-                self._child = None
+                with self._lock:
+                    self._child = None
                 child.close()
-        summary, usage, lines = '', {}, []
+        summary, usage, lines, wrote = '', {}, [], 0
         with suppress(OSError):
             summary = (folder / 'last.txt').read_text(encoding='utf-8')[:4000].strip()
-        try:
+        with suppress(OSError):
             for line in (folder / 'events.jsonl').read_text(encoding='utf-8', errors='replace').splitlines():
                 try:
                     event = json.loads(line)
                 except ValueError:
                     lines.append(line)
                     continue
+                item = event.get('item') or {}
+                if (event.get('type') == 'item.completed' and item.get('type') == 'mcp_tool_call'
+                        and item.get('tool') in WRITE_TOOLS and item.get('status') == 'completed'):
+                    wrote += 1
                 if event.get('type') == 'turn.completed':
                     usage = event.get('usage') or {}
                 elif event.get('type') in ('error', 'turn.failed'):
                     lines.append(str(event.get('message') or event.get('error') or ''))
-        except OSError:
-            pass
-        if self._stop.is_set() and status != 'done':
-            status, error = 'unknown', self._stop_reason
+        reason = self._stopping.get(run_id) or ('ProjectWatch 退出时停止；可能已写回部分结果' if self._closing.is_set() else '')
+        if reason and status != 'done':
+            status, error = 'unknown', reason
+        if status == 'done' and not wrote:
+            # Codex finished without saving anything: say so instead of reporting a completed round.
+            status, error = 'failed', 'Codex 结束了，但没有写回结果'
         if status == 'failed' and not error:
             error = (next((line for line in reversed(lines) if line.strip()), '') or f'Codex 退出码 {code}')[-300:]
         self._finish(run_id, status, exit_code=code, summary=summary, error=error,
                      input_tokens=usage.get('input_tokens'), output_tokens=usage.get('output_tokens'))
 
     # ---- lifecycle --------------------------------------------------------------------
-    _stop_reason = 'ProjectWatch 退出时停止；可能已写回部分结果'
-
-    def _interrupt(self, reason):
-        child = self._child
-        if child is not None:
-            self._stop_reason = reason
-            self._stop.set()
-            child.terminate()
+    def _interrupt(self, run_id, reason):
+        """Caller holds the lock. Stops this run now, or as soon as it starts."""
+        self._stopping[run_id] = reason
+        if self._current == run_id and self._child is not None:
+            self._child.terminate()
 
     def step(self):
         """One scheduling pass and at most one run. Used by the thread and by tests."""
+        if self._closing.is_set():
+            return None
         self.schedule_due()
-        run = self._claim()
+        run = None if self._closing.is_set() else self._claim()
         if run:
             self.execute(run)
-            self._stop.clear()
         return run
 
     def _loop(self):
@@ -413,22 +464,26 @@ class AgentRunner:
         while not self._closing.is_set():
             try:
                 self.step()
-            except Exception:  # keep the runner alive; the failed run is already recorded
+            except Exception:  # keep the runner alive; the run is already recorded
                 import logging
                 logging.getLogger('project_watch.agent_runs').exception('agent run failed')
             self._wake.wait(60)
             self._wake.clear()
 
     def start(self):
-        self._closing = threading.Event()
         self._thread = threading.Thread(target=self._loop, name='agent-runs', daemon=True)
         self._thread.start()
 
     def request_stop(self):
-        if getattr(self, '_closing', None) is not None:
+        with self._lock:
             self._closing.set()
-        self._interrupt('ProjectWatch 退出时停止；可能已写回部分结果')
+            if self._current:
+                self._interrupt(self._current, 'ProjectWatch 退出时停止；可能已写回部分结果')
         self._wake.set()
+
+    def join(self, timeout=15):
+        if self._thread is not None:
+            self._thread.join(timeout)
 
 
 def attach(app, service, runner):

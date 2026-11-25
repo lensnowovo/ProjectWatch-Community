@@ -244,6 +244,7 @@ def attach_studio(app: FastAPI, *, data_dir: Path, start_worker: bool) -> None:
                     yield
                 finally:
                     drain_runtime()
+                    agent_runner.join()
                     # Manual stepping can also open the input-version observer.
                     # Always release it, even when no background thread started.
                     studio_worker.stop()

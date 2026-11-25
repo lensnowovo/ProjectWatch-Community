@@ -315,6 +315,7 @@ function ExistingProjects({ client, connectionId, projects, initial, copy, copie
   const [busy, setBusy] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [autoOn, setAutoOn] = useState(false);
+  const agentProject = canAuto && projects.find(p => p.id === projectId)?.execution_mode === "agent";
   const [grants, setGrants] = useState<Awaited<ReturnType<typeof api.agentGrants>>>([]);
   useEffect(() => {
     setConnection(null); setConsent(false); setInternal(false); setGrants([]); setAutoOn(false);
@@ -341,9 +342,9 @@ function ExistingProjects({ client, connectionId, projects, initial, copy, copie
       </>}
       {connection && <div className="agent-ready">{autoOn
         ? <p>已授权，Codex 已开始研究，之后每 7 天更新一次。</p>
-        : <><p>已授权。{canAuto ? "可让 ProjectWatch 启动 Codex，也可以自己发研究指令。" : `把研究指令发给 ${LABEL[client]}。`}</p>
+        : <><p>已授权。{agentProject ? "可让 ProjectWatch 启动 Codex，也可以自己发研究指令。" : `把研究指令发给 ${LABEL[client]}。`}</p>
           <div className="actions">
-            {canAuto && <button className="btn btn-primary" disabled={busy} onClick={async () => {
+            {agentProject && <button className="btn btn-primary" disabled={busy} onClick={async () => {
               setBusy(true); onError(null);
               try { await api.setAgentAuto(projectId, { enabled: true, connection_id: connectionId, run_now: true }); setAutoOn(true); }
               catch (e) { onError(e); } finally { setBusy(false); }

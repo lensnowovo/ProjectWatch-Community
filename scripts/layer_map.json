@@ -34,6 +34,7 @@
     "project_watch.studio.agent_result_contracts": "Contract",
     "project_watch.studio.agent_results": "Core",
     "project_watch.studio.agent_connections": "Core",
+    "project_watch.studio.agent_runs": "Core",
     "project_watch.studio.agent_scope": "Core",
     "project_watch.studio.direct_operations": "Core",
     "project_watch.analysis": "Legacy",

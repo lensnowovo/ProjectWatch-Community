@@ -121,6 +121,7 @@ def test_the_next_round_is_scheduled_after_the_cadence(tmp_path, codex):
     assert runner.step() is None
     with closing(app.state.studio_store._connect()) as db, db:
         db.execute("UPDATE studio_agent_runs SET created_at='2020-01-01T00:00:00+00:00'")
+    runner._save_settings(project, {**runner.settings(project), 'enabled_at': '2020-01-01T00:00:00+00:00'})
     run = runner.step()
     assert run and run['trigger'] == 'schedule'
     web.put(f'/api/studio/projects/{project}/agent-auto', json={'enabled': False})
@@ -145,3 +146,65 @@ def test_codex_status_reports_availability_and_login(tmp_path, codex, monkeypatc
     assert status['available'] and status['logged_in'] and status['version'] == 'codex-cli 0.0.0-test'
     monkeypatch.setenv('FAKE_CODEX_LOGGED_IN', '0')
     assert not web.get('/api/studio/agent/codex?refresh=true').json()['logged_in']
+
+
+def test_codex_gets_no_local_tools_and_no_projectwatch_environment(tmp_path, codex, monkeypatch):
+    _app, web, connection, project, runner = setup(tmp_path)
+    monkeypatch.setenv('PROJECT_WATCH_MODEL_API_KEY', 'sk-test-not-for-codex')
+    enable(web, project, connection, run_now=True)
+    runner.step()
+    call = json.loads(codex.read_text(encoding='utf-8'))
+    disabled = {call['argv'][i + 1] for i, a in enumerate(call['argv']) if a == '--disable'}
+    assert set(agent_runs.LOCAL_TOOLS) <= disabled
+    assert call['project_watch_env'] == []
+
+
+def test_switching_on_schedules_from_now_instead_of_running_at_once(tmp_path, codex):
+    _app, web, connection, project, runner = setup(tmp_path)
+    view = enable(web, project, connection).json()
+    assert view['active'] is None and view['next_at'] > view['enabled_at']
+    assert runner.step() is None and not codex.exists()
+
+
+def test_a_removed_project_gets_no_more_runs(tmp_path, codex):
+    app, web, connection, project, runner = setup(tmp_path)
+    enable(web, project, connection, run_now=True)
+    runner.step()
+    assert web.delete(f'/api/studio/projects/{project}').status_code in (200, 204)
+    with closing(app.state.studio_store._connect()) as db, db:
+        db.execute("UPDATE studio_agent_runs SET created_at='2020-01-01T00:00:00+00:00'")
+    codex.unlink()
+    assert runner.step() is None and not codex.exists()
+    assert web.post(f'/api/studio/projects/{project}/agent-runs').status_code == 409
+
+
+def test_a_stop_before_codex_starts_cancels_the_run(tmp_path, codex):
+    _app, web, connection, project, runner = setup(tmp_path)
+    run_id = enable(web, project, connection, run_now=True).json()['active']['id']
+    claimed = runner._claim()
+    web.post(f'/api/studio/projects/{project}/agent-runs/{run_id}/cancel')
+    runner.execute(claimed)
+    assert web.get(f'/api/studio/projects/{project}/agent-auto').json()['last']['status'] == 'cancelled'
+    assert not codex.exists()
+
+
+def test_a_manual_run_with_auto_research_off_does_not_renew_the_grant(tmp_path, codex):
+    app, web, connection, project, runner = setup(tmp_path)
+    path = tmp_path / 'home' / 'agent-connections' / f'{connection}.json'
+    old = json.loads(path.read_text(encoding='utf-8'))['projects'][project]['grant_id']
+    enable(web, project, connection)
+    web.put(f'/api/studio/projects/{project}/agent-auto', json={'enabled': False})
+    with closing(app.state.studio_store._connect()) as db, db:
+        db.execute('UPDATE studio_agent_grants SET expires_at=? WHERE id=?', (int(time.time()) + 3600, old))
+    web.post(f'/api/studio/projects/{project}/agent-runs')
+    runner.step()
+    assert json.loads(path.read_text(encoding='utf-8'))['projects'][project]['grant_id'] == old
+
+
+def test_a_run_that_writes_nothing_back_is_not_reported_complete(tmp_path, codex, monkeypatch):
+    _app, web, connection, project, runner = setup(tmp_path)
+    monkeypatch.setenv('FAKE_CODEX_MODE', 'nowrite')
+    enable(web, project, connection, run_now=True)
+    runner.step()
+    last = web.get(f'/api/studio/projects/{project}/agent-auto').json()['last']
+    assert last['status'] == 'failed' and '没有写回' in last['error'] and last['summary']
