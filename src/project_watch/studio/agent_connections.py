@@ -80,6 +80,21 @@ def generate_instance(service, client, home, base_url):
                       '授权后调用 authorized_projects，再 select_project 选择需要操作的项目。'}
 
 
+def mark_seen(service, home, connection_id):
+    """Record when a saved instance connection last reached this ProjectWatch. Grants nothing."""
+    from datetime import UTC, datetime
+
+    if len(connection_id or '') != 32 or any(c not in '0123456789abcdef' for c in connection_id):
+        return
+    path = (home / 'agent-connections' / f'{connection_id}.json')
+    if not path.is_file() or path.is_symlink():
+        return
+    try:
+        service.store.set_state('agent_connection_seen:' + connection_id, datetime.now(UTC).isoformat())
+    except Exception:  # a busy database must not fail the client's runtime check
+        return
+
+
 def saved_connections(service, home):
     result = []
     for path in sorted((home / 'agent-connections').glob('*.json')):
@@ -93,7 +108,8 @@ def saved_connections(service, home):
             name = 'projectwatch_' + path.stem[:12]
             text, destination = client_configuration(path, config['client'], name)
             result.append({'connection_id': path.stem, 'client': config['client'], 'configuration': text,
-                           'destination': destination, 'prompt': '请先调用 studio_runtime，再调用 authorized_projects 查看已授权项目。'})
+                           'destination': destination, 'prompt': '请先调用 studio_runtime，再调用 authorized_projects 查看已授权项目。',
+                           'last_seen_at': service.store.get_state('agent_connection_seen:' + path.stem)})
         except (OSError, ValueError, HTTPException):
             continue
     return result

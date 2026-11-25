@@ -65,8 +65,14 @@ def attach_agent_routes(app: FastAPI, service: StudioApplication) -> None:
            app.state.studio_pipeline.monitoring_plan, scoped)
 
     @app.get("/api/studio/agent/runtime")
-    def manifest(response: Response):
+    def manifest(request: Request, response: Response):
         response.headers['Cache-Control'] = 'no-store'
+        from project_watch.studio.agent_connections import mark_seen
+
+        # A bridge names its saved connection, so the setup page can show that the client
+        # really connected; generating a configuration alone never proved it.
+        mark_seen(service, service.materials.settings_store.path.parent,
+                  request.headers.get('X-ProjectWatch-Connection', ''))
         return service.manifest()
 
     @app.post("/api/studio/projects/{project_id}/agent-grants", status_code=201)

@@ -1,0 +1,36 @@
+/* Agent connection: connect first, confirm, then create projects. */
+.agent-clients { display: flex; gap: 10px; margin: 0 0 20px; flex-wrap: wrap; }
+.setup-service .agent-clients label { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 16px; border: 1px solid var(--line-strong);
+  border-radius: 8px; cursor: pointer; font-size: 14px; }
+.setup-service .agent-clients label.selected { border-color: var(--primary); background: var(--primary-soft); }
+.setup-service .agent-clients input { width: 16px; height: 16px; min-height: 0; margin: 0; }
+.agent-clients label:focus-within { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+.agent-steps ol { list-style: none; counter-reset: step; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
+.agent-steps li { counter-increment: step; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; }
+.agent-steps li > span::before { content: counter(step) ". "; color: var(--brass); }
+.agent-waiting { display: flex; align-items: center; gap: 4px; margin: 16px 0 0; color: var(--ink-2); font-size: 14px; }
+.agent-waiting .scope-running { margin: 0 8px 0 0; }
+
+.agent-connected { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 16px;
+  padding: 18px; border: 1px solid var(--ok); border-radius: 10px; background: var(--ok-soft); }
+.agent-connected strong { display: block; font-size: 18px; color: var(--ok); }
+.agent-connected .actions { grid-column: 1 / -1; margin-top: 12px; }
+.agent-check { width: 44px; height: 44px; }
+.agent-check circle { fill: none; stroke: var(--ok); stroke-width: 3; stroke-dasharray: 151; stroke-dashoffset: 151;
+  animation: agent-draw .6s ease-out forwards; }
+.agent-check path { fill: none; stroke: var(--ok); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 36; stroke-dashoffset: 36; animation: agent-draw .35s .5s ease-out forwards; }
+.agent-connected > div:first-of-type { animation: agent-rise .4s .45s ease-out both; }
+@keyframes agent-draw { to { stroke-dashoffset: 0; } }
+@keyframes agent-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .agent-check circle, .agent-check path { animation: none; stroke-dashoffset: 0; }
+  .agent-connected > div:first-of-type { animation: none; }
+}
+
+.agent-ready { display: grid; gap: 12px; }
+.agent-ready p { margin: 0; }
+.agent-grants { margin-top: 16px; display: grid; gap: 8px; font-size: 13px; }
+@media (max-width: 600px) { .agent-steps li { align-items: flex-start; } .agent-connected { grid-template-columns: 1fr; } }
