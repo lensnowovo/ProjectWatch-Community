@@ -256,6 +256,10 @@ class StudioStore:
                 if name not in columns:
                     db.execute(f"ALTER TABLE studio_items ADD COLUMN {name} {ddl}")
             db.execute("CREATE INDEX IF NOT EXISTS studio_items_event ON studio_items(event_id)")
+            # Body coverage on the project page reads these without walking through each item's
+            # stored text and extra data (seconds per page load on a large, busy project).
+            db.execute("CREATE INDEX IF NOT EXISTS studio_items_coverage ON studio_items(project_id, collected_at, "
+                       "category, body_status, url, source)")
             metric_columns = {r[1] for r in db.execute("PRAGMA table_info(studio_metrics)")}
             for name, ddl in (("std_name", "TEXT NOT NULL DEFAULT ''"), ("period_key", "TEXT NOT NULL DEFAULT ''"),
                               ("value_norm", "REAL"), ("norm_unit", "TEXT NOT NULL DEFAULT ''"),
@@ -292,6 +296,11 @@ class StudioStore:
                               ("retryable", "INTEGER NOT NULL DEFAULT 0")):
                 if name not in call_columns:
                     db.execute(f'ALTER TABLE studio_job_calls ADD COLUMN {name} {ddl}')
+            # Per-job activity (task page, round view) reads columns that follow the stored reply in
+            # each row: without a covering index every reply body was read too (23 s for 120 jobs).
+            db.execute('CREATE INDEX IF NOT EXISTS studio_job_calls_activity ON studio_job_calls(job_id, kind, '
+                       'status, response_status, created_at, input_tokens, output_tokens, cache_read_tokens, '
+                       'cache_creation_tokens)')
             db.executescript('''CREATE TABLE IF NOT EXISTS studio_direct_model_calls (
                 id TEXT PRIMARY KEY, provider TEXT NOT NULL, status TEXT NOT NULL,
                 response_status INTEGER, created_at TEXT NOT NULL, finished_at TEXT,
@@ -1084,11 +1093,19 @@ class StudioStore:
         """How much of the recent news was judged on real text, per outcome and per outlet."""
         since = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         with closing(self._connect()) as db:
-            rows = db.execute(
-                """SELECT url, source, body_status,
-                json_extract(CASE WHEN json_valid(extra) THEN extra END, '$.body_prefilter.read') AS prefilter_read
-                FROM studio_items WHERE project_id=?
-                AND collected_at >= ? AND category NOT IN ('paper', 'trial', 'patent')""", (project_id, since)).fetchall()
+            rows = [dict(r) for r in db.execute(
+                """SELECT rowid AS item_rowid, url, source, body_status FROM studio_items WHERE project_id=?
+                AND collected_at >= ? AND category NOT IN ('paper', 'trial', 'patent')""", (project_id, since))]
+            # Only items never read need the prefilter decision kept in their extra data.
+            unread = [r['item_rowid'] for r in rows if not r['body_status']]
+            decided = {}
+            for n in range(0, len(unread), 500):
+                chunk = unread[n:n + 500]
+                decided.update(db.execute(
+                    "SELECT rowid, json_extract(CASE WHEN json_valid(extra) THEN extra END, '$.body_prefilter.read') "
+                    f"FROM studio_items WHERE rowid IN ({','.join('?' * len(chunk))})", chunk).fetchall())
+            for r in rows:
+                r['prefilter_read'] = decided.get(r['item_rowid'])
         # "declined": never fetched because the relevance prefilter judged it a
         # same-name/unrelated item (R44: counted as unreadable, which overstated gaps).
         outcome = {"article": 0, "twin": 0, "summary": 0, "none": 0, "declined": 0}
@@ -1230,6 +1247,23 @@ class StudioStore:
                        (_earliest_published(db, row['project_id'], [*item_ids, *[r[0] for r in db.execute(
                            'SELECT id FROM studio_items WHERE event_id=?', (event_id,))]]), event_id))
             return after_attach(db, row['project_id'], saved)
+
+    def event_dates(self, *, project_id: str | None = None, category: str | None = None) -> list[dict]:
+        """Id, project and news date of each event that list_events would return (not dismissed),
+        without its sources: window counts need only these."""
+        where, args = ["e.status != 'dismissed'"], []
+        if project_id:
+            where.append("e.project_id=?")
+            args.append(project_id)
+        else:
+            where.append("NOT EXISTS (SELECT 1 FROM studio_projects rp WHERE rp.project_id=e.project_id AND rp.status='removed')")
+        if category:
+            where.append("e.category=?")
+            args.append(category)
+        with closing(self._connect()) as db:
+            return [dict(r) for r in db.execute(
+                f"SELECT e.id, e.project_id, {_EVENT_NEWS_DATE} AS news_date FROM studio_events e "
+                f"JOIN projects p ON p.id=e.project_id WHERE {' AND '.join(where)}", args)]
 
     def list_events(self, *, project_id: str | None = None, category: str | None = None,
                     importance: str | None = None, include_dismissed: bool = False,

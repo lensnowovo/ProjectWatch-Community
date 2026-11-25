@@ -84,3 +84,20 @@ def test_no_commercial_or_model_results_can_enter_search_cache(tmp_path):
     for provider in ("wind", "xiniu", "pharmcube", "glm", "model"):
         with pytest.raises(ValueError, match="public search"):
             cache.get((provider, *SIG[1:]), lambda: pytest.fail("must not call provider"))
+
+
+def test_a_search_handed_back_on_exit_is_not_recorded_as_unknown(tmp_path):
+    """Exit between searches must not hold the same query when the job resumes."""
+    from project_watch.studio.execution import JobYield
+    store, pid = make_store(tmp_path)
+    job = store.enqueue(pid, 'collect', input_version='manual:exit')
+
+    def handed_back():
+        raise JobYield()
+    with pytest.raises(JobYield):
+        ProjectQueryCache(store, pid, purpose="external", job_id=job['id']).get(SIG, handed_back)
+    original = [{"title": "Original", "url": "https://public.example/report", "extra": {}}]
+    hits, cached = ProjectQueryCache(store, pid, purpose="external", job_id=job['id']).get(SIG, lambda: original)
+    assert hits[0]["title"] == "Original" and not cached
+    with closing(store._connect()) as db:
+        assert not db.execute("SELECT 1 FROM studio_query_uses WHERE outcome IN ('unknown','held')").fetchone()

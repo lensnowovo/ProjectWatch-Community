@@ -2497,7 +2497,8 @@ class Pipeline:
         from project_watch.studio.execution import JobExecution
 
         execution = JobExecution(self.store, job, cancel_requested=getattr(
-            self._execution_state, 'cancel_requested', None)) if job.get("lease_token") else None
+            self._execution_state, 'cancel_requested', None), stop_requested=getattr(
+            self._execution_state, 'stop_requested', None)) if job.get("lease_token") else None
         if execution:
             execution.parallel_width = self.parallel_width()
             execution.thread_scope = self._thread_scope(execution)
@@ -2757,7 +2758,9 @@ class StudioWorker:
         heartbeat_thread = threading.Thread(target=heartbeat, name="studio-job-lease", daemon=True)
         heartbeat_thread.start()
         previous_cancel = getattr(self.pipeline._execution_state, 'cancel_requested', None)
+        previous_stop = getattr(self.pipeline._execution_state, 'stop_requested', None)
         self.pipeline._execution_state.cancel_requested = lambda: getattr(self, '_cancel_pending', False)
+        self.pipeline._execution_state.stop_requested = self._stop.is_set
         try:
             self.pipeline.run(job)
             self.pipeline.store.finish(job["id"], lease_token=job["lease_token"])
@@ -2793,6 +2796,7 @@ class StudioWorker:
         finally:
             heartbeat_stop.set()
             self.pipeline._execution_state.cancel_requested = previous_cancel
+            self.pipeline._execution_state.stop_requested = previous_stop
             heartbeat_thread.join(timeout=1)
             self._current_job = None
             self._stalled_job = None
