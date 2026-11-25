@@ -56,6 +56,8 @@ python -m scripts.build_windows_installer --bundle <已校验的全新bundle> --
 `--test-root <全新隔离路径>` 会把程序、数据、快捷方式和 HKCU 登记全部编译为独立测试目标。
 测试包不能作为用户安装包发布。运行 `tests/windows_installer_smoke.py --help` 查看实际安装演练。
 
+每个候选版本还要做一次“从上一发布版升级”的演练：`--previous-bundle <上一发布版的 bundle>` 先装上一版，再用本候选原样升级。两个都从同一份源码构建的安装包不会出现启动器差异，0.3.1b1 的一个候选曾因此通过演练却无法从 0.3.0 升级。
+
 | 项目 | Windows 用户版位置/行为 |
 |---|---|
 | 程序 | `%LOCALAPPDATA%/Programs/ProjectWatch/versions/<内容标识>` |
