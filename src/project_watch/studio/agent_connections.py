@@ -80,9 +80,44 @@ def generate_instance(service, client, home, base_url):
                       '授权后调用 authorized_projects，再 select_project 选择需要操作的项目。'}
 
 
+def mark_seen(service, home, connection_id):
+    """Record when a saved instance connection last reached this ProjectWatch. Grants nothing."""
+    from datetime import UTC, datetime
+
+    if len(connection_id or '') != 32 or any(c not in '0123456789abcdef' for c in connection_id):
+        return
+    path = (home / 'agent-connections' / f'{connection_id}.json')
+    if not path.is_file() or path.is_symlink():
+        return
+    try:
+        key, now = 'agent_connection_seen:' + connection_id, datetime.now(UTC)
+        last = service.store.get_state(key)
+        # Every bridge tool call checks the runtime: record at most once a minute.
+        if last and (now - datetime.fromisoformat(last)).total_seconds() < 60:
+            return
+        service.store.set_state(key, now.isoformat())
+    except Exception:  # a busy database must not fail the client's runtime check
+        return
+
+
+def _seen_at(service, connection_id):
+    try:
+        return service.store.get_state('agent_connection_seen:' + connection_id)
+    except Exception:  # a busy database leaves the connection listed as not seen yet
+        return None
+
+
+def _created(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0
+
+
 def saved_connections(service, home):
     result = []
-    for path in sorted((home / 'agent-connections').glob('*.json')):
+    # Oldest first, so the page reuses the configuration generated last.
+    for path in sorted((home / 'agent-connections').glob('*.json'), key=lambda p: (_created(p), p.name)):
         try:
             connection_path(home, path.stem)
             config = json.loads(path.read_text(encoding='utf-8'))
@@ -93,7 +128,8 @@ def saved_connections(service, home):
             name = 'projectwatch_' + path.stem[:12]
             text, destination = client_configuration(path, config['client'], name)
             result.append({'connection_id': path.stem, 'client': config['client'], 'configuration': text,
-                           'destination': destination, 'prompt': '请先调用 studio_runtime，再调用 authorized_projects 查看已授权项目。'})
+                           'destination': destination, 'prompt': '请先调用 studio_runtime，再调用 authorized_projects 查看已授权项目。',
+                           'last_seen_at': _seen_at(service, path.stem)})
         except (OSError, ValueError, HTTPException):
             continue
     return result

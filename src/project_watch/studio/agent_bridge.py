@@ -251,7 +251,8 @@ class InstanceAgentClient:
                 config['url'] = existing_url(Path(config['desktop_marker']))
             # Validate origin before any network access; check identity before sending grants.
             AgentClient(config['url'], config['instance_id'], 'validation', 'pwa_validation')
-            status, raw = self.transport('GET', config['url'].rstrip('/') + '/api/studio/agent/runtime', {}, None)
+            status, raw = self.transport('GET', config['url'].rstrip('/') + '/api/studio/agent/runtime',
+                                         {'X-ProjectWatch-Connection': self.path.stem}, None)
             runtime = json.loads(raw)
             if status != 200 or runtime.get('instance_id') != config['instance_id'] or runtime.get('schema_version') != 1:
                 raise ValueError('changed instance')

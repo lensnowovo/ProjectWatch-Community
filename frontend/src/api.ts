@@ -882,7 +882,7 @@ export const api = {
         decision, relation_type: row.relation_type ?? "unknown", reason: decision === "exclude" ? "用户排除该范围的竞争关系" : "用户撤销排除" }],
     }),
   settings: () => request<SettingsView>("GET", "/api/studio/settings"),
-  instanceAgentConnections: () => request<{ connection_id: string; client: 'codex' | 'workbuddy'; configuration: string; destination: string; prompt: string }[]>(
+  instanceAgentConnections: () => request<{ connection_id: string; client: 'codex' | 'workbuddy'; configuration: string; destination: string; prompt: string; last_seen_at: string | null }[]>(
     "GET", '/api/studio/agent-connections'),
   instanceAgentConnection: (client: "codex" | "workbuddy") => request<{ connection_id: string; configuration: string; destination: string; prompt: string }>(
     "POST", '/api/studio/agent-connection', { client }),
