@@ -34,3 +34,5 @@
 .agent-ready p { margin: 0; }
 .agent-grants { margin-top: 16px; display: grid; gap: 8px; font-size: 13px; }
 @media (max-width: 600px) { .agent-steps li { align-items: flex-start; } .agent-connected { grid-template-columns: 1fr; } }
+.agent-stale { display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 10px; }
+.agent-stale strong { display: block; font-size: 16px; }

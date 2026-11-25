@@ -31,12 +31,16 @@ export default function AgentsPage() {
 
   // A configuration just generated waits for its own first contact; otherwise the newest connection
   // of this client that has reached ProjectWatch counts as connected.
+  const mine = instances.filter(i => i.client === client);
+  const latestSeen = mine.filter(i => i.last_seen_at).sort((a, b) => (b.last_seen_at ?? "").localeCompare(a.last_seen_at ?? ""))[0];
   const fresh = generated && generated.client === client
     ? instances.find(i => i.connection_id === generated.connection_id) ?? generated : null;
-  const waiting = fresh && !fresh.last_seen_at ? fresh : null;
-  const seen = waiting ? undefined : (fresh?.last_seen_at ? fresh : instances.filter(i => i.client === client && i.last_seen_at)
-    .sort((a, b) => (b.last_seen_at ?? "").localeCompare(a.last_seen_at ?? ""))[0]);
-  useVisiblePoll(reload, 3000, !!waiting);
+  // A saved connection that never reported (set up before this page could tell) is reused, not duplicated.
+  const waiting = fresh ? (fresh.last_seen_at ? null : fresh) : latestSeen ? null : mine[mine.length - 1] ?? null;
+  const seen = waiting ? undefined : (fresh?.last_seen_at ? fresh : latestSeen);
+  // Every tool call from a connected client reports in; an old record only says it connected once.
+  const live = !!seen?.last_seen_at && Date.now() - Date.parse(seen.last_seen_at) < 30 * 60 * 1000;
+  useVisiblePoll(reload, waiting || (seen && !live) ? 3000 : 30000);
 
   const generate = async () => {
     setBusy(true); setError(null); setCopied("");
@@ -66,8 +70,8 @@ export default function AgentsPage() {
         </label>)}
       </div>
 
-      {seen ? <Connected client={client} seen={seen} onNew={startProject} hasProjects={projects.length > 0}
-          onReconnect={generate} busy={busy} />
+      {seen ? <Connected client={client} seen={seen} live={live} onNew={startProject} hasProjects={projects.length > 0}
+          onReconnect={generate} busy={busy} copy={copy} copied={copied} />
         : waiting ? <div className="agent-steps">
           <ol>
             <li><span>把配置放进 {waiting.destination}，保存后重新载入 MCP</span>
@@ -76,8 +80,10 @@ export default function AgentsPage() {
               <button className="btn btn-sm" onClick={() => copy(waiting.prompt, "检查")}>{copied === "检查" ? "已复制" : "复制检查指令"}</button></li>
           </ol>
           <details><summary>查看配置</summary><pre className="agent-config">{waiting.configuration}</pre></details>
-          <p className="agent-waiting" role="status"><span className="scope-running" aria-hidden="true" />
+          <p className="agent-waiting"><span className="scope-running" aria-hidden="true" />
             等待 {LABEL[client]} 连接… 收到后这里会自动更新。</p>
+          <p className="muted small">ProjectWatch 需保持打开。配置含授权信息，请勿分享配置或数据目录。</p>
+          {generated && latestSeen && <button className="btn btn-ghost btn-sm" onClick={() => setGenerated(null)}>取消，继续用原连接</button>}
         </div>
         : <button className="btn btn-primary" disabled={busy} onClick={generate}>{busy ? "正在准备…" : `生成 ${LABEL[client]} 连接配置`}</button>}
     </section>
@@ -90,18 +96,29 @@ export default function AgentsPage() {
             onError={setError} />}
     </section>}
 
-    {seen && projects.length > 0 && <ExistingProjects client={client} connectionId={seen.connection_id} projects={projects}
+    {seen && projects.length > 0 && <ExistingProjects key={client + seen.connection_id} client={client} connectionId={seen.connection_id} projects={projects}
       initial={params.get("project") ?? ""} copy={copy} copied={copied} onError={setError} />}
 
+    <p className="sr-only" role="status" aria-live="polite">{seen && live ? `${LABEL[client]} 已连接` : waiting ? `等待 ${LABEL[client]} 连接` : ""}</p>
     <ErrorNote error={error} />
     <p className="muted small">需要独立后台监控？<Link to="/setup">配置模型与搜索 API</Link>。已有项目的模式和状态不会因切换入口而改变。</p>
   </Page>;
 }
 
-function Connected({ client, seen, onNew, hasProjects, onReconnect, busy }: {
-  client: Client; seen: Instance; onNew: () => void; hasProjects: boolean; onReconnect: () => void; busy: boolean;
+function Connected({ client, seen, live, onNew, hasProjects, onReconnect, busy, copy, copied }: {
+  client: Client; seen: Instance; live: boolean; onNew: () => void; hasProjects: boolean; onReconnect: () => void; busy: boolean;
+  copy: (text: string, label: string) => void; copied: string;
 }) {
-  return <div className="agent-connected" role="status">
+  if (!live) return <div className="agent-stale">
+    <div><strong>上次连接 {relTime(seen.last_seen_at)}</strong>
+      <span className="muted small">在 {LABEL[client]} 里发送连接检查，确认后这里会显示已连接。</span></div>
+    <div className="actions">
+      <button className="btn btn-primary" onClick={() => copy(seen.prompt, "复查")}>{copied === "复查" ? "已复制" : "复制检查指令"}</button>
+      <button className="btn" onClick={onNew}>{hasProjects ? "新建项目" : "新建第一个项目"}</button>
+      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
+    </div>
+  </div>;
+  return <div className="agent-connected">
     <svg className="agent-check" viewBox="0 0 52 52" aria-hidden="true">
       <circle cx="26" cy="26" r="24" /><path d="M15 27 l7 7 l15 -16" />
     </svg>
@@ -125,27 +142,34 @@ function NewAgentProject({ client, connectionId, nameField, onDone, onError }: {
   const [internal, setInternal] = useState(false);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Kept when authorization fails, so a retry authorizes it instead of creating a second project.
+  const [made, setMade] = useState<Project | null>(null);
   const create = async () => {
     setBusy(true); onError(null);
     try {
-      const drafts: string[] = [];
-      for (const file of files) drafts.push((await api.draft(file)).draft_id);
-      const project = await api.createAgentProject(name.trim(), drafts);
+      let project = made;
+      if (!project) {
+        const drafts: string[] = [];
+        for (const file of files) drafts.push((await api.draft(file)).draft_id);
+        project = await api.createAgentProject(name.trim(), drafts);
+        setMade(project);
+      }
       const connection = await api.agentConnection(project.id, client, internal && files.length > 0, connectionId);
       onDone({ project, connection });
     } catch (e) { onError(e); } finally { setBusy(false); }
   };
   return <>
-    <label>公司名称<input ref={nameField} value={name} disabled={busy} onChange={e => setName(e.target.value)}
+    {made && <p className="muted small">{made.name} 已建立，授权未完成；再点一次只补授权。</p>}
+    <label>公司名称<input ref={nameField} value={name} disabled={busy || !!made} onChange={e => setName(e.target.value)}
       placeholder="输入名字，交给 Agent 核对与研究" /></label>
     <label>内部材料 · 可选<input type="file" multiple disabled={busy} accept=".pdf,.docx,.pptx,.xlsx,.txt"
-      onChange={e => setFiles(Array.from(e.target.files ?? []))} /></label>
+      onChange={e => { setFiles(Array.from(e.target.files ?? [])); setInternal(false); }} /></label>
     {files.length > 0 && <label className="setup-consent"><input type="checkbox" checked={internal} disabled={busy}
       onChange={e => setInternal(e.target.checked)} />允许 {LABEL[client]} 读取这些内部材料（可能发送至它的模型服务）</label>}
     <label className="setup-consent"><input type="checkbox" checked={consent} disabled={busy}
       onChange={e => setConsent(e.target.checked)} />允许 {LABEL[client]} 读取本项目、写回结果并调整监控范围，30 天，可撤销</label>
     <button className="btn btn-primary" onClick={create} disabled={busy || !name.trim() || !consent}>
-      {busy ? "正在建立…" : "建立项目并授权"}</button>
+      {busy ? "正在建立…" : made ? "补授权" : "建立项目并授权"}</button>
   </>;
 }
 

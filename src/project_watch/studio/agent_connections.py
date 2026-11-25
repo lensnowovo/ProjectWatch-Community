@@ -90,7 +90,12 @@ def mark_seen(service, home, connection_id):
     if not path.is_file() or path.is_symlink():
         return
     try:
-        service.store.set_state('agent_connection_seen:' + connection_id, datetime.now(UTC).isoformat())
+        key, now = 'agent_connection_seen:' + connection_id, datetime.now(UTC)
+        last = service.store.get_state(key)
+        # Every bridge tool call checks the runtime: record at most once a minute.
+        if last and (now - datetime.fromisoformat(last)).total_seconds() < 60:
+            return
+        service.store.set_state(key, now.isoformat())
     except Exception:  # a busy database must not fail the client's runtime check
         return
 
