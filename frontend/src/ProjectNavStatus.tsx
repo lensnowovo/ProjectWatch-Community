@@ -3,7 +3,7 @@ import { isMoving, needsAttention, projectListWork } from "./workState";
 
 export default function ProjectNavStatus({ project, stale = false }: { project: Pick<Project, "activated" | "status" | "nav_alerts" | "job_status" | "job_runtime" | "worker_state" | "worker_health" | "execution_mode">; stale?: boolean }) {
   if (stale) return <span className="project-status-dot status-idle" role="img" aria-label="状态暂时无法读取" title="状态暂时无法读取" />;
-  if (project.execution_mode === "agent") return <span className="project-status-dot status-idle" role="img" aria-label="Agent 按需更新" title="Agent 按需更新" />;
+  if (project.execution_mode === "agent") return <span className="project-status-dot status-idle" role="img" aria-label="由 Agent 更新" title="由 Agent 更新" />;
   const alerts = project.nav_alerts ?? [];
   const known = Array.isArray(project.nav_alerts);
   const paused = project.status === "paused";

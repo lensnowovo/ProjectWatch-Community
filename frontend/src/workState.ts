@@ -53,7 +53,7 @@ export function isCoverageNote(job: TaskJob) {
 
 export function projectListWork(p: Pick<Project, "job_runtime" | "job_status" | "worker_state" | "worker_health" | "status" | "execution_mode">) {
   if (p.job_runtime) return p.job_runtime;
-  if (p.execution_mode === "agent") return {state:"agent",label:"Agent 按需更新"};
+  if (p.execution_mode === "agent") return {state:"agent",label:"由 Agent 更新"};
   if (p.worker_health === "stalled" || p.worker_health === "degraded") return {state:"blocked",label:"后台受阻，等待恢复"};
   if (p.status === "paused") return {state:"paused",label:"监控已暂停"};
   if (p.worker_state === "stopped") return {state:"offline",label:"自动更新未运行"};
@@ -118,7 +118,7 @@ export function projectWork(detail: ProjectDetail) {
       state = detail.execution?.parsing === "stopped" ? "offline" : parsing ? "running" : "queued";
       phase = "read"; stage = parsing?.name ?? "";
       label = state === "running" ? "正在识别资料" : state === "offline" ? "资料解析等待后台启动" : "资料等待识别";
-    } else if (!job && detail.project.execution_mode === "agent") { state = "agent"; label = "Agent 按需更新"; }
+    } else if (!job && detail.project.execution_mode === "agent") { state = "agent"; label = "由 Agent 更新"; }
     else if (!job && detail.project.status === "paused") { state = "paused"; label = "自动监控已暂停"; }
     else if (!job && detail.execution?.analysis === "stopped") { state = "offline"; label = "自动更新未运行"; }
     else if (!job && !detail.project.activated) { label = "尚未启用监控"; }

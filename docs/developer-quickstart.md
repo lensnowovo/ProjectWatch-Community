@@ -150,6 +150,7 @@ $env:PROJECT_WATCH_HOME = '<回执中的home>'
 
 Studio 设置页面可生成项目级接入授权。需要现有 Codex CLI 时，可在仓库根运行
 `python scripts/connect_codex.py --url http://127.0.0.1:8901 --project <project-id> --directory <private-connections-directory>`。
-连接文件含凭据，目标目录必须位于源码外；这会配置本机客户端，但不主动执行付费模型/搜索任务。
+连接文件含凭据，目标目录必须位于源码外；生成配置本身不执行付费模型/搜索任务。
+本机装有并登录了 Codex CLI 时，使用者可为 Agent 项目开启“Codex 自动研究”：ProjectWatch 以 `codex exec` 在后台启动它，见[架构说明](developer-architecture.md#codex-自动研究2026-11-25)。
 接入后按项目版本和幂等契约更新，不允许 Agent 直接编辑私有 SQLite。
 使用者可撤销授权，撤销后的访问应被拒绝。真实外部客户端登录与权限需另行确认。

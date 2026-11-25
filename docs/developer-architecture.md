@@ -142,3 +142,18 @@ Fact-cache lookup skips other page scopes of the same fact version, while incomp
 versions or same-scope contracts stop fallback. Evidence review is unchanged.
 The global-comparison guard accepts dated, quantified single-metric ranks without
 requiring magic sample wording, but never substitutes scope checks for source support.
+
+## Codex 自动研究（2026-11-25）
+
+`studio/agent_runs.py`。Agent 项目由使用者开启后，ProjectWatch 用本机 Codex CLI 的 `codex exec` 发起研究，
+Codex 经同一个 MCP 桥读取并写回，写入规则与手动发指令时相同。
+
+- **隔离**：`--ignore-user-config`，只加载本实例的 MCP 桥（项目授权限定范围）与 Codex 自带联网搜索；
+  使用者自己配置的其他 MCP 服务器不会加载。沙箱 `read-only`，不在本机执行命令。只有这个桥的工具预先批准。
+- **触发**：建项目时勾选、项目页“现在更新”、按 `cadence_days`（默认 7 天）从上一次发起时间起算的定时。
+  同一项目同时只有一轮；全局一次运行一轮。
+- **结果**：退出码 0 记为完成；非 0 记为未完成；超过 45 分钟、使用者停止或应用退出时终止进程树，记为
+  `unknown`（停止前可能已写回部分结果）。任何一轮都不自动重发；下一轮按计划另起。启动时遗留的 `running` 记为 `unknown`。
+- **授权**：运行前检查连接文件里的项目授权；已撤销则关闭自动研究；剩余不足 3 天且自动研究开启时续期（撤销旧授权）。
+- **额度**：消耗使用者自己的 Codex 额度；记录每轮的输入/输出 token。运行日志在资料目录 `agent-runs/` 下，不进 Git。
+
