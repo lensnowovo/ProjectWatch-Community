@@ -27,8 +27,12 @@ LEASE_RENEW_BELOW = timedelta(seconds=60)
 _SLOT_INIT = threading.Lock()
 
 
-class JobYield(Exception):
-    """A completed durable phase gives the single worker back to the queue."""
+class JobYield(BaseException):
+    """A completed durable phase gives the single worker back to the queue.
+
+    Not an Exception: steps that record "any error" as their own failure must let it pass,
+    or a hand-back on exit would be saved as a failed step.
+    """
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS studio_job_calls (
@@ -100,9 +104,10 @@ def _diagnostic_stage(prefix, key):
 
 
 class JobExecution:
-    def __init__(self, store, job, *, budgets=None, cancel_requested=None):
+    def __init__(self, store, job, *, budgets=None, cancel_requested=None, stop_requested=None):
         self.store, self.job = store, job
         self.cancel_requested = cancel_requested or (lambda: False)
+        self.stop_requested = stop_requested or (lambda: False)
         # The legacy argument is accepted for callers, but values never limit work.
         self.budgets = dict.fromkeys(("search", "model", "open_data", "page", "site", "commercial"))
         self.allowed_call_kinds = None  # Capability boundary, independent of accounting.
@@ -121,7 +126,7 @@ class JobExecution:
             self.allowed_call_kinds = previous
 
     def yield_if_due(self):
-        if time.monotonic() - self.slice_started >= self.slice_seconds:
+        if self.stop_requested() or time.monotonic() - self.slice_started >= self.slice_seconds:
             raise JobYield()
 
     def _progress(self, db):
@@ -282,6 +287,11 @@ class JobExecution:
             self._progress(db)
 
     def call(self, kind, key, transport, *, provider="", read_only=False, public_read=False, timeout=300):
+        if self.stop_requested():
+            # Exit was requested: hand the job back before sending anything new. Answers already
+            # received are saved and replayed on resume; a long extraction kept exit waiting for
+            # hours because it only ended at its last batch.
+            raise JobYield()
         with self._model_slot(kind):
             return self._call(kind, key, transport, provider=provider, read_only=read_only,
                               public_read=public_read, timeout=timeout)
