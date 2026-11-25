@@ -100,9 +100,24 @@ def mark_seen(service, home, connection_id):
         return
 
 
+def _seen_at(service, connection_id):
+    try:
+        return service.store.get_state('agent_connection_seen:' + connection_id)
+    except Exception:  # a busy database leaves the connection listed as not seen yet
+        return None
+
+
+def _created(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0
+
+
 def saved_connections(service, home):
     result = []
-    for path in sorted((home / 'agent-connections').glob('*.json')):
+    # Oldest first, so the page reuses the configuration generated last.
+    for path in sorted((home / 'agent-connections').glob('*.json'), key=lambda p: (_created(p), p.name)):
         try:
             connection_path(home, path.stem)
             config = json.loads(path.read_text(encoding='utf-8'))
@@ -114,7 +129,7 @@ def saved_connections(service, home):
             text, destination = client_configuration(path, config['client'], name)
             result.append({'connection_id': path.stem, 'client': config['client'], 'configuration': text,
                            'destination': destination, 'prompt': '请先调用 studio_runtime，再调用 authorized_projects 查看已授权项目。',
-                           'last_seen_at': service.store.get_state('agent_connection_seen:' + path.stem)})
+                           'last_seen_at': _seen_at(service, path.stem)})
         except (OSError, ValueError, HTTPException):
             continue
     return result

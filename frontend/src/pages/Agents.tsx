@@ -30,8 +30,15 @@ export default function AgentsPage() {
   const nameField = useRef<HTMLInputElement>(null);
   const reduce = useReducedMotion();
 
-  const reload = async () => setInstances(await api.instanceAgentConnections());
-  useEffect(() => { reload().catch(setError); api.projects().then(setProjects).catch(setError); }, []);
+  // A failed list load is shown until a later poll succeeds; errors from actions stay until the next action.
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const reload = async () => {
+    try { setInstances(await api.instanceAgentConnections()); setLoadError(null); }
+    catch (e) { setLoadError(e); throw e; }
+  };
+  // After a panel replaces the control that was used, focus moves into the new panel instead of the page.
+  const [moveFocus, setMoveFocus] = useState(false);
+  useEffect(() => { reload().catch(() => undefined); api.projects().then(setProjects).catch(setError); }, []);
 
   // A configuration just generated waits for its own first contact; otherwise the newest connection
   // of this client that has reached ProjectWatch counts as connected.
@@ -44,15 +51,16 @@ export default function AgentsPage() {
   const seen = waiting ? undefined : (fresh?.last_seen_at ? fresh : latestSeen);
   // Every tool call from a connected client reports in; an old record only says it connected once.
   const live = !!seen?.last_seen_at && Date.now() - Date.parse(seen.last_seen_at) < 30 * 60 * 1000;
-  useVisiblePoll(reload, waiting || (seen && !live) ? 3000 : 30000);
+  // Fast while waiting for a first contact (or the first load); a quiet client is only checked now and then.
+  useVisiblePoll(reload, !instances || waiting ? 3000 : seen && !live ? 10000 : 30000);
   const state: LinkState = waiting ? "waiting" : seen ? (live ? "live" : "stale") : "idle";
 
   const generate = async () => {
-    setBusy(true); setError(null); setCopied("");
+    setBusy(true); setError(null); setCopied(""); setCreating(false); setResult(null);
     try {
       const made = await api.instanceAgentConnection(client);
       await api.saveSettings({ preferred_mode: "agent" });
-      setGenerated({ ...made, client, last_seen_at: null });
+      setGenerated({ ...made, client, last_seen_at: null }); setMoveFocus(true);
       await reload();
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
@@ -61,7 +69,7 @@ export default function AgentsPage() {
     catch { setError(new Error("无法复制，请手动选择文本。")); }
   };
   const startProject = () => { setCreating(true); setResult(null); setTimeout(() => nameField.current?.focus(), 80); };
-  const step = state === "idle" ? 0 : state === "live" ? (result ? 3 : 2) : 1;
+  const step = state === "idle" ? 0 : result ? 3 : state === "live" ? 2 : 1;
   const panel = reduce
     ? { initial: false as const, animate: { opacity: 1 }, exit: { opacity: 1 }, transition: { duration: 0 } }
     : { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: -6 },
@@ -78,7 +86,7 @@ export default function AgentsPage() {
       <div className="agent-clients" role="radiogroup" aria-label="客户端">
         {(Object.keys(LABEL) as Client[]).map(c => <label key={c} className={client === c ? "selected" : ""}>
           <input type="radio" name="agent-client" checked={client === c} disabled={busy}
-            onChange={() => { setClient(c); setCopied(""); setCreating(false); setResult(null); }} />
+            onChange={() => { setClient(c); setCopied(""); setCreating(false); setResult(null); setMoveFocus(false); }} />
           <span><strong>{LABEL[c]}</strong><small>{HINT[c]}</small></span>
         </label>)}
       </div>
@@ -87,17 +95,17 @@ export default function AgentsPage() {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div key={client + state} className="agent-panel" {...panel}>
           {seen ? <Connected client={client} seen={seen} live={live} onNew={startProject} hasProjects={projects.length > 0}
-              onReconnect={generate} busy={busy} copy={copy} copied={copied} />
+              onReconnect={generate} busy={busy} copy={copy} copied={copied} focus={moveFocus} />
             : waiting ? <div className="agent-steps">
               <ol>
                 <li><span><b>放入配置</b><small>写入 {waiting.destination}，保存后重新载入 MCP</small></span>
-                  <CopyButton done={copied === "配置"} onClick={() => copy(waiting.configuration, "配置")}>复制配置</CopyButton></li>
+                  <CopyButton autoFocus={moveFocus} done={copied === "配置"} onClick={() => copy(waiting.configuration, "配置")}>复制配置</CopyButton></li>
                 <li><span><b>发送连接检查</b><small>在 {LABEL[client]} 里发送，收到后这里自动变为已连接</small></span>
                   <CopyButton done={copied === "检查"} onClick={() => copy(waiting.prompt, "检查")}>复制检查指令</CopyButton></li>
               </ol>
               <details><summary>查看配置</summary><pre className="agent-config">{waiting.configuration}</pre></details>
               <p className="muted small">ProjectWatch 需保持打开。配置含授权信息，请勿分享配置或数据目录。</p>
-              {generated && latestSeen && <button className="btn btn-ghost btn-sm" onClick={() => setGenerated(null)}>取消，继续用原连接</button>}
+              {generated && latestSeen && <button className="btn btn-ghost btn-sm" onClick={() => { setGenerated(null); setMoveFocus(true); }}>取消，继续用原连接</button>}
             </div>
             : <button className="btn btn-primary" disabled={busy} onClick={generate}>{busy ? "正在准备…" : `生成 ${LABEL[client]} 连接配置`}</button>}
         </motion.div>
@@ -110,7 +118,7 @@ export default function AgentsPage() {
         <h2 id="agent-project">新建项目</h2>
         {result ? <ProjectReady client={client} result={result} copied={copied} copy={copy} onAnother={startProject} />
           : <NewAgentProject client={client} connectionId={seen.connection_id} nameField={nameField}
-              onDone={async (value) => { setResult(value); setCreating(false); setProjects(await api.projects()); }}
+              onDone={async (value) => { setResult(value); setCreating(false); setMoveFocus(true); setProjects(await api.projects()); }}
               onError={setError} />}
       </motion.section>}
     </AnimatePresence>
@@ -119,7 +127,7 @@ export default function AgentsPage() {
       initial={params.get("project") ?? ""} copy={copy} copied={copied} onError={setError} />}
 
     <p className="sr-only" role="status" aria-live="polite">{seen && live ? `${LABEL[client]} 已连接` : waiting ? `等待 ${LABEL[client]} 连接` : ""}</p>
-    <ErrorNote error={error} />
+    <ErrorNote error={error ?? loadError} />
     <p className="muted small">需要独立后台监控？<Link to="/setup">配置模型与搜索 API</Link>。已有项目的模式和状态不会因切换入口而改变。</p>
   </Page>;
 }
@@ -159,23 +167,25 @@ function ConnectionHero({ client, state }: { client: Client; state: LinkState })
   </div>;
 }
 
-function CopyButton({ done, onClick, children, primary }: { done: boolean; onClick: () => void; children: React.ReactNode; primary?: boolean }) {
-  return <button className={`btn ${primary ? "btn-primary" : "btn-sm"} agent-copy${done ? " is-done" : ""}`} onClick={onClick}>
+function CopyButton({ done, onClick, children, primary, autoFocus }: {
+  done: boolean; onClick: () => void; children: React.ReactNode; primary?: boolean; autoFocus?: boolean;
+}) {
+  return <button autoFocus={autoFocus} className={`btn ${primary ? "btn-primary" : "btn-sm"} agent-copy${done ? " is-done" : ""}`} onClick={onClick}>
     {done && <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5 l3 3 l6 -7" /></svg>}
     {done ? "已复制" : children}</button>;
 }
 
 const sinceSeen = (iso: string | null) => iso && Date.now() - Date.parse(iso) < 60_000 ? "刚刚" : relTime(iso);
 
-function Connected({ client, seen, live, onNew, hasProjects, onReconnect, busy, copy, copied }: {
+function Connected({ client, seen, live, onNew, hasProjects, onReconnect, busy, copy, copied, focus }: {
   client: Client; seen: Instance; live: boolean; onNew: () => void; hasProjects: boolean; onReconnect: () => void; busy: boolean;
-  copy: (text: string, label: string) => void; copied: string;
+  copy: (text: string, label: string) => void; copied: string; focus: boolean;
 }) {
   if (!live) return <div className="agent-stale">
     <div><strong>上次连接 {relTime(seen.last_seen_at)}</strong>
       <span className="muted small">在 {LABEL[client]} 里发送连接检查，确认后这里会显示已连接。</span></div>
     <div className="actions">
-      <CopyButton primary done={copied === "复查"} onClick={() => copy(seen.prompt, "复查")}>复制检查指令</CopyButton>
+      <CopyButton primary autoFocus={focus} done={copied === "复查"} onClick={() => copy(seen.prompt, "复查")}>复制检查指令</CopyButton>
       <button className="btn" onClick={onNew}>{hasProjects ? "新建项目" : "新建第一个项目"}</button>
       <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
     </div>
@@ -183,7 +193,7 @@ function Connected({ client, seen, live, onNew, hasProjects, onReconnect, busy, 
   return <div className="agent-connected">
     <span className="muted small">最近确认 {sinceSeen(seen.last_seen_at)} · 本机连接 {seen.connection_id.slice(0, 8)}</span>
     <div className="actions">
-      <button className="btn btn-primary" onClick={onNew}>{hasProjects ? "新建项目" : "新建第一个项目"}</button>
+      <button className="btn btn-primary" autoFocus={focus} onClick={onNew}>{hasProjects ? "新建项目" : "新建第一个项目"}</button>
       <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onReconnect}>重新生成配置</button>
     </div>
   </div>;
@@ -236,7 +246,7 @@ function ProjectReady({ client, result, copied, copy, onAnother }: {
   return <div className="agent-ready">
     <p><strong>{result.project.name}</strong> 已建好并授权给 {LABEL[client]}。把研究指令发给它即可开始。</p>
     <div className="actions">
-      <CopyButton primary done={copied === "研究"} onClick={() => copy(result.connection.prompt, "研究")}>复制研究指令</CopyButton>
+      <CopyButton primary autoFocus done={copied === "研究"} onClick={() => copy(result.connection.prompt, "研究")}>复制研究指令</CopyButton>
       <Link className="btn" to={`/projects/${result.project.id}`}>查看项目</Link>
       <button className="btn btn-ghost" onClick={onAnother}>再建一个</button>
     </div>

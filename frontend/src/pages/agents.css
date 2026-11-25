@@ -85,7 +85,7 @@
   .agent-progress li:not(.current) > span:nth-child(2) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .agent-hero *, .agent-copy svg, .agent-progress * { animation: none !important; transition: none !important; }
+  .agent-hero, .agent-hero *, .agent-copy svg, .agent-progress *, .agent-progress li::after { animation: none !important; transition: none !important; }
   .agent-hero.is-live .beam { stroke-dashoffset: 0; }
   .agent-hero.is-live .badge { opacity: 1; }
   .agent-copy svg { stroke-dashoffset: 0; }

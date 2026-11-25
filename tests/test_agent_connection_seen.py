@@ -42,3 +42,27 @@ def test_the_bridge_names_its_connection_when_it_checks_the_runtime(tmp_path):
     InstanceAgentClient(path, transport=transport).runtime()
     assert sent[0]['X-ProjectWatch-Connection'] == connection['connection_id']
     assert connections(client)[0]['last_seen_at']
+
+
+def test_connections_list_oldest_first_and_survive_a_busy_database(tmp_path):
+    import os
+    import sqlite3
+    app, client = web(tmp_path)
+    ids = [client.post('/api/studio/agent-connection', json={'client': 'codex'}).json()['connection_id'] for _ in range(3)]
+    for age, connection_id in enumerate(reversed(ids)):  # the last generated is the newest file
+        path = tmp_path / 'agent-connections' / f'{connection_id}.json'
+        os.utime(path, (1_700_000_000 - age * 60, 1_700_000_000 - age * 60))
+    assert [c['connection_id'] for c in connections(client)] == ids
+    store = app.state.studio_application.store
+    original = store.get_state
+
+    def busy(key):
+        if key.startswith('agent_connection_seen:'):
+            raise sqlite3.OperationalError('database is locked')
+        return original(key)
+    store.get_state = busy
+    try:
+        listed = connections(client)
+    finally:
+        store.get_state = original
+    assert [c['last_seen_at'] for c in listed] == [None, None, None]
