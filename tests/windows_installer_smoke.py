@@ -76,7 +76,19 @@ def main(args):
     # Build a second complete synthetic edition, before any test destination exists.
     second_bundle = args.out/'second-bundle'
     second_out = args.out/'second-installer'
-    if args.second_installer:
+    if args.previous_bundle:
+        # Upgrade from the previous release's real bundle to this candidate, unmodified. Two
+        # installers built from one source never differ in their launcher: a candidate whose
+        # launcher source changed could not upgrade a 0.3.0 install, and the synthetic run passed.
+        args.out.mkdir()
+        previous = json.loads((args.previous_bundle/'bundle-manifest.json').read_text())
+        current = json.loads((args.bundle/'bundle-manifest.json').read_text())
+        from packaging.version import Version
+        assert Version(previous['version']) < Version(current['version']), 'previous release must be older'
+        build(SimpleNamespace(bundle=args.previous_bundle, nsis=args.nsis, out=args.out/'previous-installer', test_root=target))
+        build(SimpleNamespace(bundle=args.bundle, nsis=args.nsis, out=second_out, test_root=target))
+        args.first_installer = args.out/'previous-installer'/'ProjectWatch-Setup.exe'
+    elif args.second_installer:
         args.out.mkdir()
     elif not args.reuse_build:
         args.out.mkdir()
@@ -182,9 +194,15 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'nsis', 'out', 'first-installer', 'test-root'):
+    for name in ('bundle', 'nsis', 'out', 'test-root'):
         parser.add_argument('--'+name, type=Path, required=True)
+    parser.add_argument('--first-installer', type=Path, help='Isolated first installer (required unless --previous-bundle)')
+    parser.add_argument('--previous-bundle', type=Path,
+                        help="The previous release's bundle: install it, then upgrade with --bundle unchanged")
     parser.add_argument('--reuse-build', action='store_true', help='Reuse explicitly supplied isolated test installers')
     parser.add_argument('--program-dir', default='program', help='Relative custom directory within the isolated root')
     parser.add_argument('--second-installer', type=Path, help='Prebuilt isolated upgrade installer for the same test root')
-    main(parser.parse_args())
+    options = parser.parse_args()
+    if not options.previous_bundle and not options.first_installer:
+        parser.error('--first-installer is required unless --previous-bundle is given')
+    main(options)
