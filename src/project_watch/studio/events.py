@@ -155,12 +155,25 @@ def same_actor(a: str | None, b: str | None) -> bool:
 # A trailing segment after " - ", " | ", "｜" or "_" (a hyphen only with spaces around it, so "Loop-9B" stays).
 _TAIL = re.compile(r'(?:\s+[-–—|｜]\s+|\s*[_｜|]\s*)([^-–—_|｜]{1,30})$')
 _JOINED_TAIL = re.compile(r'-([^-–—_|｜\s]{1,30})$')  # "…-证券之星": a bare hyphen only before an outlet name
-# A tail is dropped only when it names an outlet or is page furniture; anything else may say what happened
-# ("… - fired by board", "… | 估值超400亿元") and stays.
-_OUTLET_NAME = re.compile(
-    r'(?:网|号|头条|之星|股吧|财经|日报|晚报|早报|时报|商报|在线|平台|社区|客户端|正文|plus|\+|氪|DoNews|芥末堆|品玩'
-    r'|极客公园|集邦咨询|TrendForce|矩阵通|TechCrunch|PCMag|Reuters|Bloomberg|CNBC|Forbes|The Verge|Engadget)$'
-    r'|\.com$|\.cn$|^(?:页面加载中|顶部|切换模式|绑定手机号|Advertisement|Skip to content)$', re.I)
+# A tail is dropped only when it is, as a whole, a known outlet or page furniture; anything else may say
+# what happened ("… - fired by board", "… - 朱雀三号", "… | record trade surplus") and stays.
+OUTLETS = frozenset(normalize(n) for n in (
+    '今日头条', '头条', '证券之星', '东方财富网', '东方财富网股吧', '东方财富', '财富号', '新浪财经', '新浪网', '新浪科技', '新浪',
+    '南方+', '南方plus', '中国消费网', '品玩', '36氪', 'DoNews', '芥末堆', '极客公园', '集邦咨询', '集邦TrendForce',
+    'TrendForce', '观点网', '新华网', '人民网', '人民号平台', '学习时报网', '矩阵通', '中安在线', '科学网', '摩熵咨询',
+    '上海证券报·中国证券网', '中国证券网', '中国证券报', '证券时报', '证券时报网', '21世纪经济报道', '第一财经', '界面新闻',
+    '澎湃新闻', '财联社', '每日经济新闻', '经济网', '中国经济网', '经济观察报', '凤凰网', '凤凰网科技', '搜狐', '网易',
+    '腾讯网', '腾讯新闻', '雪球', '同花顺', '金融界', '和讯网', '智通财经', '格隆汇', '钛媒体', '虎嗅', 'IT之家',
+    '机器之心', '量子位', '雷峰网', '亿欧', '投资界', '动脉网', '医药魔方', '药智网', '央视新闻', '新京报', '北京商报',
+    '中国新闻网', '环球网', '经济新闻滚动 > 正文', '新闻', '首页', 'TechCrunch', 'PCMag', 'Reuters', 'Bloomberg', 'CNBC',
+    'Forbes', 'The Verge', 'Engadget', 'Fierce Biotech', 'Endpoints News', 'BioSpace', 'STAT', 'Yahoo Finance',
+    'MarketWatch', 'Business Wire', 'PR Newswire', 'GlobeNewswire',
+    '页面加载中', '顶部', '切换模式', '绑定手机号', '下载新华网客户端', 'Advertisement', 'Skip to content'))
+_SITE = re.compile(r'^(?:[a-z0-9-]+\.)+(?:com|cn|net|org|io)$|^.{1,20}股吧$', re.I)
+
+
+def _outlet(tail: str) -> bool:
+    return normalize(tail) in OUTLETS or bool(_SITE.match(tail.strip()))
 
 
 def clean_headline(text: str) -> str:
@@ -175,7 +188,7 @@ def clean_headline(text: str) -> str:
         if len(normalize(body)) < 10:
             break
         echo = bool(match) and bool(normalize(tail)) and normalize(body).startswith(normalize(tail))  # "X - X" cut short
-        if not (echo or _OUTLET_NAME.search(tail)):
+        if not (echo or _outlet(tail)):
             break
         head = body
     return head

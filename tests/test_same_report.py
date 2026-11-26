@@ -35,6 +35,14 @@ DIFFERENT = [
     ('宁德时代：2024年三季度净利润同比增长25%', '宁德时代：2024年前三季度净利润同比增长25%'),
     ('Nvidia Q3 earnings preview', 'Nvidia Q3 earnings'),
     ('百度Apollo在武汉开启全无人驾驶测试', '百度Apollo在武汉重新开启全无人驾驶测试'),
+    # a tail that only ends like an outlet name is still the news
+    ('我国商业航天迎来里程碑 - 朱雀三号', '我国商业航天迎来里程碑 - 天龙三号'),
+    ('阿里巴巴发布AI新产品 | 面向企业的智能体平台', '阿里巴巴发布AI新产品 | 面向开发者的模型平台'),
+    ('中国移动发布年度业绩 | 5G用户破10亿 卫星互联网', '中国移动发布年度业绩 | 发力算力网'),
+    ('China exports beat forecasts | record trade surplus', 'China exports beat forecasts | narrower trade surplus'),
+    ('Disney launches streaming bundle - Hulu + Disney+', 'Disney launches streaming bundle - ESPN+'),
+    ('realme发布全新旗舰手机GT7-Pro+', 'realme发布全新旗舰手机GT7-Plus'),
+    ('国家电网数字化项目公示｜签约国家电网', '国家电网数字化项目公示｜签约南方电网'),
     # a bare name or quote page
     ('科大讯飞股份有限公司', '科大讯飞股份有限公司2024年年度报告摘要 - 新浪财经'),
     ('虹软科技(688088)', '虹软科技（688088）11月16日主力资金净卖出624.01万元'),
