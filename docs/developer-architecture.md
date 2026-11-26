@@ -143,6 +143,13 @@ versions or same-scope contracts stop fallback. Evidence review is unchanged.
 The global-comparison guard accepts dated, quantified single-metric ranks without
 requiring magic sample wording, but never substitutes scope checks for source support.
 
+## 转载沿用相关性判断（2026-11-26）
+
+- 相关性审核前，`triage_reposts.plan` 查本项目 72 小时内已判为相关、标题按 `events.same_report` 相同的条目：转载直接沿用其重要程度、摘要、影响和类别，不再请求模型，并记 `triage_binding.status = repost` 与来源条目。同一批内的多个转载只送第一条，其余留到下一批再沿用。
+- 只沿用“相关”判断：另一家媒体的正文可能才写到本公司，已判不相关的同题条目仍送模型。不沿用无模型、回复中断或被拒、模型漏判（摘要等于标题）、用户规则排除和公告全文提示的结果，也不沿用你已忽略或纠正过的条目和事件。文件全文命中检查照常执行；沿用结果不带内部引用，含内部前提的影响一律剥离。同批的转载只等一次：首条判断不能沿用时，其余转载一起送审，不会逐条请求。轮次质量统计中，沿用结果不计入“能对应原文”的分母。
+- 测试库统计：送审条目中 12%–15% 是 72 小时内同题转载，模型对同一标题给出不同判断约 30%；只沿用相关判断时可省约 9%–10% 的审核请求，并使同一标题的分级一致。
+- 规则识别的“非新闻页”（行情、下载、导航、产品页等）只占送审条目 1%–2%，且模式会误伤真实新闻（如“下载量突破”），本次未做规则过滤。
+
 ## 同一报道合并（2026-11-26）
 
 - 事件归并原先只在标题逐字相同、或销量/融资键相同、或模型给出覆盖完整标题的证据时合并；一个事件只要并入过一条措辞不同的报道，之后连同一标题的转载也进不去。

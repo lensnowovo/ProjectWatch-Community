@@ -72,7 +72,7 @@ def _round(store, db, collect):
     news = [i for i in items if i['category'] in NEWS]
     screened = [i for i in items if i['triaged']]
     bindings = [(_extra(i['extra']).get('triage_binding') or {}).get('status') for i in screened]
-    bound = [b for b in bindings if b]
+    bound = [b for b in bindings if b and b != 'repost']  # a reused verdict was matched when first given
     analysis = _analysis_for(db, collect['id'])
     sections = None
     if analysis:
