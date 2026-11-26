@@ -1,5 +1,6 @@
 """A truncated or unusable competition reply ends its own step, not the whole round."""
 import json
+from contextlib import closing
 
 import pytest
 from test_studio_competition_research import research_pipeline
@@ -233,6 +234,8 @@ def test_saved_batches_replay_without_rebuilding_inputs(tmp_path):
                                                 lambda value: {'parts': value['parts']}, 'peer_x', lambda: moved)
         assert builds == [] and [p['batch'] for p in proposals] == [0, 1, 2]  # replayed, nothing rebuilt or sent
         execution.data.pop('peer_x_proposal_2')
+        with closing(pipeline.store._connect()) as db, db:
+            db.execute('DELETE FROM studio_extraction_reuse')  # nothing earlier to reuse either
         with pytest.raises(ModelError) as raised:  # a batch still to pay for checks the material first
             pipeline._extract_all_parts(pid, inputs, _Model(None, ''), 'system',
                                         lambda value: {'parts': value['parts']}, 'peer_x', lambda: moved)

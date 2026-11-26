@@ -2211,19 +2211,34 @@ class Pipeline:
         saved = execution.read_checkpoint(prefix + '_inputs') if execution else None
         if saved and saved['input_version'] != inputs['input_version']:
             raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
+        from project_watch.studio import extraction_reuse as reuse
+        # A job begun by an older version resumes with the batches it already checkpointed.
+        stable = not saved or saved.get('layout') == reuse.LAYOUT
         if execution:
             # Evidence is immutable and already persisted; avoid copying entire
             # reports into the checkpoint's 1 MB metadata slot.
-            execution.checkpoint(prefix + '_inputs', {'input_version': inputs['input_version'], 'binding': inputs['binding']})
-        batches, batch, size = [], [], 0
-        for part in inputs['parts']:
-            if batch and (len(batch) >= 12 or size + len(part['text']) > 48000):
+            execution.checkpoint(prefix + '_inputs', {'input_version': inputs['input_version'], 'binding': inputs['binding'],
+                                                      **({'layout': reuse.LAYOUT} if stable else {})})
+        if stable:
+            batches = reuse.batches(self.store, project_id, inputs['parts'])
+        else:
+            batches, batch, size = [], [], 0
+            for part in inputs['parts']:
+                if batch and (len(batch) >= 12 or size + len(part['text']) > 48000):
+                    batches.append(batch)
+                    batch, size = [], 0
+                batch.append(part)
+                size += len(part['text'])
+            if batch:
                 batches.append(batch)
-                batch, size = [], 0
-            batch.append(part)
-            size += len(part['text'])
-        if batch:
-            batches.append(batch)
+
+        def request(parts):
+            """What the model reads for one batch, its reuse key, and the way back to the parts' markers."""
+            if not stable:
+                return payload({**inputs, 'parts': parts}), None, None
+            local, back = reuse.localize(parts)
+            body = payload({**inputs, 'parts': local})
+            return body, reuse.key(prefix, system, inputs['binding'], body), back
 
         def admitted():
             project = self.store.get_project(project_id)
@@ -2238,8 +2253,15 @@ class Pipeline:
             admitted()
             stage = f'{prefix}_proposal_{index}'
             proposal = execution.read_checkpoint(stage) if execution else None
-            if proposal is None and execution and len(batches) == 1:
+            if proposal is None and execution and len(batches) == 1 and not stable:
                 proposal = execution.read_checkpoint(prefix + '_proposal')  # completed legacy single batch
+            if proposal is None and stable:
+                body, reuse_key, back = request(parts)
+                earlier = reuse.lookup(self.store, project_id, reuse_key)
+                if earlier is not None:
+                    proposal = reuse.restore(earlier, back)
+                    if execution:
+                        execution.checkpoint(stage, proposal)
             if proposal is None:
                 pending.append((index, stage, parts))
             else:
@@ -2265,7 +2287,12 @@ class Pipeline:
                 material_unchanged()
 
                 def extract():
-                    return llm.json(system, json.dumps(payload({**inputs, 'parts': parts}), ensure_ascii=False), max_tokens=8000)
+                    body, reuse_key, back = request(parts)
+                    response = llm.json(system, json.dumps(body, ensure_ascii=False), max_tokens=8000)
+                    if reuse_key is None or not isinstance(response, dict):
+                        return response
+                    reuse.remember(self.store, project_id, reuse_key, response)
+                    return reuse.restore(response, back)
                 if execution and isolate_failures:
                     success, proposal = attempt(execution, stage, extract)
                     if not success:

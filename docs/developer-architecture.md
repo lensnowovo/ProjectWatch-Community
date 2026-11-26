@@ -143,6 +143,12 @@ versions or same-scope contracts stop fallback. Evidence review is unchanged.
 The global-comparison guard accepts dated, quantified single-metric ranks without
 requiring magic sample wording, but never substitutes scope checks for source support.
 
+## 结构化提取跨轮复用（2026-11-26）
+
+- 业务档案、商业关系与政策条件、同行产品提取（`_extract_all_parts`）每轮读取全部现有来源。旧做法按最新优先排列并全局编号 B1..，新来源会让每批内容和编号都变化，整轮所有批次重新请求模型；一个项目一周内这两步约占全部模型输入的一半，且随轮次增长。
+- 新任务（检查点 `<prefix>_inputs` 带 `layout: 2`）按证据入库顺序（`studio_evidence_versions.seq`）分批，批内编号 B1..Bn。批次请求与之前某轮完全相同（同一步骤、提示词、模型绑定和来源正文；对象版本号除外）时，复用 `studio_extraction_reuse` 中保存的回复，只把回复里的 `source`/`ownership_passage` 编号换回本轮编号；复用结果与新回复一样逐条按当前原文核验。只保存成功解析的 JSON 回复，45 天未使用的记录清理。
+- 旧版本开始、尚未完成的任务沿用原分批与编号，不复用。按测试项目的历史轮次回放，两步需要发送的批次约降至原来的 3%–5%。
+
 ## Codex 自动研究（2026-11-25）
 
 `studio/agent_runs.py`。Agent 项目由使用者开启后，ProjectWatch 用本机 Codex CLI 的 `codex exec` 发起研究，
