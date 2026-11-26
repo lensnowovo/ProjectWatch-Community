@@ -2142,8 +2142,9 @@ class Pipeline:
             return {'company': batch['company'], 'subjects': batch.get('subjects', []),
                     'sources': [{'source': p['marker'], 'text': p['text'], 'read_scope': p['read_scope'],
                                  'published_at': p.get('published_at', '')} for p in batch['parts']]}
+        from project_watch.studio.structured_facts import reusable_reply
         proposals = self._superseded_ok(job, lambda: self._extract_all_parts(pid, inputs, llm, SYSTEM, payload, 'detail',
-            lambda: self.structured_facts.inputs(pid, self.model_view(llm).binding)))
+            lambda: self.structured_facts.inputs(pid, self.model_view(llm).binding), reusable=reusable_reply))
         if not proposals:
             return  # No verified batch: retain the previous profile unchanged.
         project = self.store.get_project(pid)
@@ -2197,13 +2198,14 @@ class Pipeline:
         return scope
 
     def _extract_all_parts(self, project_id, inputs, llm, system, payload, prefix, current_inputs,
-                           *, isolate_failures=True, skipped=None):
+                           *, isolate_failures=True, skipped=None, reusable=None):
         """Visit independent batches; retain completed outputs when a sibling fails.
 
         With ``skipped`` (a list), a definite unusable reply (truncated, invalid,
         refused) is recorded there and its batch left out; the other batches are
         returned. Provider uncertainty (unknown, timeout) still propagates.
         Batches not yet answered are sent up to ``parallel_width()`` at a time.
+        ``reusable`` decides which replies later rounds may reuse for the same batch; without it none are kept.
         """
         from project_watch.studio import parallel_steps
         from project_watch.studio.step_outcomes import attempt
@@ -2237,7 +2239,7 @@ class Pipeline:
             if not stable:
                 return payload({**inputs, 'parts': parts}), None, None
             local, back = reuse.localize(parts)
-            body = payload({**inputs, 'parts': local})
+            body = reuse.label(payload({**inputs, 'parts': local}), parts)
             return body, reuse.key(prefix, system, inputs['binding'], body), back
 
         def admitted():
@@ -2289,9 +2291,10 @@ class Pipeline:
                 def extract():
                     body, reuse_key, back = request(parts)
                     response = llm.json(system, json.dumps(body, ensure_ascii=False), max_tokens=8000)
-                    if reuse_key is None or not isinstance(response, dict):
+                    if reuse_key is None:
                         return response
-                    reuse.remember(self.store, project_id, reuse_key, response)
+                    if reusable is not None and reusable(response):
+                        reuse.remember(self.store, project_id, reuse_key, response)
                     return reuse.restore(response, back)
                 if execution and isolate_failures:
                     success, proposal = attempt(execution, stage, extract)
@@ -2367,7 +2370,7 @@ class Pipeline:
         return self.store.enqueue(project_id, 'business', automatic=True, input_version=inputs['input_version'])
 
     def run_business(self, job: dict) -> None:
-        from project_watch.studio.business_profile import SYSTEM, model_payload
+        from project_watch.studio.business_profile import SYSTEM, model_payload, reusable_reply
 
         project_id = job['project_id']
         project = self.store.get_project(project_id)
@@ -2390,7 +2393,8 @@ class Pipeline:
         self.store.set_stage(job['id'], '提取产品、用途与购买方')
         proposals = self._superseded_ok(job, lambda: self._extract_all_parts(
             project_id, inputs, llm, SYSTEM, model_payload, 'business',
-            lambda: self.business_profiles.inputs(project_id, binding=self.model_view(llm).binding)))
+            lambda: self.business_profiles.inputs(project_id, binding=self.model_view(llm).binding),
+            reusable=reusable_reply))
         if not proposals:
             return
         # Configuration/provider permission may have changed while the call ran.

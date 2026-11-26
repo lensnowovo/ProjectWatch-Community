@@ -50,10 +50,15 @@ def newest_first(pipeline, count, version):
             'parts': [{**p, 'marker': f'B{i}'} for i, p in enumerate(parts, 1)]}
 
 
-def extract(pipeline, pid, inputs, model):
+def usable(reply):
+    return isinstance(reply.get('relations'), list)
+
+
+def extract(pipeline, pid, inputs, model, reusable=usable):
     pipeline._execution_state.current = Checkpoints()  # a new round
     try:
-        return pipeline._extract_all_parts(pid, inputs, model, 'system', payload, 'detail', lambda: inputs)
+        return pipeline._extract_all_parts(pid, inputs, model, 'system', payload, 'detail', lambda: inputs,
+                                           reusable=reusable)
     finally:
         pipeline._execution_state.current = None
 
@@ -94,7 +99,8 @@ def test_another_model_or_prompt_asks_again(tmp_path):
     other = Model()
     pipeline._execution_state.current = Checkpoints()
     try:
-        pipeline._extract_all_parts(pid, inputs, other, 'another system prompt', payload, 'detail', lambda: inputs)
+        pipeline._extract_all_parts(pid, inputs, other, 'another system prompt', payload, 'detail', lambda: inputs,
+                                    reusable=usable)
     finally:
         pipeline._execution_state.current = None
     assert len(other.bodies) == 1
@@ -105,6 +111,8 @@ def test_markers_outside_the_answer_fields_are_left_alone():
     answer = {'relations': [{'source': 'B2', 'ownership_passage': 'B2:P3', 'quote': 'B1 and B2', 'peer': 'B1'}]}
     restored = reuse.restore(answer, {'B1': 'B40', 'B2': 'B41'})
     assert restored['relations'][0] == {'source': 'B41', 'ownership_passage': 'B41:P3', 'quote': 'B1 and B2', 'peer': 'B1'}
+    outside = reuse.restore({'relations': [{'source': 'B13', 'ownership_passage': 'B13:P1'}]}, {'B1': 'B40'})
+    assert outside['relations'][0] == {'source': 'B0', 'ownership_passage': 'B0:P1'}  # never another part of the round
     assert answer['relations'][0]['source'] == 'B2'  # the stored answer is not changed
 
 
@@ -124,3 +132,33 @@ def test_a_job_begun_by_the_older_version_keeps_its_batches(tmp_path):
     with closing(pipeline.store._connect()) as db:
         db.execute(reuse.SCHEMA)
         assert db.execute('SELECT count(*) FROM studio_extraction_reuse').fetchone()[0] == 0
+
+
+def test_a_malformed_reply_is_asked_again_next_round(tmp_path):
+    pipeline, pid, _calls, _reads = research_pipeline(tmp_path)
+    store_evidence(pipeline, pid, 5)
+
+    class Broken(Model):
+        def json(self, system, body, max_tokens):
+            self.bodies.append(body)
+            return {'error': 'no material'}
+    extract(pipeline, pid, newest_first(pipeline, 5, 'v1'), Broken())
+    again = Model()
+    extract(pipeline, pid, newest_first(pipeline, 5, 'v1'), again)
+    assert len(again.bodies) == 1
+
+
+def test_batches_with_the_same_text_send_different_requests(tmp_path):
+    pipeline, pid, _calls, _reads = research_pipeline(tmp_path)
+    store_evidence(pipeline, pid, 2)
+    big = 'same long document ' * 1500  # each part fills a batch on its own
+    inputs = {'input_version': 'v1', 'binding': pipeline.model_binding(),
+              'parts': [{'evidence_version_id': f'e{n}', 'part_index': 0, 'text': big, 'marker': f'B{n + 1}'} for n in range(2)]}
+    model = Model()
+
+    class Raw(Model):
+        def json(self, system, body, max_tokens):
+            model.bodies.append(body)
+            return super().json(system, body, max_tokens)
+    extract(pipeline, pid, inputs, Raw())
+    assert len(model.bodies) == 2 and model.bodies[0] != model.bodies[1]

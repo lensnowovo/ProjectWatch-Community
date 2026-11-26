@@ -26,6 +26,7 @@ from project_watch.studio.business_identity import (
 from project_watch.studio.business_profile import PROMPT_VERSION as BUSINESS_VERSION
 from project_watch.studio.business_profile import SYSTEM as BUSINESS_SYSTEM
 from project_watch.studio.business_profile import model_payload as business_payload
+from project_watch.studio.business_profile import reusable_reply as business_reusable
 from project_watch.studio.company_leads import CompanyLeads
 from project_watch.studio.competition import assess_relation
 from project_watch.studio.http import HttpError
@@ -686,7 +687,7 @@ class CompetitionResearch(CompanyLeads):
                 proposals = pipeline._extract_all_parts(pid, business, llm, BUSINESS_SYSTEM, business_payload,
                     'peer_' + subject_id, lambda: pipeline.business_profiles.inputs(pid,
                         binding=pipeline.model_view(llm).binding, subject_id=subject_id, evidence_ids=evidences),
-                    isolate_failures=False, skipped=skipped)
+                    isolate_failures=False, skipped=skipped, reusable=business_reusable)
                 if skipped:
                     # The unusable batch stays unread this round; products located in the others are kept.
                     reading = {**reading, 'unread_batches': len(skipped), 'unread_codes': sorted(set(skipped))}

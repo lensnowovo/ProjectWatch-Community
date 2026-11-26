@@ -63,6 +63,15 @@ def localize(parts):
     return local, {f'B{n}': p['marker'] for n, p in enumerate(parts, 1)}
 
 
+def label(body, parts):
+    """Batches are numbered alike, so two with the same text would send identical requests in one
+    round, and the call ledger would hold the second as a duplicate of an unanswered one. The
+    first source's identity tells them apart and stays the same from round to round."""
+    if isinstance(body, dict) and parts and parts[0].get('evidence_version_id'):
+        return {**body, 'batch': f"{parts[0]['evidence_version_id']}:{parts[0].get('part_index', 0)}"}
+    return body
+
+
 def restore(response, back):
     """The answer with batch markers turned back into the parts' own markers."""
     result = copy.deepcopy(response)
@@ -72,8 +81,9 @@ def restore(response, back):
             for name, value in node.items():
                 if name in MARKER_FIELDS and isinstance(value, str):
                     match = _MARKER.match(value)
-                    if match and match.group(1) in back:
-                        node[name] = back[match.group(1)] + (match.group(2) or '')
+                    if match and back:
+                        # A source outside the batch never stands for some other part of the round.
+                        node[name] = back.get(match.group(1), 'B0') + (match.group(2) or '')
                 else:
                     walk(value)
         elif isinstance(node, list):
