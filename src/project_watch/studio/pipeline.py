@@ -2258,7 +2258,7 @@ class Pipeline:
             if proposal is None and execution and len(batches) == 1 and not stable:
                 proposal = execution.read_checkpoint(prefix + '_proposal')  # completed legacy single batch
             if proposal is None and stable:
-                body, reuse_key, back = request(parts)
+                _body, reuse_key, back = request(parts)
                 earlier = reuse.lookup(self.store, project_id, reuse_key)
                 if earlier is not None:
                     proposal = reuse.restore(earlier, back)
