@@ -1360,6 +1360,22 @@ class Pipeline:
                 batch = [b for b in batch if b["id"] not in skip]
                 if not batch:
                     continue
+            # The same headline from another outlet takes the relevant verdict it already has.
+            from project_watch.studio import triage_reposts
+            reused, batch = triage_reposts.plan(self.store, project_id, batch)
+            if reused:
+                copies = [guard_filing(item, verdict, names) for item, verdict in reused]
+                if internal_evidence:
+                    from project_watch.studio.triage_impact import bound_impact
+
+                    current = list(self._impact_evidence(project_id, llm).values())
+                    allowed = {k: v for k, v in internal_evidence.items() if v in current}
+                    items = {item["id"]: item for item, _verdict in reused}
+                    copies = [bound_impact(r, items[r["id"]]["title"] + "\n" + self._triage_excerpt(items[r["id"]]),
+                                           allowed) for r in copies]
+                self.store.save_triage(copies)
+            if not batch:
+                continue
             stage(f"AI 筛选信息（第 {round_no} 批）")
             if not llm.ready:
                 self.store.save_triage([{"id": b["id"], "relevant": True, "importance": "routine",
