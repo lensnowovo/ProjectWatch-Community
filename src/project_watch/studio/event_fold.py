@@ -11,7 +11,9 @@ from contextlib import closing
 
 from project_watch.studio import events as ev
 
-KEY = 'event_fold_v1:{}'
+# v2: one report under another outlet's headline also counts (`events.same_report`), so projects folded
+# under the first rules fold once more.
+KEY = 'event_fold_v2:{}'
 
 
 def _as_item(row) -> dict:
