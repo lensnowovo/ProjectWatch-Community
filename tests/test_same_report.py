@@ -90,3 +90,22 @@ def test_reports_never_chain_through_a_third():
              item(3, 'DeepSeek releases R1 model update')]
     groups, _ = ev.plan_groups(items, [])
     assert len(groups) == 3
+
+
+@pytest.mark.parametrize('a,b', [
+    ('智元机器人完成五亿元A轮融资', '智元机器人完成十五亿元A轮融资'),
+    ('星海图完成一百二十亿元B轮融资', '星海图完成二十亿元B轮融资'),
+    ('银河通用完成两千万元天使轮融资', '银河通用完成三千万元天使轮融资'),
+])
+def test_amounts_in_chinese_numerals_keep_rounds_apart(a, b):
+    assert not ev.identity_supported(a, b)
+
+
+def test_the_same_amount_in_numerals_or_digits_is_one_round():
+    assert ev.identity_supported('智元机器人完成五亿元A轮融资', '智元机器人完成5亿元A轮融资')
+    assert ev.facts('完成数亿元融资')[0] == set()  # not an amount
+
+
+@pytest.mark.parametrize('text,value', [('十五', 15), ('一百二十', 120), ('两千零五', 2005), ('九十九', 99), ('五五', None)])
+def test_chinese_numbers(text, value):
+    assert ev.chinese_number(text) == value
