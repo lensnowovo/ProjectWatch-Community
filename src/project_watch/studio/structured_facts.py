@@ -216,6 +216,15 @@ def parse_proposal(data):
     return Proposal.model_construct(**parsed), rejected, unquantified, issues
 
 
+def reusable_reply(response):
+    """A reply whose envelope parses may be reused for the same batch; a malformed one is asked again."""
+    try:
+        parse_proposal(response)
+    except ValidationError:
+        return False
+    return True
+
+
 def _parse_batch(response):
     """One of several batches' proposals; a malformed envelope counts as one rejected batch.
 

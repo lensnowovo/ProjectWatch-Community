@@ -88,6 +88,15 @@ class _ProposalEnvelope(BaseModel):
     products: list[object]
 
 
+def reusable_reply(response):
+    """A reply whose envelope parses may be reused for the same batch; a malformed one is asked again."""
+    try:
+        _ProposalEnvelope.model_validate(response)
+    except ValidationError:
+        return False
+    return True
+
+
 def ownership_passages(part):
     """Exact bounded paragraphs, not inferred ownership or fuzzy quote repair.
 

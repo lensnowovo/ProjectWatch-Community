@@ -2142,8 +2142,9 @@ class Pipeline:
             return {'company': batch['company'], 'subjects': batch.get('subjects', []),
                     'sources': [{'source': p['marker'], 'text': p['text'], 'read_scope': p['read_scope'],
                                  'published_at': p.get('published_at', '')} for p in batch['parts']]}
+        from project_watch.studio.structured_facts import reusable_reply
         proposals = self._superseded_ok(job, lambda: self._extract_all_parts(pid, inputs, llm, SYSTEM, payload, 'detail',
-            lambda: self.structured_facts.inputs(pid, self.model_view(llm).binding)))
+            lambda: self.structured_facts.inputs(pid, self.model_view(llm).binding), reusable=reusable_reply))
         if not proposals:
             return  # No verified batch: retain the previous profile unchanged.
         project = self.store.get_project(pid)
@@ -2197,13 +2198,14 @@ class Pipeline:
         return scope
 
     def _extract_all_parts(self, project_id, inputs, llm, system, payload, prefix, current_inputs,
-                           *, isolate_failures=True, skipped=None):
+                           *, isolate_failures=True, skipped=None, reusable=None):
         """Visit independent batches; retain completed outputs when a sibling fails.
 
         With ``skipped`` (a list), a definite unusable reply (truncated, invalid,
         refused) is recorded there and its batch left out; the other batches are
         returned. Provider uncertainty (unknown, timeout) still propagates.
         Batches not yet answered are sent up to ``parallel_width()`` at a time.
+        ``reusable`` decides which replies later rounds may reuse for the same batch; without it none are kept.
         """
         from project_watch.studio import parallel_steps
         from project_watch.studio.step_outcomes import attempt
@@ -2211,19 +2213,34 @@ class Pipeline:
         saved = execution.read_checkpoint(prefix + '_inputs') if execution else None
         if saved and saved['input_version'] != inputs['input_version']:
             raise ModelError('分析输入已变化；旧检查点未重发，请按当前资料重新开始', code='input_superseded')
+        from project_watch.studio import extraction_reuse as reuse
+        # A job begun by an older version resumes with the batches it already checkpointed.
+        stable = not saved or saved.get('layout') == reuse.LAYOUT
         if execution:
             # Evidence is immutable and already persisted; avoid copying entire
             # reports into the checkpoint's 1 MB metadata slot.
-            execution.checkpoint(prefix + '_inputs', {'input_version': inputs['input_version'], 'binding': inputs['binding']})
-        batches, batch, size = [], [], 0
-        for part in inputs['parts']:
-            if batch and (len(batch) >= 12 or size + len(part['text']) > 48000):
+            execution.checkpoint(prefix + '_inputs', {'input_version': inputs['input_version'], 'binding': inputs['binding'],
+                                                      **({'layout': reuse.LAYOUT} if stable else {})})
+        if stable:
+            batches = reuse.batches(self.store, project_id, inputs['parts'])
+        else:
+            batches, batch, size = [], [], 0
+            for part in inputs['parts']:
+                if batch and (len(batch) >= 12 or size + len(part['text']) > 48000):
+                    batches.append(batch)
+                    batch, size = [], 0
+                batch.append(part)
+                size += len(part['text'])
+            if batch:
                 batches.append(batch)
-                batch, size = [], 0
-            batch.append(part)
-            size += len(part['text'])
-        if batch:
-            batches.append(batch)
+
+        def request(parts):
+            """What the model reads for one batch, its reuse key, and the way back to the parts' markers."""
+            if not stable:
+                return payload({**inputs, 'parts': parts}), None, None
+            local, back = reuse.localize(parts)
+            body = reuse.label(payload({**inputs, 'parts': local}), parts)
+            return body, reuse.key(prefix, system, inputs['binding'], body), back
 
         def admitted():
             project = self.store.get_project(project_id)
@@ -2238,8 +2255,15 @@ class Pipeline:
             admitted()
             stage = f'{prefix}_proposal_{index}'
             proposal = execution.read_checkpoint(stage) if execution else None
-            if proposal is None and execution and len(batches) == 1:
+            if proposal is None and execution and len(batches) == 1 and not stable:
                 proposal = execution.read_checkpoint(prefix + '_proposal')  # completed legacy single batch
+            if proposal is None and stable:
+                _body, reuse_key, back = request(parts)
+                earlier = reuse.lookup(self.store, project_id, reuse_key)
+                if earlier is not None:
+                    proposal = reuse.restore(earlier, back)
+                    if execution:
+                        execution.checkpoint(stage, proposal)
             if proposal is None:
                 pending.append((index, stage, parts))
             else:
@@ -2265,7 +2289,13 @@ class Pipeline:
                 material_unchanged()
 
                 def extract():
-                    return llm.json(system, json.dumps(payload({**inputs, 'parts': parts}), ensure_ascii=False), max_tokens=8000)
+                    body, reuse_key, back = request(parts)
+                    response = llm.json(system, json.dumps(body, ensure_ascii=False), max_tokens=8000)
+                    if reuse_key is None:
+                        return response
+                    if reusable is not None and reusable(response):
+                        reuse.remember(self.store, project_id, reuse_key, response)
+                    return reuse.restore(response, back)
                 if execution and isolate_failures:
                     success, proposal = attempt(execution, stage, extract)
                     if not success:
@@ -2340,7 +2370,7 @@ class Pipeline:
         return self.store.enqueue(project_id, 'business', automatic=True, input_version=inputs['input_version'])
 
     def run_business(self, job: dict) -> None:
-        from project_watch.studio.business_profile import SYSTEM, model_payload
+        from project_watch.studio.business_profile import SYSTEM, model_payload, reusable_reply
 
         project_id = job['project_id']
         project = self.store.get_project(project_id)
@@ -2363,7 +2393,8 @@ class Pipeline:
         self.store.set_stage(job['id'], '提取产品、用途与购买方')
         proposals = self._superseded_ok(job, lambda: self._extract_all_parts(
             project_id, inputs, llm, SYSTEM, model_payload, 'business',
-            lambda: self.business_profiles.inputs(project_id, binding=self.model_view(llm).binding)))
+            lambda: self.business_profiles.inputs(project_id, binding=self.model_view(llm).binding),
+            reusable=reusable_reply))
         if not proposals:
             return
         # Configuration/provider permission may have changed while the call ran.
