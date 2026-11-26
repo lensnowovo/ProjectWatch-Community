@@ -1340,6 +1340,7 @@ class Pipeline:
             context += f"\n\n{note}"
         names = company_names(project)
         round_no = 0
+        deferred: set[str] = set()  # reposts that already waited one batch for their first copy
         while True:
             batch = self.store.untriaged(project_id, limit=batch_size, item_ids=item_ids)
             if not batch:
@@ -1362,18 +1363,15 @@ class Pipeline:
                     continue
             # The same headline from another outlet takes the relevant verdict it already has.
             from project_watch.studio import triage_reposts
-            reused, batch = triage_reposts.plan(self.store, project_id, batch)
+            reused, batch = triage_reposts.plan(self.store, project_id, batch, deferred)
             if reused:
-                copies = [guard_filing(item, verdict, names) for item, verdict in reused]
-                if internal_evidence:
-                    from project_watch.studio.triage_impact import bound_impact
+                from project_watch.studio.triage_impact import bound_impact
 
-                    current = list(self._impact_evidence(project_id, llm).values())
-                    allowed = {k: v for k, v in internal_evidence.items() if v in current}
-                    items = {item["id"]: item for item, _verdict in reused}
-                    copies = [bound_impact(r, items[r["id"]]["title"] + "\n" + self._triage_excerpt(items[r["id"]]),
-                                           allowed) for r in copies]
-                self.store.save_triage(copies)
+                # A copied impact carries no internal citation of its own: an internal premise in it is
+                # dropped, whether or not internal evidence is in play this round.
+                self.store.save_triage([bound_impact(guard_filing(item, verdict, names),
+                                                     item["title"] + "\n" + self._triage_excerpt(item), {})
+                                        for item, verdict in reused])
             if not batch:
                 continue
             stage(f"AI 筛选信息（第 {round_no} 批）")

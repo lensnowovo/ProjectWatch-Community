@@ -35,17 +35,21 @@ def _usable(row) -> bool:
     binding = extra.get('triage_binding') if isinstance(extra, dict) else None
     if isinstance(binding, dict) and binding.get('status') in FALLBACKS:
         return False
-    if (row.get('impact') or '').startswith('按你的规则排除'):
-        return False
+    if (row.get('impact') or '').startswith(('按你的规则排除', '系统尚未从公告原文定位本公司')):
+        return False  # the person's rule, or a filing note, belongs to that item alone
     return (row.get('summary') or '') != (row.get('title') or '')[:200]  # the model skipped it
 
 
-def plan(store, project_id: str, batch: list[dict]) -> tuple[list[tuple[dict, dict]], list[dict]]:
+def plan(store, project_id: str, batch: list[dict], deferred: set[str] | None = None
+         ) -> tuple[list[tuple[dict, dict]], list[dict]]:
     """(item, verdict) pairs reused from earlier items, and the items still to screen now.
 
-    A repost of another item in this batch is left for the next batch, by which time that
-    item's verdict is stored.
+    A repost of another item in this batch waits for the next batch, by which time that item's
+    verdict is stored. It waits once: if that verdict cannot be reused (irrelevant, cut off), the
+    remaining copies are screened together rather than one request each. ``deferred`` records
+    the items that already waited.
     """
+    deferred = set() if deferred is None else deferred
     news = [b for b in batch if b.get('category') not in ('paper', 'patent') and key(b['title']) and _when(b)]
     if not news:
         return [], batch
@@ -54,9 +58,14 @@ def plan(store, project_id: str, batch: list[dict]) -> tuple[list[tuple[dict, di
     earlier: dict[str, list[dict]] = {}
     with closing(store._connect()) as db:
         db.row_factory = lambda cursor, values: {c[0]: v for c, v in zip(cursor.description, values, strict=True)}
-        rows = db.execute("SELECT id, title, importance, summary, impact, category, published_at, collected_at, extra "
-                          "FROM studio_items WHERE project_id=? AND triaged=1 AND relevant=1 "
-                          "AND category NOT IN ('paper', 'patent') AND COALESCE(published_at, collected_at)>=?",
+        # Never from an item or event the person dismissed or corrected: their judgement, not the
+        # model's first verdict, is what the story now carries.
+        rows = db.execute("SELECT i.id, i.title, i.importance, i.summary, i.impact, i.category, i.published_at, "
+                          "i.collected_at, i.extra FROM studio_items i LEFT JOIN studio_events e ON e.id=i.event_id "
+                          "WHERE i.project_id=? AND i.triaged=1 AND i.relevant=1 AND i.status!='dismissed' "
+                          "AND i.category NOT IN ('paper', 'patent') AND COALESCE(i.published_at, i.collected_at)>=? "
+                          "AND COALESCE(e.status, '')!='dismissed' AND NOT EXISTS (SELECT 1 FROM studio_feedback f "
+                          "WHERE f.project_id=i.project_id AND f.event_id=i.event_id)",
                           (project_id, since)).fetchall()
     for row in rows:
         row_key = key(row['title'])
@@ -75,8 +84,9 @@ def plan(store, project_id: str, batch: list[dict]) -> tuple[list[tuple[dict, di
                                   'summary': source['summary'], 'impact': source['impact'],
                                   'category': source['category'],
                                   'triage_binding': {'version': 1, 'status': 'repost', 'of': source['id']}}))
-        elif item_key in first and abs(_when(first[item_key]) - _when(item)) <= ev.WINDOW:
-            continue  # screened with the next batch, after its first copy
+        elif (item['id'] not in deferred and item_key in first
+              and abs(_when(first[item_key]) - _when(item)) <= ev.WINDOW):
+            deferred.add(item['id'])  # screened with the next batch, after its first copy
         else:
             first.setdefault(item_key, item)
             screen.append(item)

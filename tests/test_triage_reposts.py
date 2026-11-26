@@ -81,3 +81,34 @@ def test_a_different_headline_or_a_later_week_is_asked_again(tmp_path):
     later = Model()
     triage(store, project, pipeline, later)
     assert len(later.seen) == 2
+
+
+class Counting(Model):
+    def __init__(self, relevant=True):
+        super().__init__(relevant)
+        self.calls = 0
+
+    def json(self, system, user, max_tokens=0):
+        self.calls += 1
+        return super().json(system, user, max_tokens)
+
+
+def test_copies_of_an_irrelevant_headline_wait_once_then_go_together(tmp_path):
+    store, project, pipeline = _setup(tmp_path, 0)
+    add(store, project, [HEADLINE] + [f"{HEADLINE} - {o}" for o in ("今日头条", "新浪财经", "证券之星", "凤凰网", "搜狐")])
+    model = Counting(relevant=False)
+    triage(store, project, pipeline, model)
+    assert model.calls == 2 and store.untriaged(project.id) == []  # first copy, then the other five at once
+
+
+def test_a_dismissed_or_corrected_story_is_not_copied(tmp_path):
+    store, project, pipeline = _setup(tmp_path, 0)
+    add(store, project, [HEADLINE])
+    triage(store, project, pipeline, Model())
+    from contextlib import closing
+    with closing(store._connect()) as db, db:
+        db.execute("UPDATE studio_items SET status='dismissed'")
+    add(store, project, [HEADLINE + " - 今日头条"], when='2026-11-21T08:00:00+00:00', start=1)
+    later = Model()
+    triage(store, project, pipeline, later)
+    assert later.seen == [HEADLINE + " - 今日头条"]
