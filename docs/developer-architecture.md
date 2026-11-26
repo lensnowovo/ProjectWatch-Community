@@ -143,6 +143,13 @@ versions or same-scope contracts stop fallback. Evidence review is unchanged.
 The global-comparison guard accepts dated, quantified single-metric ranks without
 requiring magic sample wording, but never substitutes scope checks for source support.
 
+## 同一报道合并（2026-11-26）
+
+- 事件归并原先只在标题逐字相同、或销量/融资键相同、或模型给出覆盖完整标题的证据时合并；一个事件只要并入过一条措辞不同的报道，之后连同一标题的转载也进不去。
+- `events.same_report`：去掉标题末尾整段为已知媒体名（`events.OUTLETS` 封闭名单、域名、“…股吧”）、页面杂项或标题自身重复的尾段后，两标题逐字相同（至少 10 个非数字字符）即为同一报道。尾段须整段匹配名单，不按结尾字判断；其他尾段可能写着发生了什么（“ - fired by board”“ - 朱雀三号”“| record trade surplus”），保留。不接受任何增删字词：“拟收购”不是“收购”，“iPhone 16 Pro”不是“iPhone 16”。
+- 因为是相等关系，新报道与事件中任一成员是同一报道、且与所有成员阶段一致时即可并入，不会经第三条链式误并；其他途径仍要求逐成员成立。已存事件不重新折叠（避免恢复用户撤销过的合并、重复付费核对）。
+- 在测试库回放：iFlytek 近一月多合并 13 条、均为同一标题的不同媒体转载。措辞不同的同一新闻仍依赖模型核对，本次未放宽。
+
 ## 结构化提取跨轮复用（2026-11-26）
 
 - 业务档案、商业关系与政策条件、同行产品提取（`_extract_all_parts`）每轮读取全部现有来源。旧做法按最新优先排列并全局编号 B1..，新来源会让每批内容和编号都变化，整轮所有批次重新请求模型；一个项目一周内这两步约占全部模型输入的一半，且随轮次增长。
