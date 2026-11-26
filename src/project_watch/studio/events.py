@@ -136,10 +136,36 @@ def similarity(a: str, b: str) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+# "十五亿元", "一百二十亿", "两千万": amounts in Chinese numerals. "数亿" or "上亿" are not amounts.
+_CN_AMOUNT = re.compile(r'(?<![零〇一二两三四五六七八九十百千万亿\d.])([零〇一二两三四五六七八九十百千]+)\s*(亿|千万|百万|万)')
+_CN_DIGIT = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+_CN_POWER = {'十': 10, '百': 100, '千': 1000}
+
+
+def chinese_number(text: str) -> int | None:
+    """"十五" -> 15, "一百二十" -> 120, "两千零五" -> 2005; None when the characters are not one number."""
+    total, digit = 0, None
+    for char in text:
+        if char in _CN_DIGIT:
+            if digit is not None and digit != 0:
+                return None  # "五五" is not one number
+            digit = _CN_DIGIT[char]
+        elif char in _CN_POWER:
+            total += (1 if digit is None else digit) * _CN_POWER[char]
+            digit = None
+        else:
+            return None
+    return total + (digit or 0)
+
+
 def facts(text: str) -> tuple[set[float], set[str]]:
     """Amounts (normalised to a base unit) and financing rounds mentioned in the text."""
     text = text or ""
     amounts = {round(float(n.replace(",", "")) * _UNIT[u.lower()], -4) for n, u in _AMOUNT.findall(text)}
+    for numeral, unit in _CN_AMOUNT.findall(text):
+        value = chinese_number(numeral)
+        if value:
+            amounts.add(round(float(value) * _UNIT[unit], -4))
     rounds = set()
     for match in _ROUND_CTX.finditer(text):
         token = (match.group(1) or match.group(2) or match.group(0)).lower()
