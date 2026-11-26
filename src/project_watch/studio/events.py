@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from difflib import SequenceMatcher
 
 MERGE_SIMILARITY = 0.5
 ASK_SIMILARITY = 0.22
@@ -153,53 +152,43 @@ def same_actor(a: str | None, b: str | None) -> bool:
     return bool(a and b and a == b)
 
 
-# A trailing outlet or site name: "… - 证券之星", "…_财富号_东方财富网", "… ｜#AI资讯#".
-# A hyphen counts only with spaces around it, so "Loop-9B" or "X-2" stays part of the headline.
-_OUTLET = re.compile(r'(?:\s+[-–—|｜]\s+|\s*[_｜|]\s*)[^-–—_|｜]{1,40}$')
-_DAY = re.compile(r'(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*日|20\d{2}[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)')
-_NUMBER = re.compile(r'\d+(?:\.\d+)?')
-_ENTITY_ONLY = re.compile(r'(?:公司|集团|有限|股份|控股|科技|大学|研究院|医院)$')
-SHORTER_SHARE = 0.75  # a shorter headline inside a longer one: at least this share of it, unless it leads it
-SHORTER_MIN = 10      # and never under ten characters besides digits ("虹软科技(688088)" is a quote page)
+# A trailing segment after " - ", " | ", "｜" or "_" (a hyphen only with spaces around it, so "Loop-9B" stays).
+_TAIL = re.compile(r'(?:\s+[-–—|｜]\s+|\s*[_｜|]\s*)([^-–—_|｜]{1,30})$')
+_JOINED_TAIL = re.compile(r'-([^-–—_|｜\s]{1,30})$')  # "…-证券之星": a bare hyphen only before an outlet name
+# A tail is dropped only when it names an outlet or is page furniture; anything else may say what happened
+# ("… - fired by board", "… | 估值超400亿元") and stays.
+_OUTLET_NAME = re.compile(
+    r'(?:网|号|头条|之星|股吧|财经|日报|晚报|早报|时报|商报|在线|平台|社区|客户端|正文|plus|\+|氪|DoNews|芥末堆|品玩'
+    r'|极客公园|集邦咨询|TrendForce|矩阵通|TechCrunch|PCMag|Reuters|Bloomberg|CNBC|Forbes|The Verge|Engadget)$'
+    r'|\.com$|\.cn$|^(?:页面加载中|顶部|切换模式|绑定手机号|Advertisement|Skip to content)$', re.I)
 
 
 def clean_headline(text: str) -> str:
-    """The headline without trailing outlet or site names, never shorter than ten characters."""
+    """The headline without trailing outlet names, page furniture or a repeat of itself."""
     head = text or ''
-    for _ in range(3):
-        stripped = _OUTLET.sub('', head)
-        if stripped == head or len(normalize(stripped)) < 10:
+    for _ in range(4):
+        match = _TAIL.search(head)
+        joined = None if match else _JOINED_TAIL.search(head)
+        if not (match or joined):
             break
-        head = stripped
+        body, tail = head[:(match or joined).start()], (match or joined).group(1).strip()
+        if len(normalize(body)) < 10:
+            break
+        echo = bool(match) and bool(normalize(tail)) and normalize(body).startswith(normalize(tail))  # "X - X" cut short
+        if not (echo or _OUTLET_NAME.search(tail)):
+            break
+        head = body
     return head
 
 
-def _days(text: str) -> set[tuple[int, int]]:
-    return {(int(m or mm), int(d or dd)) for m, d, mm, dd in _DAY.findall(text or '')}
-
-
 def same_report(a: str, b: str) -> bool:
-    """One report under two headlines: the shorter is the longer with words left out, and no figure differs.
+    """One report under two outlets: word for word the same headline once outlet names are dropped.
 
-    Words may only be added or dropped ("三季" / "三季度", a subtitle, a site name), never swapped:
-    "讯飞晓医app" and "讯飞听见app" are two products. Figures are compared on the full headlines,
-    so "$41 off" and "$42 off" stay apart. The callers' conflict and stage checks still apply first.
+    No words may differ, be added or be left out: "拟收购" is not "收购", "iPhone 16 Pro" is not
+    "iPhone 16". Being plain equality, it never chains two different reports through a third.
     """
-    na, nb = set(_NUMBER.findall(a or '')), set(_NUMBER.findall(b or ''))
-    if not (na <= nb or nb <= na):
-        return False
     ca, cb = headline_assertion(clean_headline(a)), headline_assertion(clean_headline(b))
-    if not ca or not cb:
-        return False
-    if ca == cb:
-        return True
-    short, long = sorted((ca, cb), key=len)
-    if len(re.sub(r'\d', '', short)) < SHORTER_MIN or not (long.startswith(short) or len(short) >= SHORTER_SHARE * len(long)):
-        return False
-    if _ENTITY_ONLY.search(short):
-        return False  # a bare company name heads its profile page, its annual report and its news alike
-    steps = SequenceMatcher(None, short, long, autojunk=False).get_opcodes()
-    return all(tag in ('equal', 'insert') for tag, *_ in steps)
+    return bool(ca) and ca == cb and len(re.sub(r'\d', '', ca)) >= 10
 
 
 def headline_assertion(text: str) -> str:
@@ -275,9 +264,6 @@ def conflicting(a: str, b: str) -> bool:
     actor_a, actor_b = _actor(a), _actor(b)
     if actor_a and actor_b and not same_actor(actor_a, actor_b):
         return True
-    days_a, days_b = _days(a), _days(b)
-    if days_a and days_b and not (days_a & days_b):
-        return True  # "截至10月31日" and "截至11月20日" are two disclosures
     da, db = scope_dimensions(a), scope_dimensions(b)
     # Forecast vs reported separates figures; a "计划" in prose about one deal does not.
     keys = [k for k in da if k != 'basis' or (da['metric'] and db['metric'])]
@@ -369,14 +355,14 @@ class Group:
     def admits(self, item: dict, proofs=()) -> bool:
         """Every target member needs its own identity support; no transitive guesses.
 
-        Except one report under another outlet's headline: when it matches a member's wording
-        (`same_report`) and agrees in stage with every member, it joins; `accepts` has already
-        checked it against every member's figures, dates and actor.
+        Except one report under another outlet's name: `same_report` is plain equality of the
+        cleaned headline, so matching any member matches the report that member already is;
+        `accepts` has checked it against every member's figures and actor.
         """
         if not self.accepts(item):
             return False
         stages = event_stages(item['title'])
-        if (any(same_report(item['title'], title) and not conflicting(item['title'], title) for title in self.titles)
+        if (any(same_report(item['title'], title) for title in self.titles)
                 and all(event_stages(title) == stages for title in self.titles)):
             return True
         return all(identity_supported(item['title'], title)

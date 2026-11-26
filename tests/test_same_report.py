@@ -5,29 +5,40 @@ from project_watch.studio import events as ev
 
 SAME = [
     ('科大讯飞：端云一体星火X2.6及系列产品初步预计将在明年上半年发布',
-     '科大讯飞：端云一体星火X2.6及系列产品初步预计将在明年上半年发布有投资者在互动_财富号_东方财富网'),
-    ('科大讯飞星火语音基座大模型SparkAudio 1.0上线API服务', '科大讯飞星火语音大模型SparkAudio上线API服务'),
-    ('AI业务占比连续三季过半，百度向智能组织高速迈进', 'AI业务占比连续三季度过半，百度向智能组织高速迈进'),
-    ('腾讯发文：已到生死存亡时刻，未来不一定要那么多管理岗位', '腾讯发文：已到生死存亡时刻'),
+     '科大讯飞：端云一体星火X2.6及系列产品初步预计将在明年上半年发布 - 科大讯飞：端云一体星火X2.6及系列产品初步预'),
+    ('科大讯飞: 关于回购公司股份的进展公告内容摘要-证券之星', '科大讯飞: 关于回购公司股份的进展公告内容摘要'),
+    ('学而思发布全新培优AI家教及旗舰学习机T6系列__南方+_南方plus', '学而思发布全新培优AI家教及旗舰学习机T6系列'),
     ('华为申请注册韬定律关联商标-36氪', '华为申请注册韬定律关联商标'),
     ('Anthropic上市之路面临三重威胁 - 今日头条', 'Anthropic上市之路面临三重威胁'),
+    ('Plaud launches a new AI pin and a desktop meeting notetaker | TechCrunch',
+     'Plaud launches a new AI pin and a desktop meeting notetaker'),
+    ('Plaud回归国内市场 AI录音设备卷至百元级_财经评论(cjpl)股吧_东方财富网股吧 - 页面加载中', 'Plaud回归国内市场 AI录音设备卷至百元级'),
 ]
 
 DIFFERENT = [
     # two products of one company
     ('讯飞晓医app-官方正版软件2026最新版本免费下载-应用宝官网', '讯飞听见app-官方正版软件2026最新版本免费下载-应用宝官网'),
+    ('Apple launches iPhone 16 in China', 'Apple launches iPhone 16 Pro in China'),
+    ('OpenAI releases GPT-5 for Plus users', 'OpenAI releases GPT-5 mini for Plus users'),
     # two disclosures of one buyback
     ('科大讯飞：截至2026年10月31日公司累计回购股份157.12万股', '科大讯飞：截至2026年11月20日公司累计回购股份241.16万股'),
-    # a figure behind the outlet-style dash still counts
+    # what happened is after the dash, not an outlet name
+    ("OpenAI's Sam Altman - fired by board", "OpenAI's Sam Altman - returns as CEO"),
+    ('Pfizer to buy Seagen - deal valued at $43 billion', 'Pfizer to buy Seagen - talks collapse'),
+    ('智谱AI冲刺港股IPO | 估值超400亿元', '智谱AI冲刺港股IPO | 腾讯退出股东名单'),
     ('Plaud Note Pro can record and summarize your meetings – and it’s $41 off',
      'Plaud Note Pro can record and summarize your meetings – and it’s $42 off'),
-    # a bare company name heads its profile, its annual report and its news alike
+    # one added word changes the fact
+    ('国家药监局批准恒瑞医药HR070803上市', '国家药监局不予批准恒瑞医药HR070803上市'),
+    ('腾讯收购Ubisoft旗下子公司25%股权', '腾讯拟收购Ubisoft旗下子公司25%股权'),
+    ('字节跳动收购Moonshot AI部分股权', '传字节跳动收购Moonshot AI部分股权'),
+    ('宁德时代：2024年三季度净利润同比增长25%', '宁德时代：2024年前三季度净利润同比增长25%'),
+    ('Nvidia Q3 earnings preview', 'Nvidia Q3 earnings'),
+    ('百度Apollo在武汉开启全无人驾驶测试', '百度Apollo在武汉重新开启全无人驾驶测试'),
+    # a bare name or quote page
     ('科大讯飞股份有限公司', '科大讯飞股份有限公司2024年年度报告摘要 - 新浪财经'),
-    # a quote page is not the fund-flow report
     ('虹软科技(688088)', '虹软科技（688088）11月16日主力资金净卖出624.01万元'),
-    # a short phrase inside another article's headline
     ('让人工智能更好赋能教育变革', '如何让人工智能更好赋能教育变革？记者采访'),
-    # a hyphen inside a product name is not an outlet separator
     ('商汤发布SenseNova Loop-9B模型', '商汤开源 SenseNova Loop-9B-Preview：探索以计算深度释放'),
 ]
 
@@ -64,3 +75,10 @@ def test_reports_join_one_event_but_a_later_disclosure_does_not():
              item(3, '科大讯飞：截至2026年11月25日公司累计回购股份251.16万股', '2026-11-11T09:00:00+00:00')]
     groups, _ = ev.plan_groups(items, [])
     assert sorted(len(g.items) for g in groups) == [1, 2]
+
+
+def test_reports_never_chain_through_a_third():
+    items = [item(1, 'DeepSeek releases V3 model update'), item(2, 'DeepSeek releases V3 and R1 model update'),
+             item(3, 'DeepSeek releases R1 model update')]
+    groups, _ = ev.plan_groups(items, [])
+    assert len(groups) == 3
